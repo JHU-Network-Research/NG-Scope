@@ -521,6 +521,13 @@ void* task_scheduler_thread(void* p){
     FILE* rsrpoutfile = fopen("rsrp.txt", "w");
 	fclose(rsrpoutfile);
 
+    // JH open log file
+	FILE *decodelog;
+  	decodelog=fopen("dci-decode-debug.log","a");
+  	fprintf(decodelog,"timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr\n");
+	fclose(decodelog);
+
+
     for(int i = 0; i < nof_decoder; i++){
         // init the subframe buffer 
         for (int j = 0; j < SRSRAN_MAX_PORTS; j++) {

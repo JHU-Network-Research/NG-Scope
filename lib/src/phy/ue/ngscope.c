@@ -1,6 +1,7 @@
 #include "srsran/srsran.h"
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "srsran/phy/ue/ngscope_st.h"
 #include "srsran/phy/ue/ue_dl.h"
@@ -195,7 +196,8 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 
   //printf("ngscope: TTI:%d NOF CCE:%d nof location:%d\n", sf->tti, nof_cce, tree->nof_location);
 
-
+  FILE *decodelog;
+  decodelog=fopen("dci-decode-debug.log","a");  
   // Test purpose
   //srsran_ngscope_tree_check_nodes(dci_location, 5);
 
@@ -211,11 +213,35 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 		if(tree->dci_location[loc_idx].checked || tree->dci_location[loc_idx].mean_llr < LLR_RATIO){
 			//skip the location, if 1) it has been checked 2) its llr ratio is too small
 			//printf("check:%d mean_llr::%f\n",dci_location[loc_idx].checked, dci_location[loc_idx].mean_llr);
-			loc_idx++;
+			if (tree->dci_location[loc_idx].mean_llr < LLR_RATIO){
+        
+        // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
+          fprintf(decodelog,"%lu,nodecode,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
+            dci_per_sub->timestamp,sf->tti,0,nof_cce,tree->dci_location[loc_idx].ncce,sf->cfi,tree->nof_location,i,loc_idx,0,"",tree->dci_location[loc_idx].mean_llr,0,0.0,0.0);
+        // }
+
+      //   for(int tmpidx = 0; tmpidx < MAX_NOF_FORMAT; tmpidx++){
+      //   srsran_dci_msg_t tmp_dci_msg = dci_msg[tmpidx];
+      //   if (tmp_dci_msg.nof_bits > 0){
+      //   // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,msg->location.ncce, sf->cfi, tree->nof_location,i,loc_idx,tmp_dci_msg->format,tree->dci_location[loc_idx].mean_llr);
+      //   // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
+      //     fprintf(decodelog,"%lu,nodecode,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
+      //       dci_per_sub->timestamp,sf->tti,tmp_dci_msg.rnti,nof_cce,tmp_dci_msg.location.ncce,sf->cfi,tree->nof_location,i,loc_idx,tmp_dci_msg.location.L,srsran_dci_format_string(tmp_dci_msg.format),tmp_dci_msg.location.mean_llr,tmp_dci_msg.nof_bits,tmp_dci_msg.decode_prob,tmp_dci_msg.corr);
+      //   }
+      // }
+
+
+
+
+
+
+        // ts,type,tti,nof_cce,ncce,cfi,nof_loc,i,loc_idx,format,mean_llr
+        // fprintf(decodelog,"%lu,nodecode,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,search_space.loc[0].ncce, sf->cfi, tree->nof_location,i,loc_idx,dci_msg->format,tree->dci_location[loc_idx].mean_llr);
+      }
+      loc_idx++;
 			continue;
 		}
 		cnt++;
-
   		//printf("TTI:%d NOF CCE:%d CFI:%d nof location:%d\n", sf->tti, sf->cfi, nof_cce, tree->nof_location);
 		search_space.loc[0] = tree->dci_location[loc_idx]; 
 
@@ -231,6 +257,18 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 			unpack_dci_message_vec(q, sf, cfg, pdsch_cfg, dci_msg, nof_dci, loc_idx, tree);
 
 			int format_idx = srsran_ngscope_tree_find_rnti_range(tree, loc_idx, 0xFFF4, 0xFFFF);
+
+      // ts,type,tti,nof_cce,ncce,cfi,nof_loc,i,loc_idx,format,mean_llr
+      // fprintf(decodelog,"%lu,paging,%d,%d,%d,%d,%d,%d,%d,%s,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,search_space.loc[0].ncce, sf->cfi, tree->nof_location,i,loc_idx,srsran_dci_format_string(),tree->dci_location[loc_idx].mean_llr);
+      for(int tmpidx = 0; tmpidx < MAX_NOF_FORMAT; tmpidx++){
+        srsran_dci_msg_t tmp_dci_msg = dci_msg[tmpidx];
+        if (tmp_dci_msg.nof_bits > 0){
+        // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,msg->location.ncce, sf->cfi, tree->nof_location,i,loc_idx,tmp_dci_msg->format,tree->dci_location[loc_idx].mean_llr);
+        // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
+           fprintf(decodelog,"%lu,paging,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
+            dci_per_sub->timestamp,sf->tti,tmp_dci_msg.rnti,nof_cce,tmp_dci_msg.location.ncce,sf->cfi,tree->nof_location,i,loc_idx,tmp_dci_msg.location.L,srsran_dci_format_string(tmp_dci_msg.format),tmp_dci_msg.location.mean_llr,tmp_dci_msg.nof_bits,tmp_dci_msg.decode_prob,tmp_dci_msg.corr);
+        }
+      }
 			if(format_idx >=0){
 				// if we found the corresponding rnti, we will check the nodes, 
 				// So the following search won't touch those checked nodes
@@ -251,11 +289,32 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 		// Now we search for the normal dci messages 
   		dci_cfg.multiple_csi_request_enabled 	= false;
 
+    //JH LOG HERE
+    //JH LOG HERE
+    // time_t seconds = dci_per_sub->timestamp / 1000000;
+    // uint64_t microseconds = dci_per_sub->timestamp % 1000000;
+    // struct tm *tm_info = localtime(&seconds);
+    // char buf[32];
+    // strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm_info);
+    // ts,type,tti,nof_cce,ncce,cfi,nof_loc,i,loc_idx,mean_llr
+    // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,search_space.loc[0].ncce, sf->cfi, tree->nof_location,i,loc_idx,tree->dci_location[loc_idx].mean_llr);
+
 		// Search all the formats in this location
 		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
 
 		// Unpack the dci messages 
 		unpack_dci_message_vec(q, sf, cfg, pdsch_cfg, dci_msg, nof_dci, loc_idx, tree);
+
+    for(int tmpidx = 0; tmpidx < MAX_NOF_FORMAT; tmpidx++){
+      srsran_dci_msg_t tmp_dci_msg = dci_msg[tmpidx];
+      if (tmp_dci_msg.nof_bits > 0){
+        // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,msg->location.ncce, sf->cfi, tree->nof_location,i,loc_idx,tmp_dci_msg->format,tree->dci_location[loc_idx].mean_llr);
+        // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
+         fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
+            dci_per_sub->timestamp,sf->tti,tmp_dci_msg.rnti,nof_cce,tmp_dci_msg.location.ncce,sf->cfi,tree->nof_location,i,loc_idx,tmp_dci_msg.location.L,srsran_dci_format_string(tmp_dci_msg.format),tmp_dci_msg.location.mean_llr,tmp_dci_msg.nof_bits,tmp_dci_msg.decode_prob,tmp_dci_msg.corr);
+      }
+    }
+    
 
 		// child parent matching
 		found_dci += child_parent_match(tree, dci_per_sub, loc_idx, blk_idx, targetRNTI);
@@ -307,7 +366,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
  //srsran_ngscope_tree_plot_multi(dci_array, dci_location, nof_location);
   //usleep(800);
   //printf("\n");
-
+  fclose(decodelog);
   return found_dci;
 }
 
