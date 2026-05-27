@@ -119,7 +119,7 @@ srsran_dci_format_t ngscope_index_to_format(int index){
 }
 
 void srsran_ngscope_print_dci_per_sub(ngscope_dci_per_sub_t* q){
-	printf("DL-> ");
+	printf("DEBUG: DL-> ");
 	for(int i=0; i<q->nof_dl_dci; i++){
 		printf("%d ", q->dl_msg[i].rnti);
 	}

@@ -264,7 +264,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 							uint8_t*                data[SRSRAN_MAX_CODEWORDS],
                             //ngscope_dci_msg_t       dci_array[][MAX_CANDIDATES_ALL],
                             //srsran_dci_location_t   dci_location[MAX_CANDIDATES_ALL],
-                            ngscope_dci_per_sub_t*  dci_per_sub)
+                            ngscope_dci_per_sub_t*  dci_per_sub,
+							uint16_t				decoder_idx)
 {
     uint32_t tti = sfn * 10 + sf_idx;
 
@@ -353,7 +354,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 		}else{
     		ngscope_tree_t tree;	
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx);
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
 			// filter the dci 
@@ -372,11 +373,38 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 			/*********************   Print decoding result  **********************/
 
-			// int nof_node = srsran_ngscope_tree_non_empty_nodes(&tree);
-			// printf("decoder: TTI:%d left %d non-empty nodes found:%d dl_dci %d ul_dci!\n", tti, nof_node, \
-			// 			dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci); 
-			// srsran_ngscope_print_dci_per_sub(dci_per_sub);
-			// printf("\n");
+
+			FILE *decodelog;
+			char fname[64];
+			memset(fname,0,64);
+			snprintf(fname, sizeof(fname),"dci-decode-debug-%d.csv",decoder_idx);
+			decodelog=fopen(fname,"a"); 
+
+			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
+				ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
+				if(decodelog){
+					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
+					fprintf(decodelog,
+						"%lu,normal,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
+						dci_per_sub->timestamp,
+						tti,
+						dl_msg.rnti,
+						dl_msg.loc.ncce,
+						dl_msg.loc.L,
+						srsran_dci_format_string(dl_msg.format),
+						dl_msg.loc.mean_llr,
+						dl_msg.nof_tb,
+						dl_msg.decode_prob,
+						dl_msg.corr);
+					}
+			}
+			fclose(decodelog);
+
+			int nof_node = srsran_ngscope_tree_non_empty_nodes(&tree);
+			printf("DEBUG: TTI=%d left %d non-empty nodes found:%d dl_dci %d ul_dci!\n", tti, nof_node, \
+						dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci); 
+			srsran_ngscope_print_dci_per_sub(dci_per_sub);
+			printf("\n");
 
 		}
 	} 
@@ -564,7 +592,7 @@ void* dci_decoder_thread(void* p){
 
 			uint64_t t1 = timestamp_us();        
 			
-			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub);
+			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub, decoder_idx);
 			uint64_t t2 = timestamp_us();        
 			fprintf(fd,"%d\t%ld\t\n", tti, t2-t1);
 	//--->  Unlock the buffer

@@ -523,8 +523,8 @@ void* task_scheduler_thread(void* p){
 
     // JH open log file
 	FILE *decodelog;
-  	decodelog=fopen("dci-decode-debug.log","a");
-  	fprintf(decodelog,"timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr\n");
+  	decodelog=fopen("dci-decode-debug.csv","a");
+  	fprintf(decodelog,"timestamp,type,tti,rnti,ncce,L,format,mean_llr,nof_bits,decode_prob,corr\n");
 	fclose(decodelog);
 
 

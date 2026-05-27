@@ -43,7 +43,8 @@ SRSRAN_API int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*     	q,
 														 srsran_pdsch_cfg_t* 			pdsch_cfg,
 														 ngscope_dci_per_sub_t* 		dci_per_sub,
 														 ngscope_tree_t* 				tree,
-														 uint16_t 						targetRNTI);
+														 uint16_t 						targetRNTI,
+														uint16_t						decoder_idx);
 
 SRSRAN_API int srsran_ngscope_search_all_space_array_singleUE_yx(srsran_ue_dl_t*     q,
 																 srsran_dl_sf_cfg_t* sf,

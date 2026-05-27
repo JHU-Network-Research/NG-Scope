@@ -212,7 +212,7 @@ int srsran_ngscope_dci_prune_ret(ngscope_dci_per_sub_t* q)
 int srsran_ngscope_dci_prune(ngscope_tree_t* q,
 								uint32_t sf_idx)
 {
-    //printf("nof_location:%d nof_cce:%d sf_idx:%d \n", nof_location, nof_cce, sf_idx);
+    // printf("DEBUG: nof_location:%d nof_cce:%d sf_idx:%d \n", nof_location, nof_cce, sf_idx);
     uint32_t ncce = 0;
     for(int i=0; i<q->nof_location; i++){
         ncce = q->dci_location[i].ncce;
@@ -222,6 +222,7 @@ int srsran_ngscope_dci_prune(ngscope_tree_t* q,
             if(rnti > 0){// not empty
                 // Rule 1: corr based cuting: and decode-prob based pruning
                 if (!isnormal(q->dci_array[j][i].corr) || q->dci_array[j][i].corr < 0.5f || q->dci_array[j][i].decode_prob < 75) {
+                    printf("DEBUG: pruning msg with bad corr/decode prob rnti=%d, corr=%.3f, decode prob=%.3f at L=%d, format idx=%d, loc idx=%d\n", q->dci_array[j][i].rnti,q->dci_array[j][i].corr,q->dci_array[j][i].decode_prob,q->dci_array[j][i].loc.L, i, j);
                     ZERO_OBJECT(q->dci_array[j][i]);
 					continue;
                 }
@@ -230,6 +231,7 @@ int srsran_ngscope_dci_prune(ngscope_tree_t* q,
                 bool loc_match = srsran_ngscope_space_match_yx(rnti,
                                     q->nof_cce, sf_idx, ncce, ngscope_index_to_format(j));
                 if(loc_match == false){
+                    printf("DEBUG: pruning msg with invalid loc match rnti=%d, corr=%.3f, decode prob=%.3f at L=%d, format idx=%d, loc idx=%d\n", q->dci_array[j][i].rnti,q->dci_array[j][i].corr,q->dci_array[j][i].decode_prob,q->dci_array[j][i].loc.L, i, j);
                     ZERO_OBJECT(q->dci_array[j][i]);
 					continue;
                 }

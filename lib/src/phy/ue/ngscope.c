@@ -13,6 +13,20 @@
  *  Format   loc
  */
 
+#include <pthread.h>
+
+static bool debug = true;
+// // Global
+// static FILE *decodelog = NULL;
+
+// void decodelog_init() {
+//     decodelog = fopen("dci-decode-debug.csv", "a");
+// }
+
+// void decodelog_destroy() {
+//     if (decodelog) fclose(decodelog);
+// }
+
 void unpack_dci_message_vec(srsran_ue_dl_t*        q,
 							srsran_dl_sf_cfg_t*    sf,
 							srsran_ue_dl_cfg_t*    cfg,
@@ -78,7 +92,7 @@ void copy_dci_to_output(ngscope_tree_t* 	   		tree,
 }
 int child_parent_match(ngscope_tree_t* 	   tree,
                         ngscope_dci_per_sub_t* dci_per_sub,
-						int loc_idx, int blk_idx, uint16_t 	targetRNTI)
+						int loc_idx, int blk_idx, uint16_t 	targetRNTI, uint16_t tti)
 {
 	/*****************************************************************
 	* Matching child parent	in the tree
@@ -89,9 +103,16 @@ int child_parent_match(ngscope_tree_t* 	   tree,
 	int nof_matched     = 0;
 	srsran_ngscope_tree_CP_match(tree, blk_idx, loc_idx, targetRNTI, &nof_matched, &matched_root, matched_format_vec);
 	//srsran_ngscope_tree_CP_match(tree.dci_array, nof_location, blk_idx, loc_idx, &nof_matched, &matched_root, matched_format_vec);
-	 
+	 //TODO Check above function for 
 	/* Pruning a single node. We can only decode one dci from each location, so we need to figure 
 	out which format is correct if there are mutliple dci are decoded from that specific location. */
+  printf("DEBUG: TTI=%d, loc_idx=%d, blk_idx=%d, matched_root=%d, nof_matched=%d\n",
+    tti,
+    loc_idx,
+    blk_idx,
+    matched_root,
+    nof_matched
+  );
 	if( nof_matched > 0){
 		int format_idx      = matched_format_vec[0]; 
 		int pruned_nof_dci  = 1;
@@ -110,7 +131,23 @@ int child_parent_match(ngscope_tree_t* 	   tree,
 			}
 			if(space_match){
 				found_dci++;
-				copy_dci_to_output(tree, dci_per_sub, format_idx, matched_root);
+        
+        // if(decodelog){
+        ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][matched_root];
+        printf("DEBUG: found match on TTI=%d,rnti=%d, ncce=%d, L=%d, format=%s, mean_llr=%.3f, nof_tb=%d, decode_prob=%.3f, corr=%.3f\n",
+            tti,
+            msg->rnti,
+            msg->loc.ncce,
+            msg->loc.L,
+            srsran_dci_format_string(msg->format),
+            msg->loc.mean_llr,
+            msg->nof_tb,
+            msg->decode_prob,
+            msg->corr);
+        // }
+
+        copy_dci_to_output(tree, dci_per_sub, format_idx, matched_root);
+
 			}
 		} 
 	}
@@ -125,7 +162,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
                                              //srsran_dci_location_t  dci_location[MAX_CANDIDATES_ALL],
                                              ngscope_dci_per_sub_t* dci_per_sub,
   											 ngscope_tree_t* 		tree,
-											 uint16_t targetRNTI)
+											 uint16_t targetRNTI, uint16_t decoder_idx)
 {
   int ret = SRSRAN_ERROR;
 
@@ -196,8 +233,12 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 
   //printf("ngscope: TTI:%d NOF CCE:%d nof location:%d\n", sf->tti, nof_cce, tree->nof_location);
 
-  FILE *decodelog;
-  decodelog=fopen("dci-decode-debug.log","a");  
+  // decodelog_init();
+  // FILE *decodelog;
+  // char fname[64];
+  // memset(fname,0,64);
+  // snprintf(fname, sizeof(fname),"dci-decode-debug-%d.csv",decoder_idx);
+  // decodelog=fopen(fname,"a"); 
   // Test purpose
   //srsran_ngscope_tree_check_nodes(dci_location, 5);
 
@@ -213,36 +254,12 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 		if(tree->dci_location[loc_idx].checked || tree->dci_location[loc_idx].mean_llr < LLR_RATIO){
 			//skip the location, if 1) it has been checked 2) its llr ratio is too small
 			//printf("check:%d mean_llr::%f\n",dci_location[loc_idx].checked, dci_location[loc_idx].mean_llr);
-			if (tree->dci_location[loc_idx].mean_llr < LLR_RATIO){
-        
-        // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
-          fprintf(decodelog,"%lu,nodecode,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
-            dci_per_sub->timestamp,sf->tti,0,nof_cce,tree->dci_location[loc_idx].ncce,sf->cfi,tree->nof_location,i,loc_idx,0,"",tree->dci_location[loc_idx].mean_llr,0,0.0,0.0);
-        // }
-
-      //   for(int tmpidx = 0; tmpidx < MAX_NOF_FORMAT; tmpidx++){
-      //   srsran_dci_msg_t tmp_dci_msg = dci_msg[tmpidx];
-      //   if (tmp_dci_msg.nof_bits > 0){
-      //   // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,msg->location.ncce, sf->cfi, tree->nof_location,i,loc_idx,tmp_dci_msg->format,tree->dci_location[loc_idx].mean_llr);
-      //   // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
-      //     fprintf(decodelog,"%lu,nodecode,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
-      //       dci_per_sub->timestamp,sf->tti,tmp_dci_msg.rnti,nof_cce,tmp_dci_msg.location.ncce,sf->cfi,tree->nof_location,i,loc_idx,tmp_dci_msg.location.L,srsran_dci_format_string(tmp_dci_msg.format),tmp_dci_msg.location.mean_llr,tmp_dci_msg.nof_bits,tmp_dci_msg.decode_prob,tmp_dci_msg.corr);
-      //   }
-      // }
-
-
-
-
-
-
-        // ts,type,tti,nof_cce,ncce,cfi,nof_loc,i,loc_idx,format,mean_llr
-        // fprintf(decodelog,"%lu,nodecode,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,search_space.loc[0].ncce, sf->cfi, tree->nof_location,i,loc_idx,dci_msg->format,tree->dci_location[loc_idx].mean_llr);
-      }
       loc_idx++;
 			continue;
 		}
 		cnt++;
-  		//printf("TTI:%d NOF CCE:%d CFI:%d nof location:%d\n", sf->tti, sf->cfi, nof_cce, tree->nof_location);
+    if (debug)
+  	  printf("DEBUG: SEARCHING TTI:%d NOF CCE:%d CFI:%d nof location:%d LOC_IDX: %d, ncce:%d L:%d\n", sf->tti, sf->cfi, nof_cce, tree->nof_location, loc_idx, tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 		search_space.loc[0] = tree->dci_location[loc_idx]; 
 
 		// Search for the paging information first, the dci_cfg for the paging messages
@@ -251,6 +268,10 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 		if(search_space.loc[0].ncce == 0){
 			// first search for the paging
   			dci_cfg.multiple_csi_request_enabled 	= false;
+        if (debug)
+          printf("DEBUG: PAGING SEARCH TTI:%d NOF_CCE:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
+            sf->tti, nof_cce, sf->cfi, tree->nof_location, loc_idx,
+            tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 			int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
 
 			// Unpack the dci messages 
@@ -258,17 +279,6 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 
 			int format_idx = srsran_ngscope_tree_find_rnti_range(tree, loc_idx, 0xFFF4, 0xFFFF);
 
-      // ts,type,tti,nof_cce,ncce,cfi,nof_loc,i,loc_idx,format,mean_llr
-      // fprintf(decodelog,"%lu,paging,%d,%d,%d,%d,%d,%d,%d,%s,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,search_space.loc[0].ncce, sf->cfi, tree->nof_location,i,loc_idx,srsran_dci_format_string(),tree->dci_location[loc_idx].mean_llr);
-      for(int tmpidx = 0; tmpidx < MAX_NOF_FORMAT; tmpidx++){
-        srsran_dci_msg_t tmp_dci_msg = dci_msg[tmpidx];
-        if (tmp_dci_msg.nof_bits > 0){
-        // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,msg->location.ncce, sf->cfi, tree->nof_location,i,loc_idx,tmp_dci_msg->format,tree->dci_location[loc_idx].mean_llr);
-        // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
-           fprintf(decodelog,"%lu,paging,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
-            dci_per_sub->timestamp,sf->tti,tmp_dci_msg.rnti,nof_cce,tmp_dci_msg.location.ncce,sf->cfi,tree->nof_location,i,loc_idx,tmp_dci_msg.location.L,srsran_dci_format_string(tmp_dci_msg.format),tmp_dci_msg.location.mean_llr,tmp_dci_msg.nof_bits,tmp_dci_msg.decode_prob,tmp_dci_msg.corr);
-        }
-      }
 			if(format_idx >=0){
 				// if we found the corresponding rnti, we will check the nodes, 
 				// So the following search won't touch those checked nodes
@@ -281,6 +291,10 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 		// the corresponding locations should be checked and thus skipped
 		if(tree->dci_location[loc_idx].checked){
 			//skip the location, if 1) it has been checked 2) its llr ratio is too small
+        if (debug)
+        printf("DEBUG: SKIP TTI:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
+      sf->tti, sf->cfi, tree->nof_location, loc_idx,
+      tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 			loc_idx++;
 			continue;
 		}
@@ -298,26 +312,30 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
     // strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm_info);
     // ts,type,tti,nof_cce,ncce,cfi,nof_loc,i,loc_idx,mean_llr
     // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,search_space.loc[0].ncce, sf->cfi, tree->nof_location,i,loc_idx,tree->dci_location[loc_idx].mean_llr);
-
+    if (debug)
+      printf("DEBUG: NORMAL SEARCH TTI:%d NOF_CCE:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
+    sf->tti, nof_cce, sf->cfi, tree->nof_location, loc_idx,
+    tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 		// Search all the formats in this location
 		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
+    if (debug){
+    printf("DEBUG: found %d DCIs at TTI=%d:\n",nof_dci,sf->tti);
+      for(int idx = 0; idx < nof_dci; idx++){
+        printf("\tDEBUG: tti=%d, rnti=%d, format=%s, L=%d, llr=%.3f, prob=%.3f\n",
+          sf->tti,
+          dci_msg[idx].rnti,
+          srsran_dci_format_string(dci_msg[idx].format), 
+          dci_msg[idx].location.L, 
+          dci_msg[idx].location.mean_llr,
+          dci_msg[idx].decode_prob
+        );
+      }
+    }
 
 		// Unpack the dci messages 
 		unpack_dci_message_vec(q, sf, cfg, pdsch_cfg, dci_msg, nof_dci, loc_idx, tree);
-
-    for(int tmpidx = 0; tmpidx < MAX_NOF_FORMAT; tmpidx++){
-      srsran_dci_msg_t tmp_dci_msg = dci_msg[tmpidx];
-      if (tmp_dci_msg.nof_bits > 0){
-        // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,msg->location.ncce, sf->cfi, tree->nof_location,i,loc_idx,tmp_dci_msg->format,tree->dci_location[loc_idx].mean_llr);
-        // timestamp,tti,rnti,nof_cce,cfi,nof_location,i,loc_idx,L,format,mean_lrr,nof_bits,decode_prob,corr
-         fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
-            dci_per_sub->timestamp,sf->tti,tmp_dci_msg.rnti,nof_cce,tmp_dci_msg.location.ncce,sf->cfi,tree->nof_location,i,loc_idx,tmp_dci_msg.location.L,srsran_dci_format_string(tmp_dci_msg.format),tmp_dci_msg.location.mean_llr,tmp_dci_msg.nof_bits,tmp_dci_msg.decode_prob,tmp_dci_msg.corr);
-      }
-    }
-    
-
 		// child parent matching
-		found_dci += child_parent_match(tree, dci_per_sub, loc_idx, blk_idx, targetRNTI);
+		found_dci += child_parent_match(tree, dci_per_sub, loc_idx, blk_idx, targetRNTI,sf->tti);
 		//printf("prune done!\n");
 
 		tree->dci_location[loc_idx].checked = true;
@@ -341,6 +359,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
   //}
 
   srsran_ngscope_dci_prune(tree, sf->tti % 10);
+
 
   //int nof_node = srsran_ngscope_tree_non_empty_nodes(tree);
   //printf("TTI:%d Searching %d location, found %d dci, left %d non-empty nodes!\n",\
@@ -366,7 +385,33 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
  //srsran_ngscope_tree_plot_multi(dci_array, dci_location, nof_location);
   //usleep(800);
   //printf("\n");
-  fclose(decodelog);
+
+  // FILE *decodelog;
+  // char fname[64];
+  // memset(fname,0,64);
+  // snprintf(fname, sizeof(fname),"dci-decode-debug-%d.csv",decoder_idx);
+  // decodelog=fopen(fname,"a"); 
+
+  // for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
+  //   ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
+  //   if(decodelog){
+  //         // ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
+  //         fprintf(decodelog,
+  //             "%lu,normal,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
+  //             dci_per_sub->timestamp,
+  //             sf->tti,
+  //             dl_msg.rnti,
+  //             dl_msg.loc.ncce,
+  //             dl_msg.loc.L,
+  //             srsran_dci_format_string(dl_msg.format),
+  //             dl_msg.loc.mean_llr,
+  //             dl_msg.nof_tb,
+  //             dl_msg.decode_prob,
+  //             dl_msg.corr);
+  //       }
+  // }
+  // fclose(decodelog);
+
   return found_dci;
 }
 

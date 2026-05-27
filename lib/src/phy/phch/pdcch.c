@@ -45,6 +45,8 @@
 #define NOF_CCE(cfi) ((cfi > 0 && cfi < 4) ? q->nof_cce[cfi - 1] : 0)
 #define NOF_REGS(cfi) ((cfi > 0 && cfi < 4) ? q->nof_regs[cfi - 1] : 0)
 
+static bool debug = true;
+
 float srsran_pdcch_coderate(uint32_t nof_bits, uint32_t l)
 {
   static const int nof_bits_x_symbol = 2; // QPSK
@@ -549,8 +551,26 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
              nof_bits,
              mean,
              msg->rnti);
+        if (debug)
+          printf("DEBUG: decoded DCI: TTI=%d, nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, rnti=0x%d, mean_llr=%.3f, decode_prob=%.3f\n",
+            sf->tti,  
+            msg->location.ncce,
+              msg->location.L,
+              srsran_dci_format_string(msg->format),
+              nof_bits,
+              mean,
+              msg->rnti,
+              mean,
+              decode_prob);
       } else {
-        INFO("Skipping DCI:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
+        INFO("Skipping DCI w/ insufficient LLR:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
+        if (debug)
+          printf("DEBUG: Skipping DCI: TTI=%d, nCCE=%d, L=%d, msg_len=%d, mean=%f\n", 
+            sf->tti, 
+            msg->location.ncce, 
+            msg->location.L, 
+            nof_bits, 
+            mean);
         //ERROR("Skipping DCI:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
       }
     }
