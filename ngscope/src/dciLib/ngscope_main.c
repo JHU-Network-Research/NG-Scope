@@ -105,6 +105,10 @@ int ngscope_main(ngscope_config_t* config)
         prog_args[i].force_N_id_2  = config->rf_config[i].N_id_2;
         prog_args[i].nof_decoder   = config->rf_config[i].nof_thread;
         prog_args[i].disable_plots = config->rf_config[i].disable_plot;
+
+        prog_args[i].mode          = config->rf_config[i].mode;
+        prog_args[i].rr_fname      = (char*) malloc(100 * sizeof(char));
+        strcpy(prog_args[i].rr_fname, config->rf_config[i].rr_fname);
         
         prog_args[i].rf_args    = (char*) malloc(100 * sizeof(char));
         strcpy(prog_args[i].rf_args, config->rf_config[i].rf_args);

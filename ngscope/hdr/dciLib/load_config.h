@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include "task_scheduler.h"
 
+typedef enum { NORMAL, RECORD, REPLAY } ngscope_mode_t;
+
 typedef struct{
     long long   rf_freq;
     int         N_id_2;
@@ -12,6 +14,9 @@ typedef struct{
 	int 		log_dl;
 	int			log_ul;
     int         log_phich;
+
+    ngscope_mode_t      mode; // operating mode (0=NORMAL, 1=RECORD, 2=REPLAY)
+    const char *        rr_fname; // record/replay filename
 }rf_dev_config_t;
 
 typedef struct{

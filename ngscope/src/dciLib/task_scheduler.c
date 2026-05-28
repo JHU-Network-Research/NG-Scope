@@ -105,6 +105,7 @@ int find_idle_decoder(int rf_idx, int nof_decoder){
 
 /********************** callback wrapper **********************/ 
 int srsran_rf_recv_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
+// srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
 {
   DEBUG(" ----  Receive %d samples  ----", nsamples);
   void* ptr[SRSRAN_MAX_PORTS];
@@ -432,6 +433,12 @@ void* handle_tmp_buffer_thread(void* p){
 ************************************************/
 void* task_scheduler_thread(void* p){
     prog_args_t* prog_args = (prog_args_t*)p;
+
+    printf("NG-Scope mode: %d\n", prog_args->mode);
+    printf("NG-Scope RR file: %s\n", prog_args->rr_fname);
+    exit(1);
+
+
     ngscope_task_scheduler_t task_scheduler;
     task_scheduler_init(&task_scheduler, *prog_args);
 

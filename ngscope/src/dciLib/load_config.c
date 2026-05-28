@@ -147,6 +147,27 @@ int ngscope_read_config(ngscope_config_t* config, char * path)
             printf("log phich: %d\n", config->rf_config[i].log_phich);
         }        
 
+        sprintf(name, "rf_config%d.mode",i);
+        if(! config_lookup_int(cfg, name, (int*) &config->rf_config[i].mode)){
+            printf("ERROR: reading mode\n");
+            config->rf_config[i].mode = (ngscope_mode_t) 0;
+        }
+        printf("mode: %d\n", config->rf_config[i].mode);
+        
+
+        sprintf(name, "rf_config%d.rr_fname",i);
+        if(! config_lookup_string(cfg, name, &config->rf_config[i].rr_fname)){
+            printf("ERROR: reading rr_fname\n");
+            config->rf_config[i].rr_fname = NULL;
+        }
+        printf("rr_fname: %s\n", config->rf_config[i].rr_fname);
+
+        if ((config->rf_config[i].mode == 1 || config->rf_config[i].mode == 2) && !config->rf_config[i].rr_fname){
+            printf("Error: no filename provided for record/replay, exiting...\n");
+            exit(0);
+        }
+        
+
     }
 
 	if(containsDuplicate(freq_vec, config->nof_rf_dev)){
