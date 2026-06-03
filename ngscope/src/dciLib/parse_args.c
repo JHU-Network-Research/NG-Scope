@@ -22,7 +22,9 @@ void args_default(prog_args_t* args)
   args->force_N_id_2                       = -1; // Pick the best
   args->tdd_special_sf                     = 2;
   args->sf_config                          = 2;
+  args->mode                               = 0;
   args->input_file_name                    = NULL;
+  args->output_file_name                   = NULL;
   args->disable_cfo                        = false;
   args->log_dl                             = false;
   args->log_ul                             = false;

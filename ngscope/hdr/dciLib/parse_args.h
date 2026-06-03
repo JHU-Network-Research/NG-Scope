@@ -29,7 +29,9 @@ typedef struct {
   uint32_t time_offset;
   int      force_N_id_2;
   uint16_t rnti;
+  int      mode;
   char*    input_file_name;
+  char*    output_file_name;
   int      file_offset_time;
   float    file_offset_freq;
   uint32_t file_nof_prb;
@@ -67,9 +69,6 @@ typedef struct {
   bool     enable_256qam;
   bool     use_standard_lte_rate;
   char sib_logs[SIB_LOGS_PATH_MAX_LEN];
-
-  int      mode;
-  char*    rr_fname;
 } prog_args_t;
 
 void args_default(prog_args_t* args);

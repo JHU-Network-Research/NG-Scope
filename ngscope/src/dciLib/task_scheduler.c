@@ -24,6 +24,9 @@
 #include "ngscope/hdr/dciLib/ue_tracker.h"
 #include "ngscope/hdr/dciLib/decode_sib.h"
 
+#include "ngscope/hdr/dciLib/ngscope_rx.h"
+#include "ngscope/hdr/dciLib/load_config.h"
+
 extern bool go_exit;
 
 extern pthread_mutex_t     cell_mutex; 
@@ -36,6 +39,8 @@ extern bool dci_decoder_up[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
 extern bool task_scheduler_up[MAX_NOF_RF_DEV];
 extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 extern pthread_mutex_t     scheduler_close_mutex;
+
+bool debug = false;
 
 /******************* Global buffer for passing subframe IQ  ******************/ 
 ngscope_sf_buffer_t sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER] = 
@@ -107,6 +112,10 @@ int find_idle_decoder(int rf_idx, int nof_decoder){
 int srsran_rf_recv_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
 // srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
 {
+
+    // THIS IS WHERE SAMPLES ARE READ
+  if (debug)
+    printf("DEBUG: task_scheduler receive %d samples\n", nsamples);
   DEBUG(" ----  Receive %d samples  ----", nsamples);
   void* ptr[SRSRAN_MAX_PORTS];
   for (int i = 0; i < SRSRAN_MAX_PORTS; i++) {
@@ -180,7 +189,7 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
     if (srsran_ue_sync_init_multi_decim(ue_sync,
                                         cell->nof_prb,
                                         cell->id == 1000,
-                                        srsran_rf_recv_wrapper,
+                                        ngscope_recv_samples_wrapper, // Mmodified to record samples
                                         prog_args.rf_nof_rx_ant,
                                         (void*)rf,
                                         decimate)) {
@@ -231,23 +240,52 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
     // Copy the prameters 
     task_scheduler->prog_args = prog_args;
  
-    // First of all, start the radio and get the cell information
-    radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args, 
-                                                &cell_detect_config, &search_cell_cfo);
-           
-    // Copy the cell info to the  
-    pthread_mutex_lock(&cell_mutex); 
-    memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
-    printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
-    pthread_mutex_unlock(&cell_mutex); 
+    // No record or replay
+    // if (prog_args.mode == 0 || prog_args.mode == 1){
+        if (prog_args.mode == 1)
+            init_record(prog_args.output_file_name, 1024*1024*1024*1);
+        else if (prog_args.mode == 2)
+            init_replay(prog_args.input_file_name);
+        // First of all, start the radio and get the cell information
+        radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args, 
+                                                    &cell_detect_config, &search_cell_cfo);
+            
+        // Copy the cell info to the  
+        pthread_mutex_lock(&cell_mutex); 
+        memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
+        printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
+        pthread_mutex_unlock(&cell_mutex); 
 
-    // Next, let's get the ue_sync ready
-    ue_sync_init_imp(&task_scheduler->ue_sync, &task_scheduler->rf, &task_scheduler->cell, 
-                                          &cell_detect_config, prog_args, search_cell_cfo); 
+        if (debug)
+            printf("DEBUG: SETTING UP UE SYNC\n");
+        // Next, let's get the ue_sync ready
+        ue_sync_init_imp(&task_scheduler->ue_sync, &task_scheduler->rf, &task_scheduler->cell, 
+                                            &cell_detect_config, prog_args, search_cell_cfo); 
 
-    pthread_mutex_lock(&ack_mutex); 
-    init_pending_ack(&ack_list);
-    pthread_mutex_unlock(&ack_mutex); 
+        pthread_mutex_lock(&ack_mutex); 
+        init_pending_ack(&ack_list);
+        pthread_mutex_unlock(&ack_mutex); 
+    
+    // Record samples to file
+    // } else if (prog_args.mode == 1){
+
+    //     init_record(prog_args->output_file_name, 0);
+        
+
+    // Replay samples from file
+    // } else if (prog_args.mode == 2){
+
+    //     radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args, 
+    //                                                 &cell_detect_config, &search_cell_cfo);
+            
+    //     // Copy the cell info to the  
+    //     pthread_mutex_lock(&cell_mutex); 
+    //     memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
+    //     printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
+    //     pthread_mutex_unlock(&cell_mutex); 
+    //     // srsran_ue_sync_t* q, uint32_t nof_prb, char* file_name, int offset_time, float offset_freq
+    //     srsran_ue_sync_init_file(&task_scheduler->ue_sync, prog_args.file_nof_prb, prog_args.input_file_name, 645229936, prog_args.file_offset_freq);
+    // }
 
     return SRSRAN_SUCCESS;
 }
@@ -435,12 +473,16 @@ void* task_scheduler_thread(void* p){
     prog_args_t* prog_args = (prog_args_t*)p;
 
     printf("NG-Scope mode: %d\n", prog_args->mode);
-    printf("NG-Scope RR file: %s\n", prog_args->rr_fname);
-    exit(1);
-
-
+    printf("NG-Scope Record file: %s\n", prog_args->output_file_name);
+    printf("NG-Scope Replay file: %s\n", prog_args->input_file_name);
+    // exit(1);
+    if (debug)
+        printf("DEBUG: INITIALIZING TASK_SCHEDULER\n");
     ngscope_task_scheduler_t task_scheduler;
     task_scheduler_init(&task_scheduler, *prog_args);
+
+    if (debug)
+        printf("DEBUG: INITIALIZED TASK_SCHEDULER\n");
 
     int ret;
     int nof_decoder = task_scheduler.prog_args.nof_decoder;
@@ -670,6 +712,11 @@ void* task_scheduler_thread(void* p){
 	}// end of while
 		
 	fclose(fd);
+    if (prog_args->mode == 1){
+        stop_record();
+    }else if (prog_args->mode == 2){
+        stop_replay();
+    }
 	//fclose(fd_1);
 
 //--> Deal with the exit and free memory 

@@ -99,7 +99,7 @@ int srsran_ue_sync_init_file_multi(srsran_ue_sync_t* q,
         perror("malloc");
         goto clean_exit;
       }
-      srsran_filesource_read(&q->file_source, file_offset_buffer, offset_time * nof_rx_ant);
+      int nread = srsran_filesource_read(&q->file_source, file_offset_buffer, offset_time * nof_rx_ant);
       free(file_offset_buffer);
     }
 
@@ -719,6 +719,7 @@ static int receive_samples(srsran_ue_sync_t* q, cf_t* input_buffer[SRSRAN_MAX_CH
   for (int i = 0; i < q->nof_rx_antennas; i++) {
     ptr[i] = &input_buffer[i][q->next_rf_sample_offset];
   }
+  // srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
   if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
     return SRSRAN_ERROR;
   }
@@ -735,6 +736,7 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
                             const uint32_t    max_num_samples)
 {
   int ret = SRSRAN_ERROR_INVALID_INPUTS;
+  // printf("DEBUG: retrieving samples in UE SYNC, max_num_samples=%d\n",max_num_samples);
 
   if (q != NULL && input_buffer != NULL) {
     if (q->file_mode) {
@@ -978,7 +980,6 @@ int srsran_ue_sync_run_find_gnss_mode(srsran_ue_sync_t* q,
   }
 
   DEBUG("Received %d samples during alignment", sample_count);
-
   // do one normal receive, the first time-aligned subframe
   if (receive_samples(q, input_buffer, max_num_samples)) {
     ERROR("Error receiving samples");

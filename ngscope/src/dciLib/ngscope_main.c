@@ -107,8 +107,13 @@ int ngscope_main(ngscope_config_t* config)
         prog_args[i].disable_plots = config->rf_config[i].disable_plot;
 
         prog_args[i].mode          = config->rf_config[i].mode;
-        prog_args[i].rr_fname      = (char*) malloc(100 * sizeof(char));
-        strcpy(prog_args[i].rr_fname, config->rf_config[i].rr_fname);
+        if (config->rf_config[i].mode == 1){
+            prog_args[i].output_file_name      = (char*) malloc(100 * sizeof(char));
+            strcpy(prog_args[i].output_file_name, config->rf_config[i].rr_fname);
+        }else if (config->rf_config[i].mode == 2){
+            prog_args[i].input_file_name      = (char*) malloc(100 * sizeof(char));
+            strcpy(prog_args[i].input_file_name, config->rf_config[i].rr_fname);
+        }
         
         prog_args[i].rf_args    = (char*) malloc(100 * sizeof(char));
         strcpy(prog_args[i].rf_args, config->rf_config[i].rf_args);
