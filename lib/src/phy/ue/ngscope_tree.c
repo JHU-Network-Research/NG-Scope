@@ -14,7 +14,10 @@ void srsran_ngscope_tree_copy_dci_fromArray2PerSub(ngscope_tree_t* q,
                                         ngscope_dci_per_sub_t* dci_per_sub,
                                         int format,
                                         int idx)
-{
+{   
+    // ngscope_dci_msg_t msg = q->dci_array[format][idx];
+    // if (msg.rnti == 2)
+    // printf("DEBUG: rnti=%d\n",msg.rnti);
     if( (format  < 0) || (idx<0) || (idx >= MAX_CANDIDATES_ALL)){
         ERROR("Format or IDX is invalid!\n");
         return;
@@ -131,7 +134,13 @@ void srsran_ngscope_tree_CP_match(ngscope_tree_t* q,
         nof_matched = match_two_dci_vec(q->dci_array, root, left_child, targetRNTI, format_idx, &matched_root);
         //nof_matched = match_two_dci_vec(dci_array, root, left_child, format_idx, &matched_root);
         if(nof_matched > 0){
-            //printf("FIND MATACH!\n");
+            printf("DEBUG: FOUND MATCH at format_idx=%d, matched_root=%d, nof_matched=%d, blk_idx=%d, loc_idx=%d\n",
+                *format_idx,
+                matched_root,
+                nof_matched,
+                blk_idx,
+                loc_idx
+            );
             break;
         }
     }
@@ -141,7 +150,12 @@ void srsran_ngscope_tree_CP_match(ngscope_tree_t* q,
         *nof_matched_dci    = nof_matched;
         //*root_idx           = root;
         *root_idx           = matched_root;
-   	}
+   	}else{
+        printf("DEBUG: No match found at blk_idx=%d, loc_idx=%d\n",
+            blk_idx, 
+            loc_idx
+        );
+    }
 	return;
 }
 
@@ -161,7 +175,15 @@ int  srsran_ngscope_tree_prune_node(ngscope_tree_t* q,
     int idx[2] = {0};
 
     for(int i=0; i<nof_format; i++){
-		if(q->dci_array[format_vec[i]][root].rnti == targetRNTI){
+    printf("DEBUG: checking node with rnti=%d, corr=%.3f, mean_llr=%.3f, decode_prob=%.3f\n",
+    q->dci_array[format_vec[i]][root].rnti,
+    q->dci_array[format_vec[i]][root].corr,
+    q->dci_array[format_vec[i]][root].loc.mean_llr,
+    q->dci_array[format_vec[i]][root].decode_prob);
+    }
+
+    for(int i=0; i<nof_format; i++){
+		if(q->dci_array[format_vec[i]][root].rnti == targetRNTI || q->dci_array[format_vec[i]][root].rnti == 2){
 			*format_idx = format_vec[i];
 			return 1;
 		}
@@ -171,6 +193,14 @@ int  srsran_ngscope_tree_prune_node(ngscope_tree_t* q,
             cnt++;
         }
     } 
+
+    // for(int i=0; i<nof_format; i++){
+    //         if( q->dci_array[format_vec[i]][root].rnti == 2){
+    //             *format_idx=format_vec[i];
+    //             return 1;
+    //     }
+    // } 
+    
     if(cnt == 1){
         /* If there is only one dci with format 0 or 4, return it */
         *format_idx = idx[0];
@@ -189,6 +219,16 @@ int  srsran_ngscope_tree_prune_node(ngscope_tree_t* q,
                 tmp_idx  = format_vec[i];
             }
         } 
+        ngscope_dci_msg_t msg = q->dci_array[tmp_idx][root];
+        printf("DEBUG: found highest corr for rnti=%d, corr=%.3f, decode_prob=%.3f, mean_llr=%.3f, L=%d, ncce=%d\n",
+            msg.rnti,
+            msg.corr,
+            msg.decode_prob,
+            msg.loc.mean_llr,
+            msg.loc.L,
+            msg.loc.ncce
+        );
+
         *format_idx = tmp_idx;
         return 1;
     }else{
@@ -512,9 +552,13 @@ int srsran_ngscope_tree_copy_rnti(ngscope_tree_t*   		q,
 								 uint16_t 					rnti)
 {
 	int ret = 0;
+    if (rnti == 2)
+        printf("DEBUG: COPYING TREE FOR RNTI %d\n",rnti);
+
     for(int i=0; i<q->nof_location; i++){
     	for(int j=0; j<MAX_NOF_FORMAT+1; j++){
 			if(q->dci_array[j][i].rnti == rnti){
+                printf("RNTI MATCHES\n");
 				srsran_ngscope_tree_copy_dci_fromArray2PerSub(q, dci_per_sub, j, i);
     			ZERO_OBJECT(q->dci_array[j][i]);
 				ret++;;

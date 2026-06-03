@@ -28,6 +28,8 @@
 #define CURRENT_SFLEN_RE SRSRAN_NOF_RE(q->cell)
 #define MAX_SFLEN_RE SRSRAN_SF_LEN_RE(max_prb, q->cell.cp)
 
+static bool debug = true;
+
 const static srsran_dci_format_t ue_dci_formats[8][2] = {
     /* Mode 1 */ {SRSRAN_DCI_FORMAT1A, SRSRAN_DCI_FORMAT1},
     /* Mode 2 */ {SRSRAN_DCI_FORMAT1A, SRSRAN_DCI_FORMAT1},
@@ -622,6 +624,8 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
       }
       if (dci_location_is_allocated(q, search_space->loc[l])) {
         INFO("Skipping location L=%d, ncce=%d. Already allocated", search_space->loc[l].L, search_space->loc[l].ncce);
+        if (debug)
+          printf("DEBUG: skipping location TTI=%d, L=%d, ncce=%d, ss_loc_idx=%d, mean_llr=%.3f. Already allocated\n", sf->tti,search_space->loc[l].L, search_space->loc[l].ncce, l, search_space->loc[l].mean_llr);
         continue;
       }
       for (uint32_t f = 0; f < search_space->nof_formats; f++) {
@@ -631,6 +635,16 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
              search_space->loc[l].L,
              l,
              search_space->nof_locations);
+        if (debug)
+          printf("DEBUG: TTI=%d, searching format=%s, ncce=%d, L=%d, ss_loc_idx=%d, nof_loc=%d, mean_llr=%.3f\n",
+            sf->tti,
+            srsran_dci_format_string(search_space->formats[f]),
+            search_space->loc[l].ncce,
+            search_space->loc[l].L,
+            l,
+            search_space->nof_locations,
+            search_space->loc[l].mean_llr
+          );
 
         // Try to decode a valid DCI msg
         dci_msg[nof_dci].location = search_space->loc[l];
@@ -645,6 +659,19 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         }else{
             //printf("PROB:%f\n", decode_prob);
         }
+        // printf("DEBUG: Decoded message with TTI=%d, format=%s, ncce=%d, L=%d, ss_loc_idx=%d, nof_loc=%d, rnti=%d, mean_llr=%.3f, decode_prob=%0.3f, nof_bits=%d\n",
+        //   sf->tti,
+        //   srsran_dci_format_string(search_space->formats[f]),
+        //   search_space->loc[l].ncce,
+        //   search_space->loc[l].L,
+        //   l,
+        //   search_space->nof_locations,
+        //   dci_msg[nof_dci].rnti,
+        //   search_space->loc[l].mean_llr,
+        //   decode_prob,
+        //   dci_msg[nof_dci].nof_bits
+        // );
+
       	dci_msg[nof_dci].decode_prob = decode_prob;
         // Check if RNTI is matched
         //if ((dci_msg[nof_dci].nof_bits > 0) && decode_prob > 50 ) {
@@ -653,6 +680,30 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
           float corr = srsran_pdcch_msg_corr(&q->pdcch, &dci_msg[nof_dci]);
           dci_msg[nof_dci].corr = corr;
           //printf("corr:%f\n", corr);
+          if (debug)
+            printf("DEBUG: Decoded message with TTI=%d, format=%s, ncce=%d, L=%d, "
+        "ss_loc_idx=%d, nof_loc=%d, rnti=%d, mean_llr=%.3f, "
+        "decode_prob=%.3f, nof_bits=%d, corr=%.3f\n",
+      sf->tti, srsran_dci_format_string(search_space->formats[f]),
+      search_space->loc[l].ncce, search_space->loc[l].L,
+      l, search_space->nof_locations, dci_msg[nof_dci].rnti,
+      search_space->loc[l].mean_llr, decode_prob,
+      dci_msg[nof_dci].nof_bits, corr);
+        //   printf("DEBUG: Decoded message with TTI=%d, format=%s, ncce=%d, L=%d, ss_loc_idx=%d, nof_loc=%d,rnti=%d, mean_llr=%.3f, decode_prob=%0.3f, nof_bits=%d, corr=%.3f\n",
+        //   sf->tti,
+        //   srsran_dci_format_string(search_space->formats[f]),
+        //   search_space->loc[l].ncce,
+        //   search_space->loc[l].L,
+        //   l,
+        //   search_space->nof_locations,
+        //   dci_msg[nof_dci].rnti,
+        //   search_space->loc[l].mean_llr,
+        //   decode_prob,
+        //   dci_msg[nof_dci].nof_bits,
+        //   corr
+        // );
+
+
           // Skip candidate if the threshold is not reached
           // 0.5 is set from pdcch_test
           if (!isnormal(corr) || corr < 0.5f) {
