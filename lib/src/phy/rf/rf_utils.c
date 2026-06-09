@@ -35,6 +35,9 @@
 #include "srsran/phy/rf/rf_utils.h"
 #include "srsran/phy/ue/ue_cell_search_nbiot.h"
 #include "dciLib/ngscope_rx.h"
+#include "dciLib/load_config.h"
+
+extern ngscope_mode_t mode;
 
 int rf_rssi_scan(srsran_rf_t* rf, float* freqs, float* rssi, int nof_bands, double fs, int nsamp)
 {
@@ -120,12 +123,15 @@ int rf_mib_decoder(srsran_rf_t*       rf,
   }
 
   int srate = srsran_sampling_freq_hz(SRSRAN_UE_MIB_NOF_PRB);
-  INFO("Setting sampling frequency %.2f MHz for PSS search", (float)srate / 1000000);
-  srsran_rf_set_rx_srate(rf, (float)srate);
 
-  INFO("Starting receiver...");
-  printf("DEBUG: Starting receiver\n");
-  srsran_rf_start_rx_stream(rf, false);
+  if (mode != REPLAY){
+    INFO("Setting sampling frequency %.2f MHz for PSS search", (float)srate / 1000000);
+    srsran_rf_set_rx_srate(rf, (float)srate);
+
+    INFO("Starting receiver...");
+    printf("DEBUG: Starting receiver\n");
+    srsran_rf_start_rx_stream(rf, false);
+  }
 
   // Copy CFO estimate if provided and disable CP estimation during find
   if (cfo) {
@@ -152,7 +158,8 @@ int rf_mib_decoder(srsran_rf_t*       rf,
 
 clean_exit:
 
-  srsran_rf_stop_rx_stream(rf);
+  if (mode != REPLAY)
+    srsran_rf_stop_rx_stream(rf);
   srsran_ue_mib_sync_free(&ue_mib);
 
   return ret;
@@ -182,11 +189,15 @@ int rf_cell_search(srsran_rf_t*       rf,
     srsran_ue_cellsearch_set_nof_valid_frames(&cs, config->nof_valid_pss_frames);
   }
 
-  INFO("Setting sampling frequency %.2f MHz for PSS search", SRSRAN_CS_SAMP_FREQ / 1000000);
-  srsran_rf_set_rx_srate(rf, SRSRAN_CS_SAMP_FREQ);
+  if (mode != REPLAY){
+    INFO("Setting sampling frequency %.2f MHz for PSS search", SRSRAN_CS_SAMP_FREQ / 1000000);
+    srsran_rf_set_rx_srate(rf, SRSRAN_CS_SAMP_FREQ);
+  
 
   INFO("Starting receiver...");
   srsran_rf_start_rx_stream(rf, false);
+
+  }
 
   if (config->force_tdd) {
     srsran_ue_sync_set_frame_type(&cs.ue_sync, SRSRAN_TDD);
@@ -201,7 +212,8 @@ int rf_cell_search(srsran_rf_t*       rf,
     ret = srsran_ue_cellsearch_scan(&cs, found_cells, &max_peak_cell);
   }
 
-  srsran_rf_stop_rx_stream(rf);
+  if (mode != REPLAY)
+    srsran_rf_stop_rx_stream(rf);
 
   if (ret < 0) {
     ERROR("Error searching cell");

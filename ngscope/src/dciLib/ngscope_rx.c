@@ -49,7 +49,7 @@ static uint64_t nreplayed = 0;
 static uint64_t nrecorded = 0;
 
 bool __attribute__((weak)) go_exit = false;
-bool rx_debug=false;
+bool rx_debug=true;
 
 
 bool init_record(const char* path, uint32_t buf_size_gb)

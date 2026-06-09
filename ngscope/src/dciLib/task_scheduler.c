@@ -211,13 +211,15 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
     srsran_sync_set_cfo_cp_enable(&ue_sync->sfind, false, 0);
     
     // set AGC
-    if (prog_args.rf_gain < 0) {
-        srsran_rf_info_t* rf_info = srsran_rf_get_info(rf);
-        srsran_ue_sync_start_agc(ue_sync,
-                             srsran_rf_set_rx_gain_th_wrapper_,
-                             rf_info->min_rx_gain,
-                             rf_info->max_rx_gain,
-                             cell_detect_config->init_agc);
+    if (mode != REPLAY){
+        if (prog_args.rf_gain < 0) {
+            srsran_rf_info_t* rf_info = srsran_rf_get_info(rf);
+            srsran_ue_sync_start_agc(ue_sync,
+                                srsran_rf_set_rx_gain_th_wrapper_,
+                                rf_info->min_rx_gain,
+                                rf_info->max_rx_gain,
+                                cell_detect_config->init_agc);
+        }
     }
     ue_sync->cfo_correct_enable_track = !prog_args.disable_cfo;
       
