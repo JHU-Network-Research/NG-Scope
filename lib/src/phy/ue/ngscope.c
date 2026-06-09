@@ -15,17 +15,8 @@
 
 #include <pthread.h>
 
-static bool debug = true;
+static bool debug = false;
 // // Global
-// static FILE *decodelog = NULL;
-
-// void decodelog_init() {
-//     decodelog = fopen("dci-decode-debug.csv", "a");
-// }
-
-// void decodelog_destroy() {
-//     if (decodelog) fclose(decodelog);
-// }
 
 void unpack_dci_message_vec(srsran_ue_dl_t*        q,
 							srsran_dl_sf_cfg_t*    sf,
@@ -106,13 +97,14 @@ int child_parent_match(ngscope_tree_t* 	   tree,
 	 //TODO Check above function for 
 	/* Pruning a single node. We can only decode one dci from each location, so we need to figure 
 	out which format is correct if there are mutliple dci are decoded from that specific location. */
-  printf("DEBUG: TTI=%d, loc_idx=%d, blk_idx=%d, matched_root=%d, nof_matched=%d\n",
-    tti,
-    loc_idx,
-    blk_idx,
-    matched_root,
-    nof_matched
-  );
+  if (debug)
+    printf("DEBUG: TTI=%d, loc_idx=%d, blk_idx=%d, matched_root=%d, nof_matched=%d\n",
+      tti,
+      loc_idx,
+      blk_idx,
+      matched_root,
+      nof_matched
+    );
 	if( nof_matched > 0){
 		int format_idx      = matched_format_vec[0]; 
 		int pruned_nof_dci  = 1;
@@ -134,16 +126,17 @@ int child_parent_match(ngscope_tree_t* 	   tree,
         
         // if(decodelog){
         ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][matched_root];
-        printf("DEBUG: found match on TTI=%d,rnti=%d, ncce=%d, L=%d, format=%s, mean_llr=%.3f, nof_tb=%d, decode_prob=%.3f, corr=%.3f\n",
-            tti,
-            msg->rnti,
-            msg->loc.ncce,
-            msg->loc.L,
-            srsran_dci_format_string(msg->format),
-            msg->loc.mean_llr,
-            msg->nof_tb,
-            msg->decode_prob,
-            msg->corr);
+        if (debug)
+          printf("DEBUG: found match on TTI=%d,rnti=%d, ncce=%d, L=%d, format=%s, mean_llr=%.3f, nof_tb=%d, decode_prob=%.3f, corr=%.3f\n",
+              tti,
+              msg->rnti,
+              msg->loc.ncce,
+              msg->loc.L,
+              srsran_dci_format_string(msg->format),
+              msg->loc.mean_llr,
+              msg->nof_tb,
+              msg->decode_prob,
+              msg->corr);
         // }
 
         copy_dci_to_output(tree, dci_per_sub, format_idx, matched_root);
@@ -191,7 +184,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 
   if(q->cell.nof_ports == 1){
     // if the cell has only 1 antenna, it doesn't support MIMO
-    search_space.nof_formats = 4;
+    search_space.nof_formats = 4; // JH this is the same as the max number of formats?
   }else{
     search_space.nof_formats = MAX_NOF_FORMAT;
   }
@@ -292,7 +285,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 		if(tree->dci_location[loc_idx].checked){
 			//skip the location, if 1) it has been checked 2) its llr ratio is too small
         if (debug)
-        printf("DEBUG: SKIP TTI:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
+          printf("DEBUG: SKIP TTI:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
       sf->tti, sf->cfi, tree->nof_location, loc_idx,
       tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 			loc_idx++;
@@ -319,7 +312,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 		// Search all the formats in this location
 		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
     if (debug){
-    printf("DEBUG: found %d DCIs at TTI=%d:\n",nof_dci,sf->tti);
+      printf("DEBUG: found %d DCIs at TTI=%d:\n",nof_dci,sf->tti);
       for(int idx = 0; idx < nof_dci; idx++){
         printf("\tDEBUG: tti=%d, rnti=%d, format=%s, L=%d, llr=%.3f, prob=%.3f\n",
           sf->tti,

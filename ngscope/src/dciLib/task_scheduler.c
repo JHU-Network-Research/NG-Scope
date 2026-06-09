@@ -40,6 +40,8 @@ extern bool task_scheduler_up[MAX_NOF_RF_DEV];
 extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 extern pthread_mutex_t     scheduler_close_mutex;
 
+extern ngscope_mode_t mode;
+
 bool debug = false;
 
 /******************* Global buffer for passing subframe IQ  ******************/ 
@@ -243,7 +245,7 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
     // No record or replay
     // if (prog_args.mode == 0 || prog_args.mode == 1){
         if (prog_args.mode == 1)
-            init_record(prog_args.output_file_name, 1024*1024*1024*1);
+            init_record(prog_args.output_file_name, 8);
         else if (prog_args.mode == 2)
             init_replay(prog_args.input_file_name);
         // First of all, start the radio and get the cell information
@@ -475,6 +477,7 @@ void* task_scheduler_thread(void* p){
     printf("NG-Scope mode: %d\n", prog_args->mode);
     printf("NG-Scope Record file: %s\n", prog_args->output_file_name);
     printf("NG-Scope Replay file: %s\n", prog_args->input_file_name);
+    // setup_rx_signal_handler();
     // exit(1);
     if (debug)
         printf("DEBUG: INITIALIZING TASK_SCHEDULER\n");

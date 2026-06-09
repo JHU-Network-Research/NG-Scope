@@ -45,7 +45,7 @@
 #define NOF_CCE(cfi) ((cfi > 0 && cfi < 4) ? q->nof_cce[cfi - 1] : 0)
 #define NOF_REGS(cfi) ((cfi > 0 && cfi < 4) ? q->nof_regs[cfi - 1] : 0)
 
-static bool debug = true;
+static bool debug = false;
 
 float srsran_pdcch_coderate(uint32_t nof_bits, uint32_t l)
 {

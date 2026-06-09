@@ -20,6 +20,7 @@
 #include "ngscope/hdr/dciLib/dci_decoder.h"
 #include "ngscope/hdr/dciLib/load_config.h"
 #include "ngscope/hdr/dciLib/ngscope_main.h"
+#include "ngscope/hdr/dciLib/ngscope_rx.h"
 // #include "ngscope/hdr/dciLib/asn_decoder.h"
 
 

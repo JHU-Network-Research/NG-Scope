@@ -21,7 +21,8 @@
 if(RF_FOUND)
   # This library is only used by the examples 
   add_library(srsran_rf_utils STATIC rf_utils.c)
-  target_link_libraries(srsran_rf_utils srsran_phy)
+  target_link_libraries(srsran_rf_utils srsran_phy ngscope_rx)
+  target_include_directories(srsran_rf_utils PRIVATE ${CMAKE_SOURCE_DIR}/ngscope/hdr)
 
   # Top-level RF library sources
   set(SOURCES_RF "")

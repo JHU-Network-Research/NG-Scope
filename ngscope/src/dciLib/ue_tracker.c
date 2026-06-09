@@ -13,6 +13,8 @@
 #include "ngscope/hdr/dciLib/ue_tracker.h"
 #include "ngscope/hdr/dciLib/ngscope_util.h"
 
+extern bool debug;
+
 // inti the structure
 void ngscope_ue_tracker_init(ngscope_ue_tracker_t* q){
 	for(int i=0; i<65535; i++){
@@ -175,7 +177,8 @@ void ngscope_ue_tracker_enqueue_ue_rnti(ngscope_ue_tracker_t* q, uint32_t tti, u
 	if(tti_difference(q->ue_last_active[rnti], tti) < ACTIVE_TTI_T || 
 			q->ue_cnt[rnti] > ACTIVE_UE_CNT_THD){
 		q->active_ue_list[rnti] = true;
-		printf("DEBUGL tti=%d found active UE: cnt=%d \n", tti, q->ue_cnt[rnti]);
+		if (debug)
+			printf("DEBUG: tti=%d found active UE: cnt=%d \n", tti, q->ue_cnt[rnti]);
 	}
 		
 	// then we update its last active tti
@@ -184,8 +187,8 @@ void ngscope_ue_tracker_enqueue_ue_rnti(ngscope_ue_tracker_t* q, uint32_t tti, u
 	// check whether we need to update the top N
 	bool updated; 
 	updated = update_ue_tracker_topN(q, rnti);
-
-	printf("DEBUG: TTI=%d enqueue rnti=%d is active=%d ue_cnt=%d updated inside the TopN=%d\n", tti, rnti, q->active_ue_list[rnti], q->ue_cnt[rnti], updated);
+	if (debug)
+		printf("DEBUG: TTI=%d enqueue rnti=%d is active=%d ue_cnt=%d updated inside the TopN=%d\n", tti, rnti, q->active_ue_list[rnti], q->ue_cnt[rnti], updated);
     return;
 }
 

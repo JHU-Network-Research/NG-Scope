@@ -13,7 +13,10 @@
 #include <stdbool.h>
 
 #include "srsran/srsran.h"
-#include "record_ring_buffer.h"
+// #include "record_ring_buffer.h"
+
+#define ONE_GB 1024*1024*1024
+
 
 typedef struct {
   uint64_t nof_samples;

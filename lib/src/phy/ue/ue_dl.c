@@ -22,13 +22,14 @@
 #include "srsran/phy/ue/ue_dl.h"
 
 #include "srsran/srsran.h"
+// #include "dciLib/ngscope_rx.h"
 #include <string.h>
 
 #define CURRENT_FFTSIZE srsran_symbol_sz(q->cell.nof_prb)
 #define CURRENT_SFLEN_RE SRSRAN_NOF_RE(q->cell)
 #define MAX_SFLEN_RE SRSRAN_SF_LEN_RE(max_prb, q->cell.cp)
 
-static bool debug = true;
+static bool debug = false;
 
 const static srsran_dci_format_t ue_dci_formats[8][2] = {
     /* Mode 1 */ {SRSRAN_DCI_FORMAT1A, SRSRAN_DCI_FORMAT1},
@@ -57,6 +58,9 @@ const static uint32_t mi_tdd_table[7][10] = {{2, 1, 0, 0, 0, 2, 1, 0, 0, 0},  //
                                              {0, 0, 0, 0, 0, 0, 0, 0, 1, 1},  // ul/dl 4
                                              {0, 0, 0, 0, 0, 0, 0, 0, 1, 0},  // ul/dl 5
                                              {1, 1, 0, 0, 0, 1, 1, 0, 0, 1}}; // ul/dl 6
+
+
+// extern ngscope_mode_t  mode;
 
 #define MI_VALUE(sf_idx) ((q->cell.frame_type == SRSRAN_FDD) ? 1 : mi_tdd_table[sf->tdd_config.sf_config][sf_idx])
 #define MI_IDX(sf_idx)                                                                                                 \
@@ -659,6 +663,16 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         }else{
             //printf("PROB:%f\n", decode_prob);
         }
+
+
+        // if (mode == 2){
+        // if(true){
+        //   if (dci_msg[nof_dci].rnti < 70 || dci_msg[nof_dci].rnti > 107){
+        //     printf("DEBUG: Skipping due to invalid RNTI %d\n", dci_msg[nof_dci].rnti);
+        //     continue;
+        //   }
+        // }
+        // }
         // printf("DEBUG: Decoded message with TTI=%d, format=%s, ncce=%d, L=%d, ss_loc_idx=%d, nof_loc=%d, rnti=%d, mean_llr=%.3f, decode_prob=%0.3f, nof_bits=%d\n",
         //   sf->tti,
         //   srsran_dci_format_string(search_space->formats[f]),
