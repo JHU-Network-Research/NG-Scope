@@ -21,7 +21,7 @@ extern "C" {
 #include "ngscope_def.h"
 #include "radio.h"
 
-#define MAX_TMP_BUFFER 15
+#define MAX_TMP_BUFFER 60
 
 typedef struct{
 	bool 			empty_sf;

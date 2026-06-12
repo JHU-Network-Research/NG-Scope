@@ -42,7 +42,7 @@ extern pthread_mutex_t     scheduler_close_mutex;
 
 extern ngscope_mode_t mode;
 
-bool debug = false;
+bool debug = true;
 
 /******************* Global buffer for passing subframe IQ  ******************/ 
 ngscope_sf_buffer_t sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER] = 
@@ -427,8 +427,8 @@ void* handle_tmp_buffer_thread(void* p){
 		}
 
         if(!task_sf_ring_buffer_empty(&task_tmp_buffer[rf_idx])){
-			//int nof_buf_sf = get_nof_buffered_sf(rf_idx);
-            //printf("We have %d subframes the tmp buffer!\n", nof_buf_sf); 
+			int nof_buf_sf = get_nof_buffered_sf(rf_idx);
+            printf("SF_RING_BUFFER: We have %d subframes the tmp buffer!\n", nof_buf_sf); 
             while(!go_exit){
                 int idle_idx  =  find_idle_decoder(rf_idx, nof_decoder);
                 if(idle_idx < 0){ 

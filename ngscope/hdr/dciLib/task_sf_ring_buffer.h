@@ -20,7 +20,7 @@ extern "C" {
 
 #include "ngscope_def.h"
 
-#define MAX_TMP_BUFFER 15
+#define MAX_TMP_BUFFER 60
 
 typedef struct{
     uint32_t        sf_idx; // subframe index 0-9
