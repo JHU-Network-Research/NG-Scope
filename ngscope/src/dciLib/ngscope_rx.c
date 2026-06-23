@@ -51,7 +51,6 @@ static uint64_t nrecorded = 0;
 bool __attribute__((weak)) go_exit = false;
 bool rx_debug=true;
 
-
 bool init_record(const char* path, uint32_t buf_size_gb)
 {
   record_path = path;
@@ -239,7 +238,6 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         else
             if (rx_debug)
                 printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
-        
         memcpy(ptr[0], replay_buf, n*sizeof(cf_t));
         if (rx_debug)
             printf("REPLAY: Copied %d samples to ptr\n", n);
@@ -285,6 +283,8 @@ int stop_replay(){
         if (fclose(replay_fh) < 0)
             return -1;
     }
+    printf("DEBUG: file read %ld times\n", frame_count);
+    fflush(stdout);
     return 0;
 }
 

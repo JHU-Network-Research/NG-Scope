@@ -73,6 +73,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 
 			fprintf(fd_dl,"\"harq\": \"%d\",\n", q->dl_msg[i].harq);
 			fprintf(fd_dl,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+			fprintf(fd_dl,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
 			
 
@@ -120,6 +121,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 
 		fprintf(fd_dl,"\"harq\": \"%d\",\n", 0);
 		fprintf(fd_dl,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+		fprintf(fd_dl,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
 		
 
@@ -233,6 +235,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 
 
 			fprintf(fd_ul,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+			fprintf(fd_ul,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
 			
 
@@ -279,6 +282,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 
 
 		fprintf(fd_ul,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+		fprintf(fd_ul,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
 		
 
@@ -381,6 +385,7 @@ void log_phich_subframe(sf_status_t* q, FILE* fd_phich){
 				// PHICH
 				fprintf(fd_phich,"\"rv\": \"%d\",\n", q->ul_msg[i].tb[0].rv);
 				fprintf(fd_phich,"\"timestamp_us\": \"%ld\"\n", q->timestamp_us);
+				fprintf(fd_phich,"\"collection_time\": \"%ld\",\n",q->collection_time);
 				fprintf(fd_phich,"}");
 				if (isFirstCall == true){
 					isFirstCall = false;
@@ -403,6 +408,7 @@ void log_phich_subframe(sf_status_t* q, FILE* fd_phich){
 		// PHICH
 		fprintf(fd_phich,"\"rv\": \"%d\",\n", 0);
 		fprintf(fd_phich,"\"timestamp_us\": \"%ld\"\n", q->timestamp_us);
+		fprintf(fd_phich,"\"collection_time\": \"%ld\",\n",q->collection_time);
 		fprintf(fd_phich,"}");
 		if (isFirstCall == true){
 			isFirstCall = false;
@@ -428,8 +434,7 @@ void log_phich_subframe(sf_status_t* q,
 				fprintf(fd_phich, "%d\t%d\t", q->tti, q->ul_msg[i].rnti);	
 				// PHICH
 				fprintf(fd_phich, "%d\t", q->ul_msg[i].tb[0].rv);	
-				fprintf(fd_phich, "%ld\n", q->timestamp_us);							
-			}
+				fprintf(fd_phich, "%ld\n", q->timestamp_us);			}
 
 		}
 	}

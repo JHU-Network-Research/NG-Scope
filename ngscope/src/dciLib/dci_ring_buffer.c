@@ -100,6 +100,7 @@ void enqueue_dci_sf(sf_status_t* q, uint16_t targetRNTI, ngscope_status_buffer_t
   // Set the logging timestamp
   // q->timestamp_us 	= timestamp_us();
   q->timestamp_us = dci_buffer->dci_per_sub.timestamp;
+  q->collection_time = dci_buffer->dci_per_sub.collection_time;
 
   /* copy downlink and uplink messages
    * NOTE: we need to copy all MAX_DCI_PER_SUB dci message */

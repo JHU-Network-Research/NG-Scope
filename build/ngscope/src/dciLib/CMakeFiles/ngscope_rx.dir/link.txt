@@ -1,0 +1,2 @@
+/usr/bin/ar qc libngscope_rx.a CMakeFiles/ngscope_rx.dir/ngscope_rx.c.o CMakeFiles/ngscope_rx.dir/record_ring_buffer.c.o
+/usr/bin/ranlib libngscope_rx.a

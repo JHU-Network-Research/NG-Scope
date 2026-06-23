@@ -39,6 +39,7 @@ extern bool					debug;
 extern ngscope_sf_buffer_t  sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
 extern bool                 sf_token[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
 extern pthread_mutex_t      token_mutex[MAX_NOF_RF_DEV]; 
+extern pthread_cond_t		token_cond[MAX_NOF_RF_DEV];
 
 extern dci_ready_t         dci_ready;
 extern ngscope_status_buffer_t    dci_buffer[MAX_DCI_BUFFER];
@@ -566,6 +567,8 @@ void* dci_decoder_thread(void* p){
         pthread_mutex_lock(&token_mutex[rf_idx]);
         if(sf_token[rf_idx][decoder_idx] == true){
             sf_token[rf_idx][decoder_idx] = false;
+			//signal to scheduler that decoder is available
+			pthread_cond_signal(&token_cond[rf_idx]);
         }
         pthread_mutex_unlock(&token_mutex[rf_idx]);
 
@@ -577,6 +580,7 @@ void* dci_decoder_thread(void* p){
     
         uint32_t sfn    = sf_buffer[rf_idx][decoder_idx].sfn;
         uint32_t sf_idx = sf_buffer[rf_idx][decoder_idx].sf_idx;
+		uint64_t collection_time = sf_buffer[rf_idx][decoder_idx].collection_time;
 
         uint32_t tti    = sfn * 10 + sf_idx;
 		bool   empty_sf = sf_buffer[rf_idx][decoder_idx].empty_sf;
@@ -591,6 +595,7 @@ void* dci_decoder_thread(void* p){
 		}else{
 			//usleep(1000);
     		dci_per_sub.timestamp 	= timestamp_us();
+			dci_per_sub.collection_time = collection_time;
 
 			uint64_t t1 = timestamp_us();        
 			

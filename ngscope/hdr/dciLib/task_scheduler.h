@@ -27,6 +27,7 @@ typedef struct{
 	bool 			empty_sf;
     uint32_t        sf_idx; // subframe index 0-9
     uint32_t        sfn;    // system frame index 0-1020
+    uint64_t        collection_time;
     cf_t*           IQ_buffer[SRSRAN_MAX_PORTS]; //IQ buffer that stores the IQ sample
     pthread_mutex_t         sf_mutex;
     pthread_cond_t          sf_cond;
