@@ -307,7 +307,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
         ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
 								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks);
 		if (ret > 0) {
-			printf("Successfully decoded SIB1!\n");
+			if (debug)
+				printf("CELL: Successfully decoded SIB1 with code %d!\n", ret);
 		}
     } else { //SIB2 
 	    ret = 0;
@@ -315,7 +316,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
         ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
 								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks);
 		if (ret > 0) {
-			printf("Successfully decoded SIB2!\n");
+			if (debug)
+				printf("CELL: Successfully decoded SIB2 with code %d!\n", ret);
 		}
     }
 
@@ -355,7 +357,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 		}else{
     		ngscope_tree_t tree;	
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx);				
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
 			// filter the dci 
@@ -383,21 +385,80 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
 				ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
+
+				  int D = dl_msg.nof_bits + 16;
+  				  int R_sb = (int)(ceil(D/32.0));    // the block will be padded with dummy values until its length is a multiple of 32
+  				  int K_w = 3 * R_sb * 32; 
+
+				
+				ngscope_dci_tb_t tb1;
+				memset(&tb1, 0, sizeof(ngscope_dci_tb_t));
+				ngscope_dci_tb_t tb2;
+				memset(&tb2, 0, sizeof(ngscope_dci_tb_t));
+
+				if (dl_msg.nof_tb > 0){
+					tb1 = dl_msg.tb[0];
+				}
+				if (dl_msg.nof_tb == 2){
+					tb2 = dl_msg.tb[1];
+				}
+
 				if(decodelog){
 					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
 					fprintf(decodelog,
-						"%lu,normal,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f\n",
+						"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d\n",
 						dci_per_sub->timestamp,
 						tti,
 						dl_msg.rnti,
+						dl_msg.prb,
+						dl_msg.dl,
+						dl_msg.harq,
 						dl_msg.loc.ncce,
 						dl_msg.loc.L,
 						srsran_dci_format_string(dl_msg.format),
 						dl_msg.loc.mean_llr,
 						dl_msg.nof_tb,
 						dl_msg.decode_prob,
-						dl_msg.corr);
+						dl_msg.corr,
+						dl_msg.nof_bits,
+						K_w,
+						dl_msg.agreement,
+						dl_msg.repeat_corr,
+						tb1.mcs,
+						tb1.tbs,
+						tb1.rv,
+						tb1.ndi,
+						tb2.mcs,
+						tb2.tbs,
+						tb2.rv,
+						tb2.ndi);
 					}
+				if(debug)
+					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, nof_bits=%d, K_w=%d, agreement=%.3f, repeat_corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d\n", 
+						tti, 
+						dl_msg.rnti,
+						dl_msg.prb,
+						dl_msg.dl,
+						dl_msg.harq,
+						dl_msg.loc.ncce,
+						dl_msg.loc.L,
+						srsran_dci_format_string(dl_msg.format),
+						dl_msg.loc.mean_llr,
+						dl_msg.nof_tb,
+						dl_msg.decode_prob,
+						dl_msg.corr,
+						dl_msg.nof_bits,
+						K_w,
+						dl_msg.agreement,
+						dl_msg.repeat_corr,
+						tb1.mcs,
+						tb1.tbs,
+						tb1.rv,
+						tb1.ndi,
+						tb2.mcs,
+						tb2.tbs,
+						tb2.rv,
+						tb2.ndi);
 			}
 			fclose(decodelog);
 

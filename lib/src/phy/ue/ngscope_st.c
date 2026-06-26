@@ -14,7 +14,7 @@
 #include "srsran/srsran.h"
 #include "srsran/phy/ue/ngscope_st.h"
 
-static bool debug = false;
+bool __attribute__((weak)) debug = false;
 
 int ngscope_format_to_index(srsran_dci_format_t format){
     switch(format){

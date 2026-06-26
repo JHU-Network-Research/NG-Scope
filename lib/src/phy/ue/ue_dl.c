@@ -24,12 +24,14 @@
 #include "srsran/srsran.h"
 // #include "dciLib/ngscope_rx.h"
 #include <string.h>
+// #include "dciLib/load_config.h"
 
 #define CURRENT_FFTSIZE srsran_symbol_sz(q->cell.nof_prb)
 #define CURRENT_SFLEN_RE SRSRAN_NOF_RE(q->cell)
 #define MAX_SFLEN_RE SRSRAN_SF_LEN_RE(max_prb, q->cell.cp)
 
-static bool debug = false;
+bool __attribute__((weak)) debug = false;
+// extern ngscope_mode_t mode;
 
 const static srsran_dci_format_t ue_dci_formats[8][2] = {
     /* Mode 1 */ {SRSRAN_DCI_FORMAT1A, SRSRAN_DCI_FORMAT1},
@@ -656,16 +658,35 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         dci_msg[nof_dci].rnti     = 0;
 
         float decode_prob = 0;
-        //if (srsran_pdcch_decode_msg(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci])) {
-        if (srsran_pdcch_decode_msg_yx(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob)) {
+        float match_agree = 0;
+        float repeat_corr = 0;
+        if (srsran_pdcch_decode_msg_jh(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob, &match_agree, &repeat_corr)) {
           ERROR("Error decoding DCI msg");
           return SRSRAN_ERROR;
         }else{
             //printf("PROB:%f\n", decode_prob);
         }
 
+        //if (srsran_pdcch_decode_msg(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci])) {
+        // if (mode != 2){
+        //   if (srsran_pdcch_decode_msg_yx(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob)) {
+        //     ERROR("Error decoding DCI msg");
+        //     return SRSRAN_ERROR;
+        //   }else{
+        //       //printf("PROB:%f\n", decode_prob);
+        //   }
+        // }else{
+        //   if (srsran_pdcch_decode_msg_jh(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob)) {
+        //     ERROR("Error decoding DCI msg");
+        //     return SRSRAN_ERROR;
+        //   }else{
+        //       //printf("PROB:%f\n", decode_prob);
+        //   }
+        // }
+
 
         // if (mode == 2){
+        // RNTI FILTERING
         // if(true){
         //   if (dci_msg[nof_dci].rnti < 70 || dci_msg[nof_dci].rnti > 107){
         //     printf("DEBUG: Skipping due to invalid RNTI %d\n", dci_msg[nof_dci].rnti);
@@ -687,6 +708,8 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         // );
 
       	dci_msg[nof_dci].decode_prob = decode_prob;
+        dci_msg[nof_dci].agreement = match_agree;
+        dci_msg[nof_dci].repeat_corr = repeat_corr;
         // Check if RNTI is matched
         //if ((dci_msg[nof_dci].nof_bits > 0) && decode_prob > 50 ) {
         if ((dci_msg[nof_dci].nof_bits > 0) ) {

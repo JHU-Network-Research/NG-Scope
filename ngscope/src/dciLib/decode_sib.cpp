@@ -4,9 +4,11 @@
 #include "srsran/asn1/asn1_utils.h"
 #include "srsran/asn1/rrc/si.h"
 #include "srsran/asn1/rrc.h"
+#include <iostream>
 
 extern bool                 have_sib1;
 extern bool                 have_sib2;
+extern bool                 debug;
 
 extern pthread_mutex_t token_mutex[MAX_NOF_RF_DEV]; 
 
@@ -67,7 +69,7 @@ void save_cellcfg_from_sib1_json(asn1::rrc::sib_type1_s* sib1){
   
   fprintf(cellcfgfile,"\"tac\": \"%ld\",\n", sib_json_record.tac);
   //fprintf(cellcfgfile,"\"id\": \"%ld\",\n", sib_json_record.id);
-  fprintf(cellcfgfile,"\"id\": \"%d\",\n", sib_json_record.id);
+  fprintf(cellcfgfile,"\"id\": \"%ld\",\n", sib_json_record.id);
   fprintf(cellcfgfile,"\"pdsch_reference_signal_power_dbm\": \"%d\"\n", sib_json_record.pdsch_power_dbm);
   fprintf(cellcfgfile,"}");
   fclose(cellcfgfile);
@@ -104,7 +106,7 @@ void save_cellcfg_from_sib2_json(asn1::rrc::sib_type2_s* sib2){
 
   fprintf(cellcfgfile,"\"tac\": \"%ld\",\n", sib_json_record.tac);
   //fprintf(cellcfgfile,"\"id\": \"%ld\",\n", sib_json_record.id);
-  fprintf(cellcfgfile,"\"id\": \"%d\",\n", sib_json_record.id);
+  fprintf(cellcfgfile,"\"id\": \"%ld\",\n", sib_json_record.id);
   fprintf(cellcfgfile,"\"pdsch_reference_signal_power_dbm\": \"%d\"\n", sib_json_record.pdsch_power_dbm);
   fprintf(cellcfgfile,"}");
   fclose(cellcfgfile);
@@ -126,7 +128,8 @@ bool acks[SRSRAN_MAX_CODEWORDS]
   srsran_dci_dl_t    dci_dl[SRSRAN_MAX_DCI_MSG] = {};
   srsran_pmch_cfg_t  pmch_cfg;
   srsran_pdsch_res_t pdsch_res[SRSRAN_MAX_CODEWORDS];
-
+  if (debug)
+    printf("CELL: Decoding SIB1!\n");
   // Use default values for PDSCH decoder
   ZERO_OBJECT(pmch_cfg);
 
@@ -147,6 +150,8 @@ bool acks[SRSRAN_MAX_CODEWORDS]
     }
 
     if ((ret = srsran_ue_dl_decode_fft_estimate(q, sf, cfg)) < 0) {
+      if (debug)
+        printf("CELL: Returning from SIB1 decoding after fft_estimate\n");
       return ret;
     }
     ret = srsran_ue_dl_find_dl_dci_sirnti(q, sf, cfg, SRSRAN_SIRNTI, dci_dl);
@@ -158,7 +163,8 @@ bool acks[SRSRAN_MAX_CODEWORDS]
 
     // Convert DCI message to DL grant
     if (srsran_ue_dl_dci_to_pdsch_grant(q, sf, cfg, &dci_dl[0], &pdsch_cfg->grant)) {
-      ERROR("Error unpacking DCI");
+      if (debug)
+        ERROR("CELL: Error unpacking DCI");
       return SRSRAN_ERROR;
     }
 
@@ -203,44 +209,51 @@ bool acks[SRSRAN_MAX_CODEWORDS]
         acks[tb] = pdsch_res[tb].crc;
       }
     }
+    if (debug)
+      printf("CELL: have sib1=%d\n",have_sib1);
+    // if (have_sib1 == false) {
+    asn1::rrc::bcch_dl_sch_msg_s dlsch;
+    asn1::rrc::sib_type1_s sib1;
+    asn1::cbit_ref dlsch_bref(pdsch_res->payload, pdsch_cfg->grant.tb[0].tbs / 8);
+    asn1::json_writer js_sib1;
+    asn1::SRSASN_CODE err = dlsch.unpack(dlsch_bref);
 
-    if (have_sib1 == false) {
-      asn1::rrc::bcch_dl_sch_msg_s dlsch;
-      asn1::rrc::sib_type1_s sib1;
-      asn1::cbit_ref dlsch_bref(pdsch_res->payload, pdsch_cfg->grant.tb[0].tbs / 8);
-      asn1::json_writer js_sib1;
-      asn1::SRSASN_CODE err = dlsch.unpack(dlsch_bref);
-
-      if(err != asn1::SRSASN_CODE::SRSASN_SUCCESS){
-        return SRSRAN_ERROR;
-      }
-
-      sib1 = dlsch.msg.c1().sib_type1();
-      sib1.to_json(js_sib1);
-      pthread_mutex_lock(&token_mutex[0]);
-      if(sib1.cell_access_related_info.plmn_id_list.size() > 0){
-#ifndef USE_JSON
-        FILE *cellcfgfile = fopen("cellcfg.txt", "a");
-        fprintf(cellcfgfile, "cell.mcc: %d%d%d\n", \
-          sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[0], \
-          sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[1], \
-          sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[2]);
-        fprintf(cellcfgfile, "cell.mnc: %d%d%d\n", \
-          sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mnc[0], \
-          sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mnc[1], \
-          sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mnc[2]);
-        fprintf(cellcfgfile, "cell.tac: %d\n", sib1.cell_access_related_info.tac.to_number());
-        fprintf(cellcfgfile, "cell.id: %ld\n", sib1.cell_access_related_info.cell_id.to_number());
-        fclose(cellcfgfile);
-#else
-        save_cellcfg_from_sib1_json(&sib1);
-#endif
-        }
-      have_sib1 = true;
-      pthread_mutex_unlock(&token_mutex[0]);
-      
+    if(err != asn1::SRSASN_CODE::SRSASN_SUCCESS){
+      if (debug)
+        printf("CELL: Returing from SIB1 decode with error\n");
+      return SRSRAN_ERROR;
     }
+
+    sib1 = dlsch.msg.c1().sib_type1();
+    sib1.to_json(js_sib1);
+    if (debug)
+      std::cout << "CELL: Decoded sib1: " << js_sib1.to_string() << "\n";
+    pthread_mutex_lock(&token_mutex[0]);
+    if(sib1.cell_access_related_info.plmn_id_list.size() > 0){
+#ifndef USE_JSON
+      FILE *cellcfgfile = fopen("cellcfg.txt", "a");
+      fprintf(cellcfgfile, "cell.mcc: %d%d%d\n", \
+        sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[0], \
+        sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[1], \
+        sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[2]);
+      fprintf(cellcfgfile, "cell.mnc: %d%d%d\n", \
+        sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mnc[0], \
+        sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mnc[1], \
+        sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mnc[2]);
+      fprintf(cellcfgfile, "cell.tac: %d\n", sib1.cell_access_related_info.tac.to_number());
+      fprintf(cellcfgfile, "cell.id: %ld\n", sib1.cell_access_related_info.cell_id.to_number());
+      fclose(cellcfgfile);
+#else
+      save_cellcfg_from_sib1_json(&sib1);
+#endif
+      }
+    have_sib1 = true;
+    pthread_mutex_unlock(&token_mutex[0]);
+    
+    // }
   }
+  if (debug)
+    printf("CELL: Exiting SIB1 decoding normally\n");
   return ret;
 }
 
@@ -349,6 +362,8 @@ bool acks[SRSRAN_MAX_CODEWORDS]
     //FILE *sib2out = fopen("sib2out.txt", "a");
     asn1::rrc::sys_info_s &sibs = dlsch.msg.c1().sys_info();
     sibs.to_json(js_sib2);
+    if (debug)
+      std::cout << "CELL: Decoded sib2: " << js_sib2.to_string() << "\n";
     //asn1::rrc::sys_info_r8_ies_s::sib_type_and_info_l_ &sib_list = dlsch.msg.c1().sys_info().crit_exts.sys_info_r8().sib_type_and_info;
     if(sibs.crit_exts.type().value == asn1::rrc::sys_info_s::crit_exts_c_::types::sys_info_r8){
       asn1::rrc::sys_info_r8_ies_s::sib_type_and_info_l_ &sib_list = sibs.crit_exts.sys_info_r8().sib_type_and_info;

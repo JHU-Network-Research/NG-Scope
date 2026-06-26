@@ -3,6 +3,8 @@
 
 #include "srsran/phy/ue/ngscope_st.h"
 
+bool __attribute__((weak)) debug = false;
+
 int srsran_pdcch_get_nof_location_yx(srsran_pdcch_t* q, uint32_t cfi){
     return ((cfi>0&&cfi<4)?q->nof_cce[cfi-1]:0);
 }
@@ -13,7 +15,6 @@ int srsran_pdcch_get_nof_location_yx(srsran_pdcch_t* q, uint32_t cfi){
 uint32_t srsran_ngscope_search_space_all_yx(srsran_pdcch_t* q, uint32_t cfi, srsran_dci_location_t* c)
 {
     int nof_location = srsran_pdcch_get_nof_location_yx(q, cfi);
-    //printf("nof cce:%d ->| ", NOF_CCE(cfi));
     uint32_t i, L, k;
 
     int l;
@@ -92,6 +93,8 @@ void check_node_based_on_llr(srsran_dci_location_t dci_location[MAX_CANDIDATES_A
 uint32_t srsran_ngscope_search_space_block_yx(srsran_pdcch_t* q, uint32_t cfi, srsran_dci_location_t* c)
 {
     uint32_t nof_location = srsran_pdcch_get_nof_location_yx(q, cfi);
+    if (debug)
+        printf("DEBUG: cfi:%d ->| nof location:%d\n", cfi, nof_location);
 
     // nof full blocks
     int nof_L3 = nof_location / 8;          

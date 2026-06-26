@@ -39,7 +39,8 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
 										srsran_dci_location_t loc,
                                         float decode_prob, float corr,
                                         srsran_dci_dl_t* dci_dl,
-                                        srsran_pdsch_grant_t* dci_dl_grant);
+                                        srsran_pdsch_grant_t* dci_dl_grant,
+                                        int nof_bits, float agreement, float repeat_corr);
 
 int srsran_ngscope_unpack_ul_dci_2grant(srsran_ue_dl_t*     q,
                                         srsran_dl_sf_cfg_t* sf,
@@ -61,7 +62,8 @@ void srsran_ngscope_dci_into_array_ul(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
 										srsran_dci_location_t loc,
                                         float decode_prob, float corr,
                                         srsran_dci_ul_t* dci_ul,
-                                        srsran_pusch_grant_t* dci_ul_grant);
+                                        srsran_pusch_grant_t* dci_ul_grant,
+                                        int nof_bits, float agreement, float repeat_corr);
 
 
 SRSRAN_API int srsran_ngscope_dci_prune(ngscope_tree_t* q,

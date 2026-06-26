@@ -2,7 +2,7 @@
 #include "srsran/srsran.h"
 #include "srsran/phy/ue/ngscope_dci.h"
 
-extern bool debug;
+bool __attribute__((weak)) debug = false;
 
 /* Combination of unpack and translate to grant */
 // Downlink first
@@ -67,8 +67,11 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
 										srsran_dci_location_t loc,
                                         float decode_prob, float corr,
                                         srsran_dci_dl_t* dci_dl,
-                                        srsran_pdsch_grant_t* dci_dl_grant)
+                                        srsran_pdsch_grant_t* dci_dl_grant,
+                                        int nof_bits, float agreement, float repeat_corr)
 {
+
+     
     dci_array[i][j].rnti    = dci_dl->rnti;
     dci_array[i][j].prb     = dci_dl_grant->nof_prb;
     dci_array[i][j].harq    = dci_dl->pid;
@@ -79,6 +82,10 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
     dci_array[i][j].corr             = corr;
 
     dci_array[i][j].loc       	= loc;
+
+    dci_array[i][j].nof_bits = nof_bits;
+    dci_array[i][j].agreement = agreement;
+    dci_array[i][j].repeat_corr = repeat_corr;
    
     // transport block 1
     dci_array[i][j].tb[0].mcs      = dci_dl_grant->tb[0].mcs_idx;
@@ -95,7 +102,11 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
         //dci_array[i][j].tb[1].ndi      = dci_dl_grant->tb[1].ndi;
     	dci_array[i][j].tb[1].ndi      = dci_dl->tb[1].ndi;
     }
-    return;
+
+    // if(dci_dl->rnti == 97){
+    //             printf("CHECK9887: SETTING format to %d: %d, is dl: %d\n", format, ngscope_index_to_format(format), dci_per_sub->dl_msg[dci_per_sub->nof_dl_dci].dl);
+    // }
+    // return;
 }
 
 //Uplink
@@ -135,7 +146,8 @@ void srsran_ngscope_dci_into_array_ul(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
 										srsran_dci_location_t loc,
                                         float decode_prob, float corr,
                                         srsran_dci_ul_t* dci_ul,
-                                        srsran_pusch_grant_t* dci_ul_grant)
+                                        srsran_pusch_grant_t* dci_ul_grant,
+                                        int nof_bits, float agreement, float repeat_corr)
 {
     dci_array[i][j].rnti    = dci_ul->rnti;
     dci_array[i][j].prb     = dci_ul_grant->L_prb;
@@ -157,6 +169,10 @@ void srsran_ngscope_dci_into_array_ul(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
 
     dci_array[i][j].decode_prob      = decode_prob;
     dci_array[i][j].corr             = corr;
+
+    dci_array[i][j].nof_bits = nof_bits;
+    dci_array[i][j].agreement = agreement;
+    dci_array[i][j].repeat_corr = repeat_corr;
 
     return;
 }

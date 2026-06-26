@@ -45,7 +45,7 @@
 #define NOF_CCE(cfi) ((cfi > 0 && cfi < 4) ? q->nof_cce[cfi - 1] : 0)
 #define NOF_REGS(cfi) ((cfi > 0 && cfi < 4) ? q->nof_regs[cfi - 1] : 0)
 
-static bool debug = false;
+bool __attribute__((weak)) debug = false;
 
 float srsran_pdcch_coderate(uint32_t nof_bits, uint32_t l)
 {
@@ -386,7 +386,7 @@ int srsran_pdcch_dci_decode(srsran_pdcch_t* q, float* e, uint8_t* data, uint32_t
   }
 }
 
-int srsran_pdcch_dci_decode_yx(srsran_pdcch_t* q, float* e, uint8_t* data, uint32_t E, uint32_t nof_bits, uint16_t* crc, float* prob)
+int srsran_pdcch_dci_decode_yx(srsran_pdcch_t* q, float* e, uint8_t* data, uint32_t E, uint32_t nof_bits, uint16_t* crc, float* prob, float *agreement)
 {
   uint16_t p_bits, crc_res;
   uint8_t* x;
@@ -430,7 +430,9 @@ int srsran_pdcch_dci_decode_yx(srsran_pdcch_t* q, float* e, uint8_t* data, uint3
       srsran_crc_attach(&q->crc, check, nof_bits);
       crc_set_mask_rnti(&check[nof_bits], c_rnti);
 
-      srsran_convcoder_encode(&encoder, check, tmp, nof_bits + 16);
+      int newsize = srsran_convcoder_encode(&encoder, check, tmp, nof_bits + 16);
+      if(debug)
+        printf("DEBUG: Encoded message  of size %d with new length %d\n", nof_bits, newsize);
       srsran_rm_conv_tx(tmp, 3 * (nof_bits + 16), tmp2, E);
 
       float parcheck = 0.0;
@@ -439,6 +441,27 @@ int srsran_pdcch_dci_decode_yx(srsran_pdcch_t* q, float* e, uint8_t* data, uint3
         //parcheck += (((e[i]>0)?1:0)==tmp2[i]);
       }
       parcheck = 100*parcheck/E;
+
+      if (agreement){
+        float matches = 0;
+        for (uint32_t i=0; i < E; i++){
+          matches += (tmp2[i] == data[i]);
+        }
+        
+        *agreement = 100.0f * (matches / E);
+        if (debug)
+          printf("DEBUG: Got %.3f agreement\n", *agreement);
+      }
+      // int8_t rematched[/* l */ 8 * 9 * 8]; // max AL8 = 8 CCEs * 9 REGs * 4 REs * 2 bits
+      // srsran_rm_conv_tx(tmp, 3 * (nof_bits + 16), rematched, e_bits);
+
+      // float parcheck = 0.0;
+      // for (int i = 0; i < E; i++) {
+      //     int hard = (e[i] > 0) ? 1 : 0;
+      //     float sign = (hard == tmp2[i]) ? 1.0 : -1.0;
+      //     parcheck += sign * fabsf(e[i]);
+      // }
+      // parcheck = 100*parcheck/E;
  
       *prob = parcheck;
       return SRSRAN_SUCCESS;
@@ -520,8 +543,13 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
     } else {
       ret = SRSRAN_SUCCESS;
 
-      uint32_t nof_bits = srsran_dci_format_sizeof(&q->cell, sf, dci_cfg, msg->format);
-      uint32_t e_bits   = PDCCH_FORMAT_NOF_BITS(msg->location.L);
+      if(debug)
+        printf("DEBUG: getting size of DCI with format %s\n", srsran_dci_format_string(msg->format));
+      uint32_t nof_bits = srsran_dci_format_sizeof(&q->cell, sf, dci_cfg, msg->format); // number of bits for a dci with the given format (not including crc)
+      uint32_t e_bits   = PDCCH_FORMAT_NOF_BITS(msg->location.L); // number of bits available in the cces
+
+      if(debug)
+        printf("DEBUG: %d bits for format %s, %d total bits for L=%d\n", nof_bits, srsran_dci_format_string(msg->format), e_bits, msg->location.L);
 
       // Compute absolute mean of the LLRs
       double mean = 0;
@@ -529,11 +557,19 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
         mean += fabsf(q->llr[msg->location.ncce * 72 + i]);
       }
       mean /= e_bits;
-
-      //if (mean > 0.4f) {
-      if (mean > LLR_RATIO) {
+      if (mean > LLR_RATIO ) {
         float decode_prob = 0;
-        ret = srsran_pdcch_dci_decode_yx(q, &q->llr[msg->location.ncce * 72], msg->payload, e_bits, nof_bits, &msg->rnti, &decode_prob);
+        if(debug)
+          printf("DEBUG: Decoding DCI: TTI=%d, nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, rnti=%d, mean_llr=%.3f, decode_prob=%.3f\n",sf->tti,  
+              msg->location.ncce,
+                msg->location.L,
+                srsran_dci_format_string(msg->format),
+                nof_bits,
+                mean,
+                msg->rnti,
+                mean,
+                decode_prob);
+        ret = srsran_pdcch_dci_decode_yx(q, &q->llr[msg->location.ncce * 72], msg->payload, e_bits, nof_bits, &msg->rnti, &decode_prob, NULL);
         if (ret == SRSRAN_SUCCESS) {
           *prob = decode_prob;
           msg->nof_bits = nof_bits;
@@ -544,7 +580,7 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
         } else {
           ERROR("Error calling pdcch_dci_decode");
         }
-        INFO("Decoded DCI: nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, crc_rem=0x%x",
+        INFO("Decoded DCI: nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, crc_rem=0x%x,",
              msg->location.ncce,
              msg->location.L,
              srsran_dci_format_string(msg->format),
@@ -552,7 +588,7 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
              mean,
              msg->rnti);
         if (debug)
-          printf("DEBUG: decoded DCI: TTI=%d, nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, rnti=0x%d, mean_llr=%.3f, decode_prob=%.3f\n",
+          printf("DEBUG: decoded DCI: TTI=%d, nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, rnti=%d, mean_llr=%.3f, decode_prob=%.3f\n",
             sf->tti,  
             msg->location.ncce,
               msg->location.L,
@@ -563,14 +599,213 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
               mean,
               decode_prob);
       } else {
+        
         INFO("Skipping DCI w/ insufficient LLR:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
         if (debug)
-          printf("DEBUG: Skipping DCI: TTI=%d, nCCE=%d, L=%d, msg_len=%d, mean=%f\n", 
+          printf("DEBUG: Skipping DCI with insufficient LLR: TTI=%d, nCCE=%d, L=%d, msg_len=%d, mean=%f\n", 
             sf->tti, 
             msg->location.ncce, 
             msg->location.L, 
             nof_bits, 
             mean);
+        
+        }
+        //ERROR("Skipping DCI:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
+      
+    }
+  } else if (msg != NULL) {
+    ERROR("Invalid parameters, location=%d,%d", msg->location.ncce, msg->location.L);
+  }
+  return ret;
+}
+
+float find_d_repetition(int L, int ncce, cf_t *d, uint32_t nof_bits, uint32_t e_bits){
+  int agg_lvl = 1 << L;
+  int cce_start = ncce;
+  int sym_per_cce = 36;
+
+  int offset = cce_start * sym_per_cce;
+  int nsymbols_cand = agg_lvl * sym_per_cce;
+  cf_t *d_candidate = d + offset;
+
+  float normalized;
+
+  int D = nof_bits + 16;
+  int R_sb = (int)(ceil(D/32.0));    // the block will be padded with dummy values until its length is a multiple of 32
+  int K_w = 3 * R_sb * 32; 
+  if(debug)
+    printf("DEBUG: D: %d, R_sb: %d, K_w: %d, e_bits: %d\n", D, R_sb, K_w, e_bits);
+
+  if (K_w >= e_bits) {
+          // Punctured, not repeated — no lag to test, skip correlation
+      if(debug)
+        printf("DEBUG: skipping matching check because circular buffer length %d >= e_bits %d\n",K_w, e_bits);
+      normalized = 1.0;
+  } else {
+
+    int lag = K_w / 2;
+    if(debug)
+      printf("DEBUG: finding matching bits for aggregation_level=%d, cce_start=%d, sym_per_cce=%d, offset=%d, nsymbols=%d, nof_bits=%d, lag=%d, e_bits=%d, K_w=%d\n", agg_lvl, cce_start, sym_per_cce, offset, nsymbols_cand, nof_bits, lag, e_bits, K_w);
+    cf_t result = srsran_vec_dot_prod_conj_ccc(d_candidate, d_candidate + lag, nsymbols_cand - lag);
+    cf_t r0 = srsran_vec_dot_prod_conj_ccc(d_candidate, d_candidate, nsymbols_cand);
+    normalized = cabsf(result) / cabsf(r0);
+  }
+
+  //   printf("DEBUG: Examining DCI: TTI=%d, nCCE=%d, L=%d, format=%s, msg_len=%d, mean_llr=%.3f, offset=%d, nsymbols=%d, lag=%d, result=%.3lf, r0=%.3f, matching_corr=%.3lf\n",sf->tti,  
+  //     msg->location.ncce,
+  //       msg->location.L,
+  //       srsran_dci_format_string(msg->format),
+  //       nof_bits,
+  //       mean,
+  //       offset,
+  //       nsymbols_cand,
+  //       lag,
+  //       cabsf(result),
+  //       cabsf(r0),
+  //       normalized);
+  // }
+  return normalized;
+}
+
+float find_llr_repetition(int L, int ncce, float *llr, uint32_t nof_bits, uint32_t e_bits){
+
+  int agg_lvl = 1 << L;
+
+  // llr is float*, length = nof_bits (e.g. e_bits = 144 for L=1)
+  int offset_bits = ncce * 72;        // 72 LLRs (bits) per CCE
+  int nof_bits_candidate = agg_lvl * 72;
+
+  float *llr_candidate = llr + offset_bits;
+
+  int D = nof_bits + 16;
+  int R_sb = (D + 31) / 32;
+  int K_w = 3 * R_sb * 32;                  // already in bits — no /2 needed for llr
+
+  float normalized;
+
+  if (K_w >= nof_bits_candidate) {
+      // skip — puncturing
+    normalized = 1.0;
+  } else {
+      int lag = K_w;  // bits, same units as llr indices
+      
+      // We can also use this
+      float r0 = srsran_vec_dot_prod_fff(llr_candidate, llr_candidate, nof_bits_candidate);
+      float result = srsran_vec_dot_prod_fff(llr_candidate, llr_candidate + lag, nof_bits_candidate - lag);
+      normalized = result / r0;  // note: not fabsf — llr can be signed, correlation direction matters
+
+
+      // my concern with this block is that if the message repeats more than once it may be weird/incorrect? 
+      // float r0 = 0, result = 0;
+      // for (int i = 0; i < nof_bits_candidate; i++) {
+      //     r0 += llr_candidate[i] * llr_candidate[i];
+      // }
+      // for (int i = 0; i < nof_bits_candidate - lag; i++) {
+      //     result += llr_candidate[i] * llr_candidate[i + lag];
+      // }
+
+      // normalized = fabsf(result) / r0;
+  }
+
+  return normalized;
+}
+
+int srsran_pdcch_decode_msg_jh(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob, float *match, float *repeat)
+{
+  int ret = SRSRAN_ERROR_INVALID_INPUTS;
+  //printf("decode_msg: NOF_CCE:%d cfi:%d\n",NOF_CCE(sf->cfi), sf->cfi);
+
+  if (q != NULL && msg != NULL && srsran_dci_location_isvalid(&msg->location)) {
+    if (msg->location.ncce * 72 + PDCCH_FORMAT_NOF_BITS(msg->location.L) > NOF_CCE(sf->cfi) * 72) {
+      ERROR("Invalid location: nCCE: %d, L: %d, NofCCE: %d cfi:%d", msg->location.ncce, msg->location.L, NOF_CCE(sf->cfi), sf->cfi);
+    } else {
+      ret = SRSRAN_SUCCESS;
+
+      if(debug)
+        printf("DEBUG: getting size of DCI with format %s\n", srsran_dci_format_string(msg->format));
+      uint32_t nof_bits = srsran_dci_format_sizeof(&q->cell, sf, dci_cfg, msg->format); // number of bits for a dci with the given format (not including crc)
+      uint32_t e_bits   = PDCCH_FORMAT_NOF_BITS(msg->location.L); // number of bits available in the cces
+      msg->nof_bits = nof_bits;
+      if(debug)
+        printf("DEBUG: %d bits for format %s, %d total bits for L=%d\n", nof_bits, srsran_dci_format_string(msg->format), e_bits, msg->location.L);
+
+      // Compute absolute mean of the LLRs
+      double mean = 0;
+      for (int i = 0; i < e_bits; i++) {
+        mean += fabsf(q->llr[msg->location.ncce * 72 + i]);
+      }
+      mean /= e_bits;
+      
+      float d_repeated_corr = find_d_repetition(msg->location.L, msg->location.ncce, q->d, nof_bits, e_bits);
+
+      //if (mean > 0.4f) {
+      if (mean > LLR_RATIO && d_repeated_corr > 0.4) {
+        float decode_prob = 0;
+        float agreement = 0;
+        if(debug)
+          printf("DEBUG: Decoding DCI: TTI=%d, nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, rnti=%d, mean_llr=%.3f, decode_prob=%.3f, matched=%.3f\n",sf->tti,  
+              msg->location.ncce,
+                msg->location.L,
+                srsran_dci_format_string(msg->format),
+                nof_bits,
+                mean,
+                msg->rnti,
+                mean,
+                decode_prob,
+                d_repeated_corr);
+        ret = srsran_pdcch_dci_decode_yx(q, &q->llr[msg->location.ncce * 72], msg->payload, e_bits, nof_bits, &msg->rnti, &decode_prob, &agreement);
+        if (ret == SRSRAN_SUCCESS) {
+          *prob = decode_prob;
+          *match = agreement;
+          *repeat = d_repeated_corr;
+          msg->nof_bits = nof_bits;
+          // Check format differentiation
+          if (msg->format == SRSRAN_DCI_FORMAT0 || msg->format == SRSRAN_DCI_FORMAT1A) {
+            msg->format = (msg->payload[dci_cfg->cif_enabled ? 3 : 0] == 0) ? SRSRAN_DCI_FORMAT0 : SRSRAN_DCI_FORMAT1A;
+          }
+        } else {
+          ERROR("Error calling pdcch_dci_decode");
+        }
+        INFO("Decoded DCI: nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, crc_rem=0x%x,",
+             msg->location.ncce,
+             msg->location.L,
+             srsran_dci_format_string(msg->format),
+             nof_bits,
+             mean,
+             msg->rnti);
+        if (debug)
+          printf("DEBUG: decoded DCI: TTI=%d, nCCE=%d, L=%d, format=%s, msg_len=%d, mean=%f, rnti=%d, mean_llr=%.3f, decode_prob=%.3f, matched=%.3f\n",
+            sf->tti,  
+            msg->location.ncce,
+              msg->location.L,
+              srsran_dci_format_string(msg->format),
+              nof_bits,
+              mean,
+              msg->rnti,
+              mean,
+              decode_prob,
+              d_repeated_corr);
+      } else {
+        if (mean < LLR_RATIO){
+          INFO("Skipping DCI w/ insufficient LLR:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
+          if (debug)
+            printf("DEBUG: Skipping DCI with insufficient LLR: TTI=%d, nCCE=%d, L=%d, msg_len=%d, mean=%f\n", 
+              sf->tti, 
+              msg->location.ncce, 
+              msg->location.L, 
+              nof_bits, 
+              mean);
+        }else{
+          if (debug)
+            printf("DEBUG: Skipping DCI with insufficient matching bits: TTI=%d, nCCE=%d, L=%d, msg_len=%d, mean=%f, matched=%.3f\n", 
+              sf->tti, 
+              msg->location.ncce, 
+              msg->location.L, 
+              nof_bits, 
+              mean,
+              d_repeated_corr);
+          msg->nof_bits=0;
+        }
         //ERROR("Skipping DCI:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
       }
     }

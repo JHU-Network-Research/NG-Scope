@@ -13,6 +13,8 @@
 
 #include "ngscope/hdr/dciLib/task_sf_ring_buffer.h"
 
+bool __attribute__((weak)) debug = false;
+
 int task_sf_ring_buffer_init(task_tmp_buffer_t* q, int max_num_samples){
 	/********************** Set up the tmp buffer **********************/
     q->header  	= 0;
@@ -27,7 +29,8 @@ int task_sf_ring_buffer_init(task_tmp_buffer_t* q, int max_num_samples){
         }
     }
 
-	printf("SF_RING_BUFFER: Created buffer with capacity %d\n", max_num_samples);
+	if (debug)
+		printf("SF_RING_BUFFER: Created buffer with capacity %d\n", max_num_samples);
 	return 0;
 }
 
@@ -49,7 +52,8 @@ int task_sf_ring_buffer_put(task_tmp_buffer_t* q,
 {
 	// we do nothing if the buffer is full
 	if(q->full){
-		printf("SF_RING_BUFFER: cannot add task sfn=%d,sf_idx=%d, buffer is full\n", sfn, sf_idx);
+		if (debug)
+			printf("SF_RING_BUFFER: cannot add task sfn=%d,sf_idx=%d, buffer is full\n", sfn, sf_idx);
 		return 0;
 	}
 
@@ -71,7 +75,8 @@ int task_sf_ring_buffer_put(task_tmp_buffer_t* q,
 		q->full = true;  // the buffer is full
 	}
 
-	printf("SF_RING_BUFFER: Added task sfn=%d,sf_idx=%d, new buffer length is %d (full=%d)\n",sfn, sf_idx,q->len, q->full);
+	if (debug)
+		printf("SF_RING_BUFFER: Added task sfn=%d,sf_idx=%d, new buffer length is %d (full=%d)\n",sfn, sf_idx,q->len, q->full);
 	return 1;
 }
 
@@ -85,7 +90,8 @@ int task_sf_ring_buffer_get(task_tmp_buffer_t* q){
 		q->full = false;
 	}
 
-	printf("SF_RING_BUFFER: Removed task new buffer length is %d (full=%d)\n",q->len, q->full);
+	if (debug)
+		printf("SF_RING_BUFFER: Removed task new buffer length is %d (full=%d)\n",q->len, q->full);
 	return 0;
 }
 

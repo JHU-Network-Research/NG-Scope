@@ -13,7 +13,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <stdint.h>
-#include "ngscope/hdr/dciLib/asn_decoder.h"
+#include "asn_decoder.h"
 
 
 #ifdef __cplusplus

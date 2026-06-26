@@ -41,6 +41,12 @@ typedef struct{
     // parameters stored for decoding phich
     ngscope_dci_phich_t phich;
 	srsran_dci_location_t loc;
+
+    // JH debug information
+    int nof_bits;
+    float agreement;
+    float repeat_corr;
+
 }ngscope_dci_msg_t;
 
 

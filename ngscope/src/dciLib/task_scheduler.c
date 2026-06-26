@@ -42,7 +42,7 @@ extern pthread_mutex_t     scheduler_close_mutex;
 
 extern ngscope_mode_t mode;
 
-bool debug = true;
+bool debug = false;
 
 /******************* Global buffer for passing subframe IQ  ******************/ 
 ngscope_sf_buffer_t sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER] = 
@@ -244,8 +244,6 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
     // Copy the prameters 
     task_scheduler->prog_args = prog_args;
  
-    // No record or replay
-    // if (prog_args.mode == 0 || prog_args.mode == 1){
         if (prog_args.mode == 1)
             init_record(prog_args.output_file_name, 8);
         else if (prog_args.mode == 2)
@@ -253,7 +251,7 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
         // First of all, start the radio and get the cell information
         radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args, 
                                                     &cell_detect_config, &search_cell_cfo);
-            
+          
         // Copy the cell info to the  
         pthread_mutex_lock(&cell_mutex); 
         memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
@@ -269,27 +267,6 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
         pthread_mutex_lock(&ack_mutex); 
         init_pending_ack(&ack_list);
         pthread_mutex_unlock(&ack_mutex); 
-    
-    // Record samples to file
-    // } else if (prog_args.mode == 1){
-
-    //     init_record(prog_args->output_file_name, 0);
-        
-
-    // Replay samples from file
-    // } else if (prog_args.mode == 2){
-
-    //     radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args, 
-    //                                                 &cell_detect_config, &search_cell_cfo);
-            
-    //     // Copy the cell info to the  
-    //     pthread_mutex_lock(&cell_mutex); 
-    //     memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
-    //     printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
-    //     pthread_mutex_unlock(&cell_mutex); 
-    //     // srsran_ue_sync_t* q, uint32_t nof_prb, char* file_name, int offset_time, float offset_freq
-    //     srsran_ue_sync_init_file(&task_scheduler->ue_sync, prog_args.file_nof_prb, prog_args.input_file_name, 645229936, prog_args.file_offset_freq);
-    // }
 
     return SRSRAN_SUCCESS;
 }
@@ -428,7 +405,8 @@ void* handle_tmp_buffer_thread(void* p){
 
         if(!task_sf_ring_buffer_empty(&task_tmp_buffer[rf_idx])){
 			int nof_buf_sf = get_nof_buffered_sf(rf_idx);
-            printf("SF_RING_BUFFER: We have %d subframes the tmp buffer!\n", nof_buf_sf); 
+            if (debug)
+                printf("SF_RING_BUFFER: We have %d subframes the tmp buffer!\n", nof_buf_sf); 
             while(!go_exit){
                 int idle_idx  =  find_idle_decoder(rf_idx, nof_decoder);
                 if(idle_idx < 0){ 
@@ -577,8 +555,8 @@ void* task_scheduler_thread(void* p){
 
     // JH open log file
 	FILE *decodelog;
-  	decodelog=fopen("dci-decode-debug.csv","a");
-  	fprintf(decodelog,"timestamp,type,tti,rnti,ncce,L,format,mean_llr,nof_bits,decode_prob,corr\n");
+  	decodelog=fopen("dci-decode-debug.csv","w");
+  	fprintf(decodelog,"timestamp,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,nof_bits,K_w,agreement,repeat_corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2\n");
 	fclose(decodelog);
 
 

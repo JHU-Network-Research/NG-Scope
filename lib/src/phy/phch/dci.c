@@ -650,6 +650,7 @@ static int dci_format1_unpack(srsran_cell_t*      cell,
   /* Make sure it's a SRSRAN_DCI_FORMAT1 message */
   uint32_t msg_len = srsran_dci_format_sizeof(cell, sf, cfg, SRSRAN_DCI_FORMAT1);
   if (msg->nof_bits != msg_len) {
+    printf("DEBUG: Invalid message length (%d!=%d) for format 1\n", msg->nof_bits, msg_len);
     ERROR("Invalid message length (%d!=%d) for format 1", msg->nof_bits, msg_len);
     return SRSRAN_ERROR;
   }
@@ -998,6 +999,7 @@ static int dci_format1Cs_unpack(srsran_cell_t*      cell,
 
   if (msg->nof_bits != srsran_dci_format_sizeof(cell, sf, cfg, SRSRAN_DCI_FORMAT1C)) {
     ERROR("Invalid message length for format 1C");
+    printf("DEBUG: Invalid message length for format 1C: (got %d, expected %d)\n", msg->nof_bits, srsran_dci_format_sizeof(cell, sf, cfg, SRSRAN_DCI_FORMAT1C));
     return SRSRAN_ERROR;
   }
 
@@ -1184,6 +1186,7 @@ static int dci_format2AB_unpack(srsran_cell_t*      cell,
       break;
     default:
       ERROR("Format2 accepts type0 or type1 resource allocation only");
+      printf("DEBUG: Got bad allocation type: got %d, expected %d or %d\n", dci->alloc_type, SRSRAN_RA_ALLOC_TYPE0, SRSRAN_RA_ALLOC_TYPE1);
       return SRSRAN_ERROR;
   }
 

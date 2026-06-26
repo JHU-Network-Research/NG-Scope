@@ -49,7 +49,8 @@ static uint64_t nreplayed = 0;
 static uint64_t nrecorded = 0;
 
 bool __attribute__((weak)) go_exit = false;
-bool rx_debug=true;
+bool __attribute__((weak)) debug = false;
+
 
 
 bool init_record(const char* path, uint32_t buf_size_gb)
@@ -81,10 +82,11 @@ bool init_replay(const char* path)
 int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t){
 
     // int nof_channels = 1;
-    if (rx_debug)
+    if (debug)
         printf("DEBUG: ngscope_rx receive %d samples\n", nsamples);
     if (!t){
-        printf("DEBUG: Error, timestamp passed to recv samples is NULL\n");
+        if(debug)
+            printf("DEBUG: Error, timestamp passed to recv samples is NULL\n");
         return 0;
     }
     
@@ -96,14 +98,14 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
     }
     int n = 0;
     if (mode == NORMAL || mode == RECORD){
-        if (rx_debug)
+        if (debug)
             printf("DEBUG: MODE is normal or record\n");
         n = srsran_rf_recv_with_time_multi(h, ptr, nsamples, true, &t->full_secs, &t->frac_secs);
         // return n;
-        if (rx_debug)
+        if (debug)
             printf("DEBUG: got %d samples\n", n);
         if (n != nsamples){
-            if (rx_debug)
+            if (debug)
                 printf("DEBUG: Got mismatch in number of samples: actual=%d, expected=%d\n", n, nsamples);
         }
 
@@ -113,7 +115,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             return n;
         }
         if (mode == RECORD){
-            if (rx_debug)
+            if (debug)
                 printf("DEBUG: Recording %d samples\n", n);
 
             rx_frame_header_t hdr;
@@ -121,7 +123,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             hdr.nof_samples         = nsamples;
             hdr.timestamp_full_secs = (uint64_t) t->full_secs;
             hdr.timestamp_frac_secs = t->frac_secs;
-            if (rx_debug)
+            if (debug)
                 printf("DEBUG: size of hdr: %ld, size of uint32_t: %ld, size of uint64_t: %ld, size of double: %ld\n", sizeof(rx_frame_header_t), sizeof(uint32_t), sizeof(uint64_t), sizeof(double));
             // uint64_t frame_size = sizeof(hdr) + hdr.nof_samples * sizeof(cf_t);
 
@@ -130,10 +132,10 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             record_ring_buffer_insert(&record_buf, ptr[0], sizeof(cf_t)*n);
             nrecorded += (sizeof(hdr));
             nrecorded += (sizeof(cf_t)*n);
-            if (rx_debug)
+            if (debug)
                 printf("RECORD: Written %ld bytes to the buffer\n", nrecorded);
 
-            if (rx_debug)
+            if (debug)
                 printf("Done recording %d samples\n", n);
         }
     }else if (mode == REPLAY){
@@ -143,26 +145,26 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         }
 
         if (feof(replay_fh)){
-            if (rx_debug)
+            if (debug)
                 printf("REPLAY: reached end of replay file\n");
             sleep(1); // let decoding finish
             raise(SIGINT);
             return 0;
         }
 
-        if (rx_debug)
+        if (debug)
             printf("REPLAY: Replaying samples\n");
         rx_frame_header_t hdr;
         n = fread(&hdr, sizeof(rx_frame_header_t), 1, replay_fh);
         if (n != 1){
-            if (rx_debug)
+            if (debug)
                 printf("REPLAY: error: short read loading header, read %d items instead of 1\n", n);
         }
         if (n <= 0){
-            if (rx_debug)
+            if (debug)
                 printf("REPLAY: replay returned %d when reading header\n", n);
             if (feof(replay_fh)){
-                if (rx_debug)
+                if (debug)
                     printf("REPLAY: reached end of replay file\n");
                 sleep(1); // let decoding finish
                 raise(SIGINT);
@@ -174,11 +176,11 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         srsran_timestamp_init(t, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
 
 
-        if (rx_debug)
+        if (debug)
             printf("REPLAY: read header: nof_samples=%ld, sec=%ld, nsec=%f\n", hdr.nof_samples, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
         
         if (hdr.nof_samples != nsamples){
-            if (rx_debug)
+            if (debug)
                 printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
             return 0;
         }
@@ -194,7 +196,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         struct timespec spin_now;
         double system_elapsed;
 
-        if (rx_debug)
+        if (debug)
             printf("REPLAY: last_replay_return: %ld.%ld, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, recorded_delta);
 
         // printf("DEBUG: last_replay_return: %ld.%ld\n", last_replay_return.tv_sec, last_replay_return.tv_nsec);
@@ -205,7 +207,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         //   printf("DEBUG: last_replay_return: %ld.%ld, system elapsed: %ld.%ld, elapsed: %.3f, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, spin_now.tv_sec, spin_now.tv_nsec, system_elapsed, recorded_delta);
         } while (system_elapsed < recorded_delta);
 
-        if (rx_debug)
+        if (debug)
             printf("REPLAY: Done waiting\n");
 
 
@@ -216,17 +218,17 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         t->full_secs = hdr.timestamp_full_secs;
         t->frac_secs = hdr.timestamp_frac_secs;
 
-        if (rx_debug)
+        if (debug)
             printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
         n = fread(replay_buf, sizeof(cf_t), hdr.nof_samples, replay_fh);
         nreplayed += (n*sizeof(cf_t));
-        if (rx_debug)
+        if (debug)
             printf("Read %ld bytes from file!\n", nreplayed);
         if (n <= 0){
-            if (rx_debug)
+            if (debug)
                 printf("REPLAY: replay returned %d when reading header, EOF=%d\n", n, feof(replay_fh));
             if (feof(replay_fh)){
-                if (rx_debug)
+                if (debug)
                     printf("REPLAY: reached end of replay file\n");
                 sleep(1); // let decoding finish
                 raise(SIGINT);
@@ -237,18 +239,18 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         if (n != hdr.nof_samples) 
             printf("REPLAY: ERROR: Read %d samples but expected %ld\n", n, hdr.nof_samples);
         else
-            if (rx_debug)
+            if (debug)
                 printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
         
         memcpy(ptr[0], replay_buf, n*sizeof(cf_t));
-        if (rx_debug)
+        if (debug)
             printf("REPLAY: Copied %d samples to ptr\n", n);
         memset(replay_buf, 0, sizeof(replay_buf));
         clock_gettime(CLOCK_MONOTONIC, &last_replay_return);
     }
-    if (rx_debug)
+    if (debug)
         printf("DEBUG: returning %d samples\n", n);
-    if (rx_debug)
+    if (debug)
     
         printf("FRAME %lu: mode=%d nsamples=%d n=%d\n", frame_count, mode, nsamples, n);
     frame_count++;
@@ -257,7 +259,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
 
 int stop_record(){
 
-    if (rx_debug)
+    if (debug)
         printf("DEBUG: closing record files\n");
 
     // pthread_cancel(flush_thread);
@@ -269,7 +271,7 @@ int stop_record(){
     pthread_cond_signal(&record_buf.cond);
     pthread_mutex_unlock(&record_buf.mutex);
     pthread_join(flush_thread, NULL);  // no cancel needed
-    if (rx_debug)
+    if (debug)
         printf("DEBUG: final flush done\n");
     record_ring_buffer_destroy(&record_buf);
 
@@ -278,7 +280,7 @@ int stop_record(){
 
 int stop_replay(){
 
-    if (rx_debug)
+    if (debug)
         printf("DEBUG: closing replay files\n");
 
     if (replay_fh){
@@ -313,7 +315,7 @@ void flush_record(void *arg){
 
 void flush_thread_cleanup(void *arg){
 
-    if (rx_debug)
+    if (debug)
         printf("RECORD: flushing the buffer for cleanup\n");
 
     record_ring_buffer_t *buf = (record_ring_buffer_t *) arg;

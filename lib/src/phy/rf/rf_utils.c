@@ -38,6 +38,7 @@
 #include "dciLib/load_config.h"
 
 extern ngscope_mode_t mode;
+static bool celldebug = false;
 
 int rf_rssi_scan(srsran_rf_t* rf, float* freqs, float* rssi, int nof_bands, double fs, int nsamp)
 {
@@ -149,11 +150,15 @@ int rf_mib_decoder(srsran_rf_t*       rf,
   }
   if (ret == 1) {
     srsran_pbch_mib_unpack(bch_payload, cell, NULL);
+    if (celldebug)
+      printf("CELL: decoded MIB nof_prb=%d, nof_ports=%d, id=%d, cp=%d, phich_length=%d, phich_resources=%d, frame_type=%d\n", cell->nof_prb, cell->nof_ports, cell->id, cell->cp, cell->phich_length, cell->phich_resources, cell->frame_type);
   }
 
   // Save CFO
   if (cfo) {
     *cfo = srsran_ue_sync_get_cfo(&ue_mib.ue_sync);
+    if (celldebug)
+      printf("CELL: Found CFO=%f\n", *cfo);
   }
 
 clean_exit:

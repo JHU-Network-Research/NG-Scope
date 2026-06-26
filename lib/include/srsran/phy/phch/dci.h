@@ -87,6 +87,9 @@ typedef struct SRSRAN_API {
   uint16_t              rnti;
   float                 decode_prob;
   float                 corr;
+  //jh debug
+  float                 agreement;
+  float                 repeat_corr;
 } srsran_dci_msg_t;
 
 
