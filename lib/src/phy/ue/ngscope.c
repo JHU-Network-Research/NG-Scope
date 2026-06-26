@@ -162,10 +162,6 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
   dci_per_sub->nof_dl_dci = 0;
   dci_per_sub->nof_ul_dci = 0;
 
-  if (sf->tti == 9887){
-    printf("FORMAT: Checking TTI=9887\n");
-  }
-
   //dci configuration
   srsran_dci_cfg_t dci_cfg = cfg->cfg.dci;
 
@@ -350,9 +346,6 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 	blk_idx++;
   }//end of while 
 
-  // if (dci_per_sub->nof_dl_dci > 0 || dci_per_sub->nof_ul_dci > 0){
-  //   printf("FORMAT: TTI=%d\n", sf->tti);
-  // }
   srsran_ngscope_tree_copy_rnti(tree, dci_per_sub, targetRNTI);
   //srsran_ngscope_dci_prune_ret(dci_per_sub); 
 
@@ -366,19 +359,6 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 
   srsran_ngscope_dci_prune(tree, sf->tti % 10);
 
-  if (sf->tti == 9887){
-    printf("FORMAT: DONE WITH 9987\n");
-    for(int i = 0; i < dci_per_sub->nof_dl_dci; i++){
-      if (dci_per_sub->dl_msg[i].rnti == 97){
-        printf("FORMAT: tti=9887,rnti=97,format=%d,dl=%d\n",dci_per_sub->dl_msg[i].format,dci_per_sub->dl_msg[i].dl);
-      }
-    }
-    for(int i = 0; i < dci_per_sub->nof_ul_dci; i++){
-      if (dci_per_sub->ul_msg[i].rnti == 97){
-        printf("FORMAT: tti=9887,rnti=97,format=%d,dl=%d\n",dci_per_sub->dl_msg[i].format,dci_per_sub->dl_msg[i].dl);
-      }
-    }
-  }
 
 
   //int nof_node = srsran_ngscope_tree_non_empty_nodes(tree);

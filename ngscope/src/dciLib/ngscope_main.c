@@ -114,7 +114,8 @@ int ngscope_main(ngscope_config_t* config)
             prog_args[i].input_file_name      = (char*) malloc(100 * sizeof(char));
             strcpy(prog_args[i].input_file_name, config->rf_config[i].rr_fname);
         }
-        
+        prog_args[i].debug         = config->rf_config[i].debug;        
+        prog_args[i].silent        = config->rf_config[i].silent;
         prog_args[i].rf_args    = (char*) malloc(100 * sizeof(char));
         strcpy(prog_args[i].rf_args, config->rf_config[i].rf_args);
         strcpy(prog_args[i].sib_logs, config->sib_logs_path);

@@ -43,6 +43,7 @@ extern pthread_mutex_t     scheduler_close_mutex;
 extern ngscope_mode_t mode;
 
 bool debug = false;
+bool silent = false;
 
 /******************* Global buffer for passing subframe IQ  ******************/ 
 ngscope_sf_buffer_t sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER] = 
@@ -457,6 +458,10 @@ void* task_scheduler_thread(void* p){
     printf("NG-Scope mode: %d\n", prog_args->mode);
     printf("NG-Scope Record file: %s\n", prog_args->output_file_name);
     printf("NG-Scope Replay file: %s\n", prog_args->input_file_name);
+    printf("NG-Scope debug mode: %d\n", prog_args->debug);
+    debug = prog_args->debug;
+    printf("NG-Scope silent mode: %d\n", prog_args->silent);
+    silent = prog_args->silent;
     // setup_rx_signal_handler();
     // exit(1);
     if (debug)
@@ -623,7 +628,7 @@ void* task_scheduler_thread(void* p){
                 uint32_t sfn_tmp = 0;
                 ue_mib_decode_sfn(&ue_mib, &task_scheduler.cell, &sfn_tmp, decode_pdcch);
 
-                if(sfn != sfn_tmp){
+                if(sfn != sfn_tmp && !silent){
                     printf("current sfn:%d decoded sfn:%d\n",sfn, sfn_tmp);
                 }
                 if(sfn_tmp > 0){
@@ -642,7 +647,7 @@ void* task_scheduler_thread(void* p){
           	//decode_pdcch = false; 
             /***************** Tell the decoder to decode the PDCCH *********/          
             if(decode_pdcch){  // We only decode when we got the SFN
-				if((last_tti != 10239) && (last_tti+1 != tti) ){
+				if((last_tti != 10239) && (last_tti+1 != tti) && !silent){
 					printf("Last tti:%d current tti:%d\n", last_tti, tti);
 				}
 				last_tti = tti;

@@ -153,6 +153,18 @@ int ngscope_read_config(ngscope_config_t* config, char * path)
             config->rf_config[i].mode = (ngscope_mode_t) 0;
         }
         printf("mode: %d\n", config->rf_config[i].mode);
+
+        sprintf(name, "rf_config%d.debug",i);
+        if (! config_lookup_bool(cfg, name, &config->rf_config[i].debug)){
+            printf("Debug not specified, defaulting to false\n");
+            config->rf_config[i].debug = false;
+        }
+
+        sprintf(name, "rf_config%d.silent",i);
+        if (! config_lookup_bool(cfg, name, &config->rf_config[i].silent)){
+            printf("Silent not specified, defaulting to false\n");
+            config->rf_config[i].silent = false;
+        }
         
 
         sprintf(name, "rf_config%d.rr_fname",i);

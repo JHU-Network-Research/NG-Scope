@@ -20,6 +20,7 @@
 #include "ngscope/hdr/dciLib/time_stamp.h"
 
 extern ngscope_dci_sink_serv_t dci_sink_serv;
+extern bool silent;
 
 /* Operator */
 bool a_larger_than_b(int a, int b, int buf_size)
@@ -188,7 +189,8 @@ int push_dci_to_remote(sf_status_t* q, int cell_idx, uint16_t targetRNTI, int re
     }
   }
 
-  printf("UE DCI dl_tbs: %d ul_tbs:%d \n", ue_dci.dl_tbs, ue_dci.ul_tbs);
+  if (!silent)
+    printf("UE DCI dl_tbs: %d ul_tbs:%d \n", ue_dci.dl_tbs, ue_dci.ul_tbs);
   sock_send_single_dci(&dci_sink_serv, &ue_dci, 0);
 
   return 1;

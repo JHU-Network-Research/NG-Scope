@@ -35,6 +35,7 @@ extern bool                 go_exit;
 extern bool                 have_sib1;
 extern bool                 have_sib2;
 extern bool					debug;
+extern bool					silent;
 
 extern ngscope_sf_buffer_t  sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
 extern bool                 sf_token[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
@@ -467,7 +468,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 				printf("DEBUG: TTI=%d left %d non-empty nodes found:%d dl_dci %d ul_dci!\n", tti, nof_node, \
 							dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci); 
 			srsran_ngscope_print_dci_per_sub(dci_per_sub);
-			printf("\n");
+			if (!silent)
+				printf("\n");
 
 		}
 	} 

@@ -15,6 +15,7 @@
 #include "srsran/phy/ue/ngscope_st.h"
 
 bool __attribute__((weak)) debug = false;
+bool __attribute__((weak)) silent = false;
 
 int ngscope_format_to_index(srsran_dci_format_t format){
     switch(format){
@@ -121,19 +122,18 @@ srsran_dci_format_t ngscope_index_to_format(int index){
 }
 
 void srsran_ngscope_print_dci_per_sub(ngscope_dci_per_sub_t* q){
-	if (debug)
-		printf("DEBUG: DL-> ");
-	for(int i=0; i<q->nof_dl_dci; i++){
-		printf("%d ", q->dl_msg[i].rnti);
-	}
-	if (debug)
-		printf("UL-> ");
-	for(int i=0; i<q->nof_ul_dci; i++){
-		printf("%d ", q->ul_msg[i].rnti);
-	}
+	if (!silent){
+		printf("DL-> ");
+		for(int i=0; i<q->nof_dl_dci; i++){
+			printf("%d ", q->dl_msg[i].rnti);
+		}
 
-	if (debug)
+		printf("UL-> ");
+		for(int i=0; i<q->nof_ul_dci; i++){
+			printf("%d ", q->ul_msg[i].rnti);
+		}
 		printf("\n");
+	}
 
 	return;
 }

@@ -14,6 +14,7 @@
 #include "ngscope/hdr/dciLib/ngscope_util.h"
 
 extern bool debug;
+extern bool silent;
 
 // inti the structure
 void ngscope_ue_tracker_init(ngscope_ue_tracker_t* q){
@@ -200,11 +201,14 @@ void ngscope_ue_tracker_update_per_tti(ngscope_ue_tracker_t* q, uint32_t tti){
 }
 
 void ngscope_ue_tracker_info(ngscope_ue_tracker_t* q, uint32_t tti){
-	printf("TTI:%d Nof active ue:%d ", tti, q->nof_active_ue);
-	for(int i=0; i<TOPN; i++){
-		printf("%d|%d ", q->top_N_ue_rnti[i], q->top_N_ue_freq[i]);
+
+	if (!silent){
+		printf("TTI:%d Nof active ue:%d ", tti, q->nof_active_ue);
+		for(int i=0; i<TOPN; i++){
+			printf("%d|%d ", q->top_N_ue_rnti[i], q->top_N_ue_freq[i]);
+		}
+		printf("\n");
 	}
-	printf("\n");
 	return;
 }
 

@@ -30,6 +30,8 @@ typedef struct {
   int      force_N_id_2;
   uint16_t rnti;
   int      mode;
+  bool     debug;
+  bool     silent;
   char*    input_file_name;
   char*    output_file_name;
   int      file_offset_time;

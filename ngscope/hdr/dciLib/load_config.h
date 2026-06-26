@@ -17,6 +17,8 @@ typedef struct{
 
     ngscope_mode_t      mode; // operating mode (0=NORMAL, 1=RECORD, 2=REPLAY)
     const char *        rr_fname; // record/replay filename
+    int         debug;
+    int         silent;
 }rf_dev_config_t;
 
 typedef struct{
