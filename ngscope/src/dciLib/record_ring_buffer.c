@@ -28,8 +28,8 @@ int record_ring_buffer_init(record_ring_buffer_t *buf, uint64_t capacity, const 
     pthread_cond_init(&buf->cond, NULL);
     buf->flush = false;
 
-
-    printf("FLUSH: Created buffer with capacity %ld\n", buf->capacity);
+    if (debug)
+        printf("FLUSH: Created buffer with capacity %ld\n", buf->capacity);
 
     return 0;
 }
@@ -56,7 +56,8 @@ int record_ring_buffer_insert(record_ring_buffer_t *buf, void *data, size_t size
             printf("DEBUG: buffer capacity is not large enough\n");
         // request write exceeds capacity of the buffer
         pthread_mutex_unlock(&buf->mutex);
-        printf("FLUSH: Want to write %ld bytes to a buffer of size %ld with capacity %ld, buffer is not large enough\n", size, buf->size, buf->capacity);
+        if (debug)
+            printf("FLUSH: Want to write %ld bytes to a buffer of size %ld with capacity %ld, buffer is not large enough\n", size, buf->size, buf->capacity);
         return -1;
     }
 
@@ -85,8 +86,8 @@ int record_ring_buffer_insert(record_ring_buffer_t *buf, void *data, size_t size
 
         buf->head += size;
     }
-
-    printf("FLUSH: old buf size: %ld, wrote %ld bytes, new size: %ld, threshold: %d\n", buf->size, size, buf->size + size, BUF_FLUSH_THRESHOLD);
+    if (debug)
+        printf("FLUSH: old buf size: %ld, wrote %ld bytes, new size: %ld, threshold: %d\n", buf->size, size, buf->size + size, BUF_FLUSH_THRESHOLD);
     buf->size += size;
 
     // if (debug)

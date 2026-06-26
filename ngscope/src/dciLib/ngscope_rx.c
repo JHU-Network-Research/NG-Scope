@@ -58,8 +58,8 @@ bool init_record(const char* path, uint32_t buf_size_gb)
   record_path = path;
   mode = RECORD;
   uint64_t buf_size = (uint64_t) ONE_GB*buf_size_gb;
-
-  printf("FLUSH: ONE_GB: %d, requested capacity GB: %d, TOTAL SIZE: %ld\n", ONE_GB, buf_size_gb, buf_size);
+  if (debug)
+    printf("FLUSH: ONE_GB: %d, requested capacity GB: %d, TOTAL SIZE: %ld\n", ONE_GB, buf_size_gb, buf_size);
 
   record_ring_buffer_init(&record_buf, buf_size, path);
 
