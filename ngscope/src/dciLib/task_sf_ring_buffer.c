@@ -47,6 +47,7 @@ int task_sf_ring_buffer_put(task_tmp_buffer_t* q,
 							cf_t* buffers[SRSRAN_MAX_CHANNELS],
 							uint32_t sfn, 
 							uint32_t sf_idx,
+							uint64_t collection_time,
 							int rf_nof_rx_ant,
 							int max_num_samples)
 {
@@ -62,6 +63,7 @@ int task_sf_ring_buffer_put(task_tmp_buffer_t* q,
 	//printf("Nof buffer:%d %d\n", task_tmp_buffer.header, task_tmp_buffer.nof_buf);
 	q->sf_buf[q->header].sf_idx   = sf_idx;
 	q->sf_buf[q->header].sfn      = sfn;
+	q->sf_buf[q->header].collection_time = collection_time;
 	for(int p=0; p<rf_nof_rx_ant; p++){
 		memcpy(q->sf_buf[q->header].IQ_buffer[p], 
 								buffers[p], max_num_samples*sizeof(cf_t));

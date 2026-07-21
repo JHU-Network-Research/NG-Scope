@@ -25,6 +25,7 @@ extern "C" {
 typedef struct{
     uint32_t        sf_idx; // subframe index 0-9
     uint32_t        sfn;    // system frame index 0-1020
+	uint64_t		collection_time;
     cf_t*           IQ_buffer[SRSRAN_MAX_PORTS]; //IQ buffer that stores the IQ sample
 }task_tmp_sf_buffer_t;
 
@@ -43,6 +44,7 @@ int task_sf_ring_buffer_put(task_tmp_buffer_t* q,
 								cf_t* buffers[SRSRAN_MAX_CHANNELS],
 								uint32_t sfn,
 								uint32_t sf_idx,
+								uint64_t collection_time,
 								int rf_nof_rx_ant,
 								int max_num_samples);
 

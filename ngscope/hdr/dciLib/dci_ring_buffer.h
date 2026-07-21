@@ -37,6 +37,7 @@ typedef struct{
     uint8_t     nof_ul_msg;
 
     uint64_t    timestamp_us; // time stamp of the decode msg
+	uint64_t	collection_time;
 
 	ngscope_dci_msg_t dl_msg[MAX_DCI_PER_SUB];
     ngscope_dci_msg_t ul_msg[MAX_DCI_PER_SUB];
