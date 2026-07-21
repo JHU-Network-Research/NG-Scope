@@ -25,6 +25,7 @@
 // #include "dciLib/ngscope_rx.h"
 #include <string.h>
 // #include "dciLib/load_config.h"
+// #include "srsran/phy/ue/ngscope_consistency.h"
 
 #define CURRENT_FFTSIZE srsran_symbol_sz(q->cell.nof_prb)
 #define CURRENT_SFLEN_RE SRSRAN_NOF_RE(q->cell)
@@ -686,7 +687,7 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
 
 
         // if (mode == 2){
-        // RNTI FILTERING
+        // JH RNTI FILTERING
         // if(true){
         //   if (dci_msg[nof_dci].rnti < 70 || dci_msg[nof_dci].rnti > 107){
         //     printf("DEBUG: Skipping due to invalid RNTI %d\n", dci_msg[nof_dci].rnti);
@@ -1062,9 +1063,11 @@ int srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(srsran_ue_dl_t*       q,
                                     srsran_dl_sf_cfg_t*   sf,
                                     srsran_ue_dl_cfg_t*   cfg,
                                     srsran_dci_dl_t*      dci,
-                                    srsran_pdsch_grant_t* grant)
+                                    srsran_pdsch_grant_t* grant,
+                                    uint32_t*             out_L_crb,
+                                    uint32_t*             out_RB_start)
 {
-  return srsran_ra_dl_dci_to_grant_wo_mimo_yx(&q->cell, sf, cfg->cfg.tm, cfg->cfg.pdsch.use_tbs_index_alt, dci, grant);
+  return srsran_ra_dl_dci_to_grant_wo_mimo_yx(&q->cell, sf, cfg->cfg.tm, cfg->cfg.pdsch.use_tbs_index_alt, dci, grant, out_L_crb, out_RB_start);
 }
 
 
@@ -1997,7 +2000,7 @@ int srsran_ue_decode_dci_yx(srsran_ue_dl_t*     q,
 	ret = srsran_ue_dl_find_dl_dci(q, sf, cfg, targetRNTI, dci_dl);
 	if (ret == 1) {
 		//printf("FOUND DL DCI: tti:%d rnti:%d format:%d\n", sf->tti, dci_res->dci_dl[0].rnti, dci_res->dci_dl[0].format);
-		if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, &pdsch_cfg->grant)) {
+		if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, &pdsch_cfg->grant, NULL, NULL)) {
 			ERROR("Error unpacking DCI");
 			return SRSRAN_ERROR;
 		}else{

@@ -18,10 +18,16 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
         //ERROR("Unpacking DL DCI");
         return SRSRAN_ERROR;
     }
-    if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, dci_dl_grant)) {
+    uint32_t before_crb; 
+    memcpy(&before_crb, &(dci_msg->l_crb), sizeof(uint32_t)); //= dci_msg->l_crb;
+    uint32_t before_rb; 
+    memcpy(&before_rb, &(dci_msg->rb_start), sizeof(uint32_t));//= dci_msg->rb_start;
+    if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, dci_dl_grant, &(dci_msg->l_crb), &(dci_msg->rb_start))) {
         //ERROR("Translate DL DCI to grant");
         return SRSRAN_ERROR;
     }
+    // fprintf(stderr, "BEFORE: l_crb=%u, rb_start=%u, AFTER: l_crb=%u, rb_start=%u\n", before_crb, before_rb, dci_msg->l_crb, dci_msg->rb_start);
+    
     return SRSRAN_SUCCESS;
 }
 //
@@ -68,7 +74,8 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
                                         float decode_prob, float corr,
                                         srsran_dci_dl_t* dci_dl,
                                         srsran_pdsch_grant_t* dci_dl_grant,
-                                        int nof_bits, float agreement, float repeat_corr)
+                                        int nof_bits, float agreement, float repeat_corr,
+                                        uint32_t l_crb, uint32_t rb_start)
 {
 
      
@@ -86,7 +93,12 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
     dci_array[i][j].nof_bits = nof_bits;
     dci_array[i][j].agreement = agreement;
     dci_array[i][j].repeat_corr = repeat_corr;
-   
+
+    // fprintf(stderr,"Setting l_crb=%u, rb_start=%u\n",l_crb,rb_start);
+    dci_array[i][j].l_crb       = l_crb;
+    dci_array[i][j].rb_start    = rb_start;
+    dci_array[i][j].alloc_type  = dci_dl->alloc_type;
+
     // transport block 1
     dci_array[i][j].tb[0].mcs      = dci_dl_grant->tb[0].mcs_idx;
     dci_array[i][j].tb[0].tbs      = dci_dl_grant->tb[0].tbs;

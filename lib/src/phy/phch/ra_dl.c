@@ -169,7 +169,9 @@ uint32_t ra_re_x_prb(const srsran_cell_t* cell, srsran_dl_sf_cfg_t* sf, uint32_t
 /** Compute PRB allocation for Downlink as defined in 7.1.6 of 36.213 */
 int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
                                                srsran_pdsch_grant_t*  grant,
-                                               uint32_t               nof_prb)
+                                               uint32_t               nof_prb,
+                                               uint32_t*              out_L_crb,
+                                               uint32_t*              out_RB_start)
 {
   int      i, j;
   uint32_t bitmask;
@@ -244,7 +246,10 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
         L_crb *= n_step;
         RB_start *= n_step;
       }
-
+      // fprintf(stderr, "Setting L_crb=%u and rb_start=%u\n", L_crb, RB_start);
+      if (out_L_crb)  memcpy(out_L_crb, &L_crb, sizeof(uint32_t));
+      //  *out_L_crb    = L_crb;
+      if (out_RB_start) memcpy(out_RB_start, &RB_start, sizeof(uint32_t)); //*out_RB_start = RB_start;
       if (dci->type2_alloc.mode == SRSRAN_RA_TYPE2_LOC) {
         for (i = 0; i < L_crb; i++) {
           grant->prb_idx[0][i + RB_start] = true;
@@ -617,7 +622,7 @@ int srsran_ra_dl_dci_to_grant(const srsran_cell_t*   cell,
   bzero(grant, sizeof(srsran_pdsch_grant_t));
 
   // Compute PRB allocation
-  int ret = srsran_ra_dl_grant_to_grant_prb_allocation(dci, grant, cell->nof_prb);
+  int ret = srsran_ra_dl_grant_to_grant_prb_allocation(dci, grant, cell->nof_prb, NULL, NULL);
   if (ret == SRSRAN_SUCCESS) {
     // Compute MCS
     ret = dl_dci_compute_tb(pdsch_use_tbs_index_alt, dci, grant);
@@ -654,12 +659,14 @@ int srsran_ra_dl_dci_to_grant_wo_mimo_yx(const srsran_cell_t*   cell,
                               srsran_tm_t            tm,
                               bool                   pdsch_use_tbs_index_alt,
                               const srsran_dci_dl_t* dci,
-                              srsran_pdsch_grant_t*  grant)
+                              srsran_pdsch_grant_t*  grant,
+                              uint32_t*              out_L_crb,
+                              uint32_t*              out_RB_start)
 {
   bzero(grant, sizeof(srsran_pdsch_grant_t));
 
   // Compute PRB allocation
-  int ret = srsran_ra_dl_grant_to_grant_prb_allocation(dci, grant, cell->nof_prb);
+  int ret = srsran_ra_dl_grant_to_grant_prb_allocation(dci, grant, cell->nof_prb, out_L_crb, out_RB_start);
   if (ret == SRSRAN_SUCCESS) {
     // Compute MCS
     ret = dl_dci_compute_tb(pdsch_use_tbs_index_alt, dci, grant);

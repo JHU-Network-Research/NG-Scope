@@ -40,7 +40,8 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
                                         float decode_prob, float corr,
                                         srsran_dci_dl_t* dci_dl,
                                         srsran_pdsch_grant_t* dci_dl_grant,
-                                        int nof_bits, float agreement, float repeat_corr);
+                                        int nof_bits, float agreement, float repeat_corr, 
+                                        uint32_t l_cbr, uint32_t rb_start);
 
 int srsran_ngscope_unpack_ul_dci_2grant(srsran_ue_dl_t*     q,
                                         srsran_dl_sf_cfg_t* sf,

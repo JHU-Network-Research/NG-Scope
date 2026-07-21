@@ -120,7 +120,8 @@ srsran_dl_sf_cfg_t *sf,
 srsran_ue_dl_cfg_t *cfg,
 srsran_pdsch_cfg_t *pdsch_cfg,
 uint8_t *data[SRSRAN_MAX_CODEWORDS],
-bool acks[SRSRAN_MAX_CODEWORDS]
+bool acks[SRSRAN_MAX_CODEWORDS],
+srsran_dci_location_t *sib_loc
 )
 {
   int ret = SRSRAN_ERROR;
@@ -160,6 +161,7 @@ bool acks[SRSRAN_MAX_CODEWORDS]
   if (ret == 1) {
     char str[512];
     srsran_dci_dl_info(&dci_dl[0], str, 512);
+    memcpy(sib_loc, &dci_dl[0].location, sizeof(srsran_dci_location_t)); // copy location 
 
     // Convert DCI message to DL grant
     if (srsran_ue_dl_dci_to_pdsch_grant(q, sf, cfg, &dci_dl[0], &pdsch_cfg->grant)) {
@@ -264,7 +266,8 @@ srsran_dl_sf_cfg_t *sf,
 srsran_ue_dl_cfg_t *cfg,
 srsran_pdsch_cfg_t *pdsch_cfg,
 uint8_t *data[SRSRAN_MAX_CODEWORDS],
-bool acks[SRSRAN_MAX_CODEWORDS]
+bool acks[SRSRAN_MAX_CODEWORDS],
+srsran_dci_location_t *sib_loc
 )
 {
   int ret = SRSRAN_ERROR;
@@ -301,6 +304,7 @@ bool acks[SRSRAN_MAX_CODEWORDS]
   if (ret == 1) {
     char str[512];
     srsran_dci_dl_info(&dci_dl[0], str, 512);
+    memcpy(sib_loc, &dci_dl[0].location, sizeof(srsran_dci_location_t)); // copy location
 
     // Convert DCI message to DL grant
     if (srsran_ue_dl_dci_to_pdsch_grant(q, sf, cfg, &dci_dl[0], &pdsch_cfg->grant)) {

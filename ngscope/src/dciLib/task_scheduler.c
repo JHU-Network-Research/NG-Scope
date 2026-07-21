@@ -561,7 +561,7 @@ void* task_scheduler_thread(void* p){
     // JH open log file
 	FILE *decodelog;
   	decodelog=fopen("dci-decode-debug.csv","w");
-  	fprintf(decodelog,"timestamp,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,nof_bits,K_w,agreement,repeat_corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2\n");
+  	fprintf(decodelog,"timestamp,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,nof_bits,K_w,agreement,repeat_corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2,hard_fail,weight\n");
 	fclose(decodelog);
 
 

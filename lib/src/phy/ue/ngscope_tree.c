@@ -18,14 +18,11 @@ void srsran_ngscope_tree_copy_dci_fromArray2PerSub(ngscope_tree_t* q,
 {   
     // ngscope_dci_msg_t msg = q->dci_array[format][idx];
     // if (msg.rnti == 2)
-    // printf("DEBUG: rnti=%d\n",msg.rnti);
-    // printf("FORMAT: setting dci format\n");
     if( (format  < 0) || (idx<0) || (idx >= MAX_CANDIDATES_ALL)){
         ERROR("Format or IDX is invalid!\n");
         return;
     }
 
-    // printf("FORMAT: setting message with rnti=%d to format=(%d,%d), dl=%d\n", q->dci_array[format][idx].rnti, format, ngscope_index_to_format(format), q->dci_array[format][idx].dl);
 
     if((format == 0)  ){
         if(dci_per_sub->nof_ul_dci < MAX_DCI_PER_SUB){
@@ -582,8 +579,8 @@ int srsran_ngscope_tree_copy_rnti(ngscope_tree_t*   		q,
 //  Put the decoded downlink dci message into the tree
 int srsran_ngscope_tree_put_dl_dci(ngscope_tree_t* q, int format_idx, int loc_idx, float decode_prob, float corr,  
 									srsran_dci_dl_t* dci_dl,
-									srsran_pdsch_grant_t* dci_dl_grant, int nof_bits, float agreement, float repeat_corr){
-	srsran_ngscope_dci_into_array_dl(q->dci_array, format_idx, loc_idx, q->dci_location[loc_idx], decode_prob, corr,  dci_dl, dci_dl_grant, nof_bits, agreement, repeat_corr);
+									srsran_pdsch_grant_t* dci_dl_grant, int nof_bits, float agreement, float repeat_corr, uint32_t l_crb, uint32_t rb_start){
+	srsran_ngscope_dci_into_array_dl(q->dci_array, format_idx, loc_idx, q->dci_location[loc_idx], decode_prob, corr,  dci_dl, dci_dl_grant, nof_bits, agreement, repeat_corr, l_crb, rb_start);
 	return 0;
 }
 

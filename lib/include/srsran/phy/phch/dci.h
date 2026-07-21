@@ -90,6 +90,8 @@ typedef struct SRSRAN_API {
   //jh debug
   float                 agreement;
   float                 repeat_corr;
+  uint32_t              l_crb;
+  uint32_t              rb_start;
 } srsran_dci_msg_t;
 
 

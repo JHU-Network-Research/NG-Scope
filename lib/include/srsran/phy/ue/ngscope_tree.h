@@ -77,7 +77,7 @@ int srsran_ngscope_tree_copy_rnti(ngscope_tree_t* q,
 int srsran_ngscope_tree_put_dl_dci(ngscope_tree_t* q, int format_idx, int loc_idx, float decode_prob, float corr,
 									srsran_dci_dl_t* 		dci_dl,
 									srsran_pdsch_grant_t* 	dci_dl_grant,
-                                    int nof_bits, float agreement, float repeat_corr);
+                                    int nof_bits, float agreement, float repeat_corr, uint32_t l_crb, uint32_t rb_start);
 
 int srsran_ngscope_tree_put_ul_dci(ngscope_tree_t* q, int format_idx, int loc_idx, float decode_prob, float corr,
 									srsran_dci_ul_t* 		dci_ul,

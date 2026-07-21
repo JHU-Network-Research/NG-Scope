@@ -205,7 +205,9 @@ SRSRAN_API int srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(srsran_ue_dl_t*       
                                                srsran_dl_sf_cfg_t*   sf,
                                                srsran_ue_dl_cfg_t*   cfg,
                                                srsran_dci_dl_t*      dci,
-                                               srsran_pdsch_grant_t* grant);
+                                               srsran_pdsch_grant_t* grant,
+                                               uint32_t*             out_L_crb,
+                                               uint32_t*             out_RB_start);
 
 /* Decodes PDSCH and PHICH in the signal processed in a previous call to decode_fft_estimate() */
 SRSRAN_API int srsran_ue_dl_decode_pdsch(srsran_ue_dl_t*     q,

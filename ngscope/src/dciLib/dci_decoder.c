@@ -30,6 +30,8 @@
 
 #include "ngscope/hdr/dciLib/decode_sib.h"
 
+#include "srsran/phy/ue/ngscope_consistency.h"
+
 
 extern bool                 go_exit;
 extern bool                 have_sib1;
@@ -303,25 +305,31 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 	dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = false;
 	dci_decoder->ue_dl_cfg.cfg.dci.multiple_csi_request_enabled = false;
 	dci_decoder->ue_dl_cfg.chest_cfg = chest_pdsch_cfg;
+	bool decoded_sib = false;
+
+	srsran_dci_location_t sib_loc;
 	if ((sf_idx == 5 && (sfn % 2) == 0)) {
 		ret = 0;
         ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
 		if (ret > 0) {
 			if (debug)
 				printf("CELL: Successfully decoded SIB1 with code %d!\n", ret);
+			decoded_sib=true;
 		}
     } else { //SIB2 
 	    ret = 0;
 		// have_sib2 = true;
         ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
 		if (ret > 0) {
 			if (debug)
 				printf("CELL: Successfully decoded SIB2 with code %d!\n", ret);
+			decoded_sib = true;
 		}
     }
 
+	
 	pthread_mutex_lock(&token_mutex[0]);
 	FILE* rsrpoutfile = fopen("rsrp.txt", "a");
 	fprintf(rsrpoutfile, "reference_signal_received_power: %4fdBm\n", dci_decoder->ue_dl.chest_res.rsrp_dbm);
@@ -357,8 +365,14 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, targetRNTI);
 		}else{
     		ngscope_tree_t tree;	
-			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx);				
+			if (decoded_sib){
+				fprintf(stderr, "Found SIB at ncce=%d, L=%d\n", sib_loc.ncce, sib_loc.L);
+				n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx, &sib_loc);
+			} else {
+				n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx, NULL);
+			}				
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
 			// filter the dci 
@@ -403,11 +417,16 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 				if (dl_msg.nof_tb == 2){
 					tb2 = dl_msg.tb[1];
 				}
+				
+				uint32_t cfi = dci_decoder->dl_sf.cfi;
+				uint32_t nof_cce = ((cfi > 0 && cfi < 4) ? dci_decoder->ue_dl.pdcch.nof_cce[cfi - 1] : 0);
+				uint32_t nof_symbols = 36*nof_cce;
+				ngscope_consistency_result_t cons = ngscope_consistency_check(&dci_decoder->cell, &dl_msg, sf_idx, cfi);
 
 				if(decodelog){
 					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
 					fprintf(decodelog,
-						"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d\n",
+						"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%f\n",
 						dci_per_sub->timestamp,
 						tti,
 						dl_msg.rnti,
@@ -432,10 +451,12 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 						tb2.mcs,
 						tb2.tbs,
 						tb2.rv,
-						tb2.ndi);
+						tb2.ndi,
+						cons.hard_fail,
+						cons.weight);
 					}
 				if(debug)
-					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, nof_bits=%d, K_w=%d, agreement=%.3f, repeat_corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d\n", 
+					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, nof_bits=%d, K_w=%d, agreement=%.3f, repeat_corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d,hard_fail=%d,weight=%f\n", 
 						tti, 
 						dl_msg.rnti,
 						dl_msg.prb,
@@ -459,7 +480,9 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 						tb2.mcs,
 						tb2.tbs,
 						tb2.rv,
-						tb2.ndi);
+						tb2.ndi,
+						cons.hard_fail,
+						cons.weight);
 			}
 			fclose(decodelog);
 
@@ -472,7 +495,10 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 				printf("\n");
 
 		}
-	} 
+	} else {
+		if (tti == 4045)
+			fprintf(stderr, "Skipping PDSCH decoding!\n");
+	}
     return SRSRAN_SUCCESS;
 }
 

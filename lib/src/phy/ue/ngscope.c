@@ -56,7 +56,7 @@ void unpack_dci_message_vec(srsran_ue_dl_t*        q,
 								&dci_dl, &dci_dl_grant) == SRSRAN_SUCCESS){
 					int format_idx = ngscope_format_to_index(dci_msg[j].format);
 					srsran_ngscope_dci_into_array_dl(tree->dci_array, format_idx, loc_idx, tree->dci_location[loc_idx],
-							dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl, &dci_dl_grant, dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr);
+							dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl, &dci_dl_grant, dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr, dci_msg[j].l_crb, dci_msg[j].rb_start);
 				}
 			} 
 		}
@@ -155,7 +155,8 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
                                              //srsran_dci_location_t  dci_location[MAX_CANDIDATES_ALL],
                                              ngscope_dci_per_sub_t* dci_per_sub,
   											 ngscope_tree_t* 		tree,
-											 uint16_t targetRNTI, uint16_t decoder_idx)
+											 uint16_t targetRNTI, uint16_t decoder_idx,
+                      srsran_dci_location_t* sib_loc)
 {
   int ret = SRSRAN_ERROR;
 
@@ -256,6 +257,30 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
       loc_idx++;
 			continue;
 		}
+
+    if (sib_loc){
+
+      uint32_t sib_cces = pow(2,sib_loc->L);
+
+      if (tree->dci_location[loc_idx].ncce >= sib_loc->ncce && tree->dci_location[loc_idx].ncce <= sib_loc->ncce + sib_cces){
+         // Skipping this location if we previously found a SIB here
+        fprintf(stderr,"Skipping ncce=%d,L=%d due to SIB with %d cces\n", tree->dci_location[loc_idx].ncce,tree->dci_location[loc_idx].L, sib_cces);
+        tree->dci_location[loc_idx].checked=true;
+        loc_idx++;
+        continue;
+      }
+
+
+
+      // if (tree->dci_location[loc_idx].ncce == sib_loc->ncce && tree->dci_location[loc_idx].L <= sib_loc->L){
+      //   // Skipping this location if we previously found a SIB here
+      //   fprintf(stderr,"Skipping ncce=%d,L=%d due to SIB\n", tree->dci_location[loc_idx].ncce,tree->dci_location[loc_idx].L);
+      //   tree->dci_location[loc_idx].checked=true;
+      //   loc_idx++;
+      //   continue;
+      // }
+    }
+
 		cnt++;
     if (debug)
   	  printf("DEBUG: SEARCHING TTI:%d CFI:%d NOF CCE:%d nof location:%d LOC_IDX: %d, ncce:%d L:%d\n", sf->tti, sf->cfi, nof_cce, tree->nof_location, loc_idx, tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
@@ -544,7 +569,7 @@ int srsran_ngscope_search_all_space_array_signleUE_yx(srsran_ue_dl_t*        q,
                                     &dci_dl[nof_dl_dci], &dci_dl_grant[nof_dl_dci]) == SRSRAN_SUCCESS){
                         int format_idx = ngscope_format_to_index(dci_msg[j].format);
                         srsran_ngscope_dci_into_array_dl(tree.dci_array, format_idx, loc_idx, tree.dci_location[loc_idx],
-                                dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl[nof_dl_dci], &dci_dl_grant[nof_dl_dci], dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr);
+                                dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl[nof_dl_dci], &dci_dl_grant[nof_dl_dci], dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr, dci_msg[j].l_crb, dci_msg[j].rb_start);
                     }
                 } 
             }
