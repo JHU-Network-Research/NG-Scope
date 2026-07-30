@@ -48,7 +48,7 @@ void unpack_dci_message_vec(srsran_ue_dl_t*        q,
 								&dci_ul, &dci_ul_grant) == SRSRAN_SUCCESS){
           // dci_ul_grant to tree->dci_array
 					srsran_ngscope_dci_into_array_ul(tree->dci_array, 0, loc_idx, tree->dci_location[loc_idx],
-									dci_msg[j].decode_prob, dci_msg[j].corr, &dci_ul, &dci_ul_grant, dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr);
+									dci_msg[j].decode_prob, dci_msg[j].corr, &dci_ul, &dci_ul_grant);
 				}
 			}else{
 				// Upack the downlink dci to downlink grant
@@ -56,7 +56,7 @@ void unpack_dci_message_vec(srsran_ue_dl_t*        q,
 								&dci_dl, &dci_dl_grant) == SRSRAN_SUCCESS){
 					int format_idx = ngscope_format_to_index(dci_msg[j].format);
 					srsran_ngscope_dci_into_array_dl(tree->dci_array, format_idx, loc_idx, tree->dci_location[loc_idx],
-							dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl, &dci_dl_grant, dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr, dci_msg[j].l_crb, dci_msg[j].rb_start);
+							dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl, &dci_dl_grant);
 				}
 			} 
 		}
@@ -258,28 +258,28 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 			continue;
 		}
 
-    if (sib_loc){
+    // if (sib_loc){
 
-      uint32_t sib_cces = pow(2,sib_loc->L);
+    //   uint32_t sib_cces = pow(2,sib_loc->L);
 
-      if (tree->dci_location[loc_idx].ncce >= sib_loc->ncce && tree->dci_location[loc_idx].ncce <= sib_loc->ncce + sib_cces){
-         // Skipping this location if we previously found a SIB here
-        fprintf(stderr,"Skipping ncce=%d,L=%d due to SIB with %d cces\n", tree->dci_location[loc_idx].ncce,tree->dci_location[loc_idx].L, sib_cces);
-        tree->dci_location[loc_idx].checked=true;
-        loc_idx++;
-        continue;
-      }
+    //   if (tree->dci_location[loc_idx].ncce >= sib_loc->ncce && tree->dci_location[loc_idx].ncce <= sib_loc->ncce + sib_cces){
+    //      // Skipping this location if we previously found a SIB here
+    //     // fprintf(stderr,"Skipping ncce=%d,L=%d due to SIB with %d cces\n", tree->dci_location[loc_idx].ncce,tree->dci_location[loc_idx].L, sib_cces);
+    //     tree->dci_location[loc_idx].checked=true;
+    //     loc_idx++;
+    //     continue;
+    //   }
 
 
 
-      // if (tree->dci_location[loc_idx].ncce == sib_loc->ncce && tree->dci_location[loc_idx].L <= sib_loc->L){
-      //   // Skipping this location if we previously found a SIB here
-      //   fprintf(stderr,"Skipping ncce=%d,L=%d due to SIB\n", tree->dci_location[loc_idx].ncce,tree->dci_location[loc_idx].L);
-      //   tree->dci_location[loc_idx].checked=true;
-      //   loc_idx++;
-      //   continue;
-      // }
-    }
+    //   // if (tree->dci_location[loc_idx].ncce == sib_loc->ncce && tree->dci_location[loc_idx].L <= sib_loc->L){
+    //   //   // Skipping this location if we previously found a SIB here
+    //   //   fprintf(stderr,"Skipping ncce=%d,L=%d due to SIB\n", tree->dci_location[loc_idx].ncce,tree->dci_location[loc_idx].L);
+    //   //   tree->dci_location[loc_idx].checked=true;
+    //   //   loc_idx++;
+    //   //   continue;
+    //   // }
+    // }
 
 		cnt++;
     if (debug)
@@ -328,7 +328,6 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
   		dci_cfg.multiple_csi_request_enabled 	= false;
 
     //JH LOG HERE
-    //JH LOG HERE
     // time_t seconds = dci_per_sub->timestamp / 1000000;
     // uint64_t microseconds = dci_per_sub->timestamp % 1000000;
     // struct tm *tm_info = localtime(&seconds);
@@ -336,9 +335,11 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
     // strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm_info);
     // ts,type,tti,nof_cce,ncce,cfi,nof_loc,i,loc_idx,mean_llr
     // fprintf(decodelog,"%lu,normal,%d,%d,%d,%d,%d,%d,%d,%.3f\n",dci_per_sub->timestamp, sf->tti,nof_cce,search_space.loc[0].ncce, sf->cfi, tree->nof_location,i,loc_idx,tree->dci_location[loc_idx].mean_llr);
+    // if (sib_loc)
+    //   debug = true;
     if (debug)
       printf("DEBUG: NORMAL SEARCH TTI:%d NOF_CCE:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
-    sf->tti, nof_cce, sf->cfi, tree->nof_location, loc_idx,
+    sf->tti, nof_cce, sf->cfi, search_space.nof_locations, loc_idx,
     tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 		// Search all the formats in this location
 		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
@@ -355,6 +356,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
         );
       }
     }
+    // debug = false;
 
 		// Unpack the dci messages 
 		unpack_dci_message_vec(q, sf, cfg, pdsch_cfg, dci_msg, nof_dci, loc_idx, tree);
@@ -561,7 +563,7 @@ int srsran_ngscope_search_all_space_array_signleUE_yx(srsran_ue_dl_t*        q,
                     if(srsran_ngscope_unpack_ul_dci_2grant(q, sf, cfg, pdsch_cfg, &dci_msg[j],  
                                     &dci_ul[nof_ul_dci], &dci_ul_grant[nof_ul_dci]) == SRSRAN_SUCCESS){
                         srsran_ngscope_dci_into_array_ul(tree.dci_array, 0, loc_idx, tree.dci_location[loc_idx],
-                                        dci_msg[j].decode_prob, dci_msg[j].corr, &dci_ul[nof_ul_dci], &dci_ul_grant[nof_ul_dci], dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr);
+                                        dci_msg[j].decode_prob, dci_msg[j].corr, &dci_ul[nof_ul_dci], &dci_ul_grant[nof_ul_dci]);
                     }
                 }else{
                     // Upack the downlink dci to downlink grant
@@ -569,7 +571,7 @@ int srsran_ngscope_search_all_space_array_signleUE_yx(srsran_ue_dl_t*        q,
                                     &dci_dl[nof_dl_dci], &dci_dl_grant[nof_dl_dci]) == SRSRAN_SUCCESS){
                         int format_idx = ngscope_format_to_index(dci_msg[j].format);
                         srsran_ngscope_dci_into_array_dl(tree.dci_array, format_idx, loc_idx, tree.dci_location[loc_idx],
-                                dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl[nof_dl_dci], &dci_dl_grant[nof_dl_dci], dci_msg[j].nof_bits, dci_msg[j].agreement, dci_msg[j].repeat_corr, dci_msg[j].l_crb, dci_msg[j].rb_start);
+                                dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl[nof_dl_dci], &dci_dl_grant[nof_dl_dci]);
                     }
                 } 
             }

@@ -386,11 +386,11 @@ int srsran_ngscope_tree_non_empty_nodes(ngscope_tree_t* q){
 int srsran_ngscope_tree_prune_tree(ngscope_tree_t* q){
 	for(int i=0; i<MAX_NOF_FORMAT+1; i++){
 		for(int j=0; j<q->nof_location; j++){
-			if(q->dci_array[i][j].corr < 0.6){ // JH TEST normally 0.5
+			if(q->dci_array[i][j].corr < 0.5){ // JH TEST normally 0.5
 				ZERO_OBJECT(q->dci_array[i][j]);
 				continue;
 			}
-			if(q->dci_array[i][j].decode_prob < 80){ // JH TEST normally 75 
+			if(q->dci_array[i][j].decode_prob < 75){ // JH TEST normally 75 
 				ZERO_OBJECT(q->dci_array[i][j]);
 				continue;
 			}
@@ -580,7 +580,7 @@ int srsran_ngscope_tree_copy_rnti(ngscope_tree_t*   		q,
 int srsran_ngscope_tree_put_dl_dci(ngscope_tree_t* q, int format_idx, int loc_idx, float decode_prob, float corr,  
 									srsran_dci_dl_t* dci_dl,
 									srsran_pdsch_grant_t* dci_dl_grant, int nof_bits, float agreement, float repeat_corr, uint32_t l_crb, uint32_t rb_start){
-	srsran_ngscope_dci_into_array_dl(q->dci_array, format_idx, loc_idx, q->dci_location[loc_idx], decode_prob, corr,  dci_dl, dci_dl_grant, nof_bits, agreement, repeat_corr, l_crb, rb_start);
+	srsran_ngscope_dci_into_array_dl(q->dci_array, format_idx, loc_idx, q->dci_location[loc_idx], decode_prob, corr,  dci_dl, dci_dl_grant);
 	return 0;
 }
 
@@ -588,6 +588,6 @@ int srsran_ngscope_tree_put_dl_dci(ngscope_tree_t* q, int format_idx, int loc_id
 int srsran_ngscope_tree_put_ul_dci(ngscope_tree_t* q, int format_idx, int loc_idx, float decode_prob, float corr,  
 									srsran_dci_ul_t* 		dci_ul,
 									srsran_pusch_grant_t* 	dci_ul_grant, int nof_bits, float agreement, float repeat_corr){
-	srsran_ngscope_dci_into_array_ul(q->dci_array, format_idx, loc_idx, q->dci_location[loc_idx], decode_prob, corr, dci_ul, dci_ul_grant, nof_bits, agreement, repeat_corr);
+	srsran_ngscope_dci_into_array_ul(q->dci_array, format_idx, loc_idx, q->dci_location[loc_idx], decode_prob, corr, dci_ul, dci_ul_grant);
 	return 0;
 }

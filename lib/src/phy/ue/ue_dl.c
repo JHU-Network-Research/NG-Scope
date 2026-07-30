@@ -407,15 +407,17 @@ static bool find_dci(srsran_dci_msg_t* dci_msg, uint32_t nof_dci_msg, srsran_dci
 
   return found;
 }
-
+// JH modified for proper L checking?
 static bool dci_location_is_allocated(srsran_ue_dl_t* q, srsran_dci_location_t new_loc)
 {
   for (uint32_t i = 0; i < q->nof_allocated_locations; i++) {
-    uint32_t L    = q->allocated_locations[i].L;
+    uint32_t L    = 1 << q->allocated_locations[i].L;
+    uint32_t new_L = 1 << new_loc.L;
     uint32_t ncce = q->allocated_locations[i].ncce;
+    // fprintf(stderr, "Checking [ncce=%d,L=%d] against allocated location [ncce=%d,L=%d]\n", new_loc.ncce, new_L, ncce, L);
     if ((ncce <= new_loc.ncce && new_loc.ncce < ncce + L) || // if new location starts in within an existing allocation
         (new_loc.ncce <= ncce &&
-         ncce < new_loc.ncce + new_loc.L)) { // or an existing allocation starts within the new location
+         ncce < new_loc.ncce + new_L)) { // or an existing allocation starts within the new location
       return true;
     }
   }
@@ -509,7 +511,7 @@ static int dci_blind_search(srsran_ue_dl_t*     q,
             /* Check if the DCI is duplicated */
           } else if (!find_dci(dci_msg, (uint32_t)nof_dci, &dci_msg[nof_dci]) &&
                      !find_dci(q->pending_ul_dci_msg, q->pending_ul_dci_count, &dci_msg[nof_dci])) {
-            // Save message and continue with next location
+            // Save message and continue with next location 
             if (q->nof_allocated_locations < SRSRAN_MAX_DCI_MSG) {
               q->allocated_locations[q->nof_allocated_locations] = dci_msg[nof_dci].location;
               q->nof_allocated_locations++;
@@ -659,9 +661,7 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         dci_msg[nof_dci].rnti     = 0;
 
         float decode_prob = 0;
-        float match_agree = 0;
-        float repeat_corr = 0;
-        if (srsran_pdcch_decode_msg_jh(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob, &match_agree, &repeat_corr)) {
+        if (srsran_pdcch_decode_msg_yx(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob)) {
           ERROR("Error decoding DCI msg");
           return SRSRAN_ERROR;
         }else{
@@ -709,8 +709,6 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         // );
 
       	dci_msg[nof_dci].decode_prob = decode_prob;
-        dci_msg[nof_dci].agreement = match_agree;
-        dci_msg[nof_dci].repeat_corr = repeat_corr;
         // Check if RNTI is matched
         //if ((dci_msg[nof_dci].nof_bits > 0) && decode_prob > 50 ) {
         if ((dci_msg[nof_dci].nof_bits > 0) ) {
@@ -744,9 +742,14 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
 
           // Skip candidate if the threshold is not reached
           // 0.5 is set from pdcch_test
-          if (!isnormal(corr) || corr < 0.5f) {
+
+          // JH CORR_FILTER
+          if (!isnormal(corr) || corr <= 0.5f) {
             //printf("Corr skip!\n");
-            //continue;
+            if (debug)
+              printf("DEBUG: Skipping message at TTI=%d, format=%s, ncce=%d, L=%d, rnti=%d, because corr=%.3f (< 0.5)\n", 
+            sf->tti, srsran_dci_format_string(search_space->formats[f]), search_space->loc[l].ncce, search_space->loc[l].L, dci_msg[nof_dci].rnti, corr);
+            continue;
           }
 
           // When searching for format 1A, we also need to consider format 0         

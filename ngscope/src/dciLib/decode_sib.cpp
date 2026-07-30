@@ -163,6 +163,9 @@ srsran_dci_location_t *sib_loc
     srsran_dci_dl_info(&dci_dl[0], str, 512);
     memcpy(sib_loc, &dci_dl[0].location, sizeof(srsran_dci_location_t)); // copy location 
 
+    if (debug)
+    fprintf(stdout,"SIB: DECODED SIB1: tti=%d, rnti=%d, %s\n", sf->tti, dci_dl[0].rnti, str);
+
     // Convert DCI message to DL grant
     if (srsran_ue_dl_dci_to_pdsch_grant(q, sf, cfg, &dci_dl[0], &pdsch_cfg->grant)) {
       if (debug)

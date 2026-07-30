@@ -109,8 +109,8 @@ srsran_pdcch_decode_msg(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cf
 SRSRAN_API int
 srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob);
 
-SRSRAN_API int
-srsran_pdcch_decode_msg_jh(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob, float* agreement, float* repeat);
+// SRSRAN_API int
+// srsran_pdcch_decode_msg_jh(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob, float* agreement, float* repeat);
 
 
 /**
@@ -128,7 +128,7 @@ SRSRAN_API int
 srsran_pdcch_dci_encode(srsran_pdcch_t* q, uint8_t* data, uint8_t* e, uint32_t nof_bits, uint32_t E, uint16_t rnti);
 
 SRSRAN_API int
-srsran_pdcch_dci_decode_yx(srsran_pdcch_t* q, float* e, uint8_t* data, uint32_t E, uint32_t nof_bits, uint16_t* crc, float* prob, float* agreement);
+srsran_pdcch_dci_decode_yx(srsran_pdcch_t* q, float* e, uint8_t* data, uint32_t E, uint32_t nof_bits, uint16_t* crc, float* prob);
 
 
 SRSRAN_API void

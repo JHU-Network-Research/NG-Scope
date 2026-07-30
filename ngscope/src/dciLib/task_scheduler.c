@@ -580,7 +580,7 @@ void* task_scheduler_thread(void* p){
     // JH open log file
 	FILE *decodelog;
   	decodelog=fopen("dci-decode-debug.csv","w");
-  	fprintf(decodelog,"timestamp,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,nof_bits,K_w,agreement,repeat_corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2,hard_fail,weight\n");
+  	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2\n");
 	fclose(decodelog);
 
 
@@ -620,6 +620,9 @@ void* task_scheduler_thread(void* p){
         data[i] = srsran_vec_u8_malloc(2000 * 8);
     }
 
+    FILE*       timelog = fopen("collection_times.csv","w+");
+    fprintf(timelog, "collection_time,clock_time\n");
+
 	//uint64_t t1=0, t2=0, t3=0;
 	//uint64_t t1_sf_idx =0, t2_sf_idx=0;
     while(!go_exit && (sf_cnt < task_scheduler.prog_args.nof_subframes || task_scheduler.prog_args.nof_subframes == -1)) {
@@ -642,8 +645,11 @@ void* task_scheduler_thread(void* p){
             // get actual collection time
             srsran_timestamp_t ts;
             srsran_ue_sync_get_last_timestamp(&task_scheduler.ue_sync, &ts);
-            uint64_t collection_time = (uint64_t)((ts->frac_secs + ts->full_secs)*1e6);
-            printf("DEBUG: retrieved collection time: %ld\n", collection_time);
+            uint64_t collection_time = (uint64_t)((ts.frac_secs + ts.full_secs)*1e6);
+            uint64_t clock_time = timestamp_us();
+            fprintf(timelog,"%ld,%ld\n",collection_time,clock_time);
+            if (debug)
+                printf("DEBUG: retrieved collection time: %ld\n", collection_time);
 
         	//t2_sf_idx = timestamp_us();        
             //printf("Get %d-th subframe TTI:%d \n", sf_idx, sf_idx+ sfn*10);
