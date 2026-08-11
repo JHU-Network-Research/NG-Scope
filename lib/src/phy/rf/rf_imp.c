@@ -40,8 +40,10 @@ int rf_get_available_devices(char** devnames, int max_strlen)
 int srsran_rf_set_rx_gain_th(srsran_rf_t* rf, double gain)
 {
   pthread_mutex_lock(&rf->mutex);
+  fprintf(stdout, "[AGC] current gain=%.02f, attempting to set gain=%.02f\n", rf->cur_rx_gain, gain);
   if (gain > rf->cur_rx_gain + 2 || gain < rf->cur_rx_gain - 2) {
     rf->new_rx_gain = gain;
+    fprintf(stdout, "[AGC] Successfully set gain to %.02f\n", gain);
     pthread_cond_signal(&rf->cond);
   }
   pthread_mutex_unlock(&rf->mutex);

@@ -202,10 +202,10 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
         }
     }
     // Init the structure
-    if (srsran_ue_sync_init_multi_decim(ue_sync,
+    if (srsran_ue_sync_init_multi_decim_agc(ue_sync,
                                         cell->nof_prb,
                                         cell->id == 1000,
-                                        ngscope_recv_samples_wrapper, // Mmodified to record samples
+                                        ngscope_recv_samples_wrapper_agc, // Mmodified to record samples
                                         prog_args.rf_nof_rx_ant,
                                         (void*)rf,
                                         decimate)) {
@@ -228,6 +228,7 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
     if (mode != REPLAY){
         if (prog_args.rf_gain < 0) {
             srsran_rf_info_t* rf_info = srsran_rf_get_info(rf);
+            fprintf(stdout, "[AGC] Starting AGC: min_rx_gain=%.02f, max_rx_gain=%.02f, init_agc=%.02f\n",rf_info->min_rx_gain, rf_info->max_rx_gain, cell_detect_config->init_agc);
             srsran_ue_sync_start_agc(ue_sync,
                                 srsran_rf_set_rx_gain_th_wrapper_,
                                 rf_info->min_rx_gain,
