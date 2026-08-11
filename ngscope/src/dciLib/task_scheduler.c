@@ -205,6 +205,7 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
     if (srsran_ue_sync_init_multi_decim_agc(ue_sync,
                                         cell->nof_prb,
                                         cell->id == 1000,
+                                        ngscope_recv_samples_wrapper,
                                         ngscope_recv_samples_wrapper_agc, // Mmodified to record samples
                                         prog_args.rf_nof_rx_ant,
                                         (void*)rf,

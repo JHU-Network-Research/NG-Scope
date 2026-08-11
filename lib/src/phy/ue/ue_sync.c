@@ -204,13 +204,14 @@ int srsran_ue_sync_init_multi_decim_agc(
     srsran_ue_sync_t* q,
     uint32_t          max_prb,
     bool              search_cell,
+    int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
     int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*, srsran_ue_sync_state_t),
     uint32_t nof_rx_antennas,
     void*    stream_handler,
     int      decimate)
 {
   return srsran_ue_sync_init_multi_decim_mode_agc(
-      q, max_prb, search_cell, recv_callback_agc, nof_rx_antennas, stream_handler, 1, SYNC_MODE_PSS);
+      q, max_prb, search_cell, recv_callback, recv_callback_agc, nof_rx_antennas, stream_handler, 1, SYNC_MODE_PSS);
 }
 
 int srsran_ue_sync_init_multi_decim_mode(
@@ -325,6 +326,7 @@ int srsran_ue_sync_init_multi_decim_mode_agc(
     srsran_ue_sync_t* q,
     uint32_t          max_prb,
     bool              search_cell,
+    int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
     int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*, srsran_ue_sync_state_t),
     uint32_t              nof_rx_antennas,
     void*                 stream_handler,
@@ -340,7 +342,7 @@ int srsran_ue_sync_init_multi_decim_mode_agc(
     q->decimate                     = decimate;
     q->mode                         = mode;
     q->stream                       = stream_handler;
-    // q->recv_callback                = recv_callback;
+    q->recv_callback                = recv_callback;
     q->recv_callback_agc            = recv_callback_agc;
     q->nof_rx_antennas              = nof_rx_antennas;
     q->fft_size                     = srsran_symbol_sz(max_prb);
@@ -843,17 +845,30 @@ static int receive_samples(srsran_ue_sync_t* q, cf_t* input_buffer[SRSRAN_MAX_CH
     ptr[i] = &input_buffer[i][q->next_rf_sample_offset];
   }
   // srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
-  if (q->recv_callback){
-    fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
-    if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
-      return SRSRAN_ERROR;
-    }
-  } else {
+  
+  if (q->do_agc && q->state == SF_FIND){
     fprintf(stderr, "[AGC] USING AGC CALLBACK\n");
     if (q->recv_callback_agc(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp, &q->agc, q->state) < 0) {
       return SRSRAN_ERROR;
     }
+  }else{
+    fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
+    if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
+      return SRSRAN_ERROR;
+    }
   }
+  
+  // if (q->recv_callback){
+  //   fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
+  //   if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
+  //     return SRSRAN_ERROR;
+  //   }
+  // } else {
+  //   fprintf(stderr, "[AGC] USING AGC CALLBACK\n");
+  //   if (q->recv_callback_agc(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp, &q->agc, q->state) < 0) {
+  //     return SRSRAN_ERROR;
+  //   }
+  // }
 
   ///< reset time offset
   q->next_rf_sample_offset = 0;
