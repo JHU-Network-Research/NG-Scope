@@ -216,6 +216,8 @@ static inline void agc_run_state_hold(srsran_agc_t* q)
  */
 void srsran_agc_process(srsran_agc_t* q, cf_t* signal, uint32_t len)
 {
+
+  // fprintf(stdout, "[AGC] Applying gain of %.02f to sample\n", q->gain_db);
   // Apply current gain to input signal
   if (!q->uhd_handler) {
     srsran_vec_sc_prod_cfc(signal, srsran_convert_dB_to_amplitude(q->gain_db), signal, len);

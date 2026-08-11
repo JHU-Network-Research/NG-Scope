@@ -90,7 +90,7 @@ typedef struct SRSRAN_API {
   void *stream; 
   void *stream_single;
   int (*recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*);
-  int (*recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*, srsran_ue_sync_state_t);
+  int (*recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*);
   int (*recv_callback_single)(void*, void*, uint32_t, srsran_timestamp_t*);
   srsran_timestamp_t last_timestamp;
 
@@ -178,7 +178,7 @@ srsran_ue_sync_init_multi_decim_agc(srsran_ue_sync_t* q,
                                 uint32_t          max_prb,
                                 bool              search_cell,
                                 int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
-                                int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t *agc, srsran_ue_sync_state_t state),
+                                int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t *agc),
                                 uint32_t nof_rx_antennas,
                                 void*    stream_handler,
                                 int      decimate);
@@ -198,7 +198,7 @@ SRSRAN_API int srsran_ue_sync_init_multi_decim_mode_agc(
     uint32_t          max_prb,
     bool              search_cell,
     int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
-    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t *agc, srsran_ue_sync_state_t state),
+    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t *agc),
     uint32_t              nof_rx_antennas,
     void*                 stream_handler,
     int                   decimate,

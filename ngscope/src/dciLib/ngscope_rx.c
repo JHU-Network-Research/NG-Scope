@@ -89,7 +89,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         return 0;
     }
     
-    fprintf(stdout, "[AGC] retrieving normal sample\n");
+    // fprintf(stdout, "[AGC] retrieving normal sample\n");
     
     DEBUG(" ----  Receive %d samples  ----", nsamples);
     void* ptr[SRSRAN_MAX_PORTS];
@@ -256,7 +256,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
     return n;
 }
 
-int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t, srsran_agc_t *agc, srsran_ue_sync_state_t state){
+int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t, srsran_agc_t *agc){
 
     // int nof_channels = 1;
     if (debug)
@@ -267,7 +267,7 @@ int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uin
         return 0;
     }
 
-    fprintf(stdout, "[AGC] retrieving AGC sample\n");
+    // fprintf(stdout, "[AGC] retrieving AGC sample\n");
     
     
     DEBUG(" ----  Receive %d samples  ----", nsamples);
@@ -308,11 +308,11 @@ int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uin
 
 
             cf_t *agc_buf = (cf_t*) malloc(sizeof(cf_t)*n);
-            if (agc && state == SF_FIND){
+            if (agc){
                 // fprintf(stdout, "[AGC] Applying agc to samples at TTI=%d%d, current_gain=%.02f!\n", q->frame_number, q->sf_idx, q->agc.gain_db);
-                fprintf(stdout, "[AGC] applying agc to recorded sample\n");
+                // fprintf(stdout, "[AGC 3] applying agc to recorded sample\n");
                 srsran_agc_process(agc, agc_buf, n);
-                fprintf(stdout, "[AGC] Done applying agc to recorded sample\n");
+                // fprintf(stdout, "[AGC] Done applying agc to recorded sample\n");
             }
 
 

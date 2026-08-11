@@ -205,7 +205,7 @@ int srsran_ue_sync_init_multi_decim_agc(
     uint32_t          max_prb,
     bool              search_cell,
     int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
-    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*, srsran_ue_sync_state_t),
+    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*),
     uint32_t nof_rx_antennas,
     void*    stream_handler,
     int      decimate)
@@ -327,7 +327,7 @@ int srsran_ue_sync_init_multi_decim_mode_agc(
     uint32_t          max_prb,
     bool              search_cell,
     int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
-    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*, srsran_ue_sync_state_t),
+    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*),
     uint32_t              nof_rx_antennas,
     void*                 stream_handler,
     int                   decimate,
@@ -846,13 +846,20 @@ static int receive_samples(srsran_ue_sync_t* q, cf_t* input_buffer[SRSRAN_MAX_CH
   }
   // srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
   
-  if (q->do_agc && q->state == SF_FIND){
-    fprintf(stderr, "[AGC] USING AGC CALLBACK\n");
-    if (q->recv_callback_agc(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp, &q->agc, q->state) < 0) {
+  bool do_agc = q->recv_callback_agc &&  q->do_agc && 
+    ((q->state == SF_FIND) || 
+      ((q->mode == SYNC_MODE_PSS) && 
+      ((q->sfind.frame_type == SRSRAN_FDD && (q->sf_idx == 0 || q->sf_idx == 5)) || (q->sfind.frame_type == SRSRAN_TDD && (q->sf_idx == 1 || q->sf_idx == 6))) && 
+      (q->do_agc && (q->agc_period == 0 || (q->agc_period && (q->frame_total_cnt % q->agc_period) == 0)))
+    ));
+
+  if (do_agc){
+    // fprintf(stderr, "[AGC] USING AGC CALLBACK\n");
+    if (q->recv_callback_agc(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp, &q->agc) < 0) {
       return SRSRAN_ERROR;
     }
   }else{
-    fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
+    // fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
     if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
       return SRSRAN_ERROR;
     }
@@ -916,7 +923,7 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
       INFO("Reading %d samples. sf_idx = %d", q->sf_len, q->sf_idx);
       ret = 1;
     } else {
-      fprintf(stdout, "[AGC] Retrieving samples at TTI=%d%d\n", q->frame_number, q->sf_idx);
+      // fprintf(stdout, "[AGC] Retrieving samples at TTI=%d%d\n", q->frame_number, q->sf_idx);
       if (receive_samples(q, input_buffer, max_num_samples)) {
         ERROR("Error receiving samples");
         return SRSRAN_ERROR;
@@ -942,7 +949,7 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
           }
 
           if (q->do_agc) {
-            fprintf(stdout, "[AGC] Applying agc to samples at TTI=%d%d, current_gain=%.02f!\n", q->frame_number, q->sf_idx, q->agc.gain_db);
+            // fprintf(stdout, "[AGC 1] Applying agc to samples at frame number=%d, sf_idx=%d, current_gain=%.02f!\n", q->frame_number, q->sf_idx, q->agc.gain_db);
             srsran_agc_process(&q->agc, input_buffer[0], q->sf_len);
           }
 
@@ -1027,6 +1034,7 @@ int srsran_ue_sync_run_track_pss_mode(srsran_ue_sync_t* q, cf_t* input_buffer[SR
       (q->sfind.frame_type == SRSRAN_TDD && (q->sf_idx == 1 || q->sf_idx == 6))) {
     // Process AGC every period
     if (q->do_agc && (q->agc_period == 0 || (q->agc_period && (q->frame_total_cnt % q->agc_period) == 0))) {
+      // fprintf(stdout, "[AGC 2] Applying agc to samples at frame number=%d, sf_idx=%d, current_gain=%.02f!\n", q->frame_number, q->sf_idx, q->agc.gain_db);
       srsran_agc_process(&q->agc, input_buffer[0], q->sf_len);
     }
 

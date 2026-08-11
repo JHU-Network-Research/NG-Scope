@@ -27,7 +27,7 @@ typedef struct {
 bool init_record(const char* path, uint32_t buf_size_gb);
 bool init_replay(const char* path);
 int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t);
-int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t, srsran_agc_t* agc, srsran_ue_sync_state_t state);
+int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t, srsran_agc_t* agc);
 
 // #define ngscope_recv_samples_wrapper(h, data_, nsamples, t) _ngscope_recv_samples_wrapper(__func__, h, data_, nsamples, t)
 
