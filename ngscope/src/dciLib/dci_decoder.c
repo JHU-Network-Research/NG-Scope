@@ -310,27 +310,28 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	srsran_dci_location_t sib_loc;
 
-	// JH SKIP_SIB_DECODING
-//	if ((sf_idx == 5 && (sfn % 2) == 0)) {
-//		ret = 0;
-//       ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-//								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
-//		if (ret > 0) {
-//			if (debug)
-//				printf("CELL: Successfully decoded SIB1 with code %d!\n", ret);
-//			decoded_sib=true;
-//		}
-//    } else { //SIB2 
-//	    ret = 0;
-//		// have_sib2 = true;
-//        ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-//								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
-//		if (ret > 0) {
-//			if (debug)
-//				printf("CELL: Successfully decoded SIB2 with code %d!\n", ret);
-//			decoded_sib = true;
-//		}
-//    }
+	if (decode_SIB){
+		if ((sf_idx == 5 && (sfn % 2) == 0)) {
+			ret = 0;
+		ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
+			if (ret > 0) {
+				if (debug)
+					printf("CELL: Successfully decoded SIB1 with code %d!\n", ret);
+				decoded_sib=true;
+			}
+		} else { //SIB2 
+				ret = 0;
+				// have_sib2 = true;
+			ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+										&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
+				if (ret > 0) {
+					if (debug)
+						printf("CELL: Successfully decoded SIB2 with code %d!\n", ret);
+					decoded_sib = true;
+				}
+		}
+	}
 
 	
 	pthread_mutex_lock(&token_mutex[0]);
