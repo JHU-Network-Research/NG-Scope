@@ -178,8 +178,13 @@ int ngscope_read_config(ngscope_config_t* config, char * path)
             printf("Error: no filename provided for record/replay, exiting...\n");
             exit(0);
         }
-        
 
+        sprintf(name, "rf_config%d.decode_pdcch", i);
+        if (! config_lookup_bool(cfg, name, &config->rf_config[i].decode_pdcch)){
+            printf("Debug not specified, defaulting to false\n");
+            config->rf_config[i].decode_pdcch = true;
+        }
+    
     }
 
 	if(containsDuplicate(freq_vec, config->nof_rf_dev)){

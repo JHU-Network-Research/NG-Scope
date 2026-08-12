@@ -19,6 +19,7 @@ typedef struct{
     const char *        rr_fname; // record/replay filename
     int         debug;
     int         silent;
+    int         decode_pdcch;
 }rf_dev_config_t;
 
 typedef struct{

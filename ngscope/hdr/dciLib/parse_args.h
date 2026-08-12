@@ -32,6 +32,7 @@ typedef struct {
   int      mode;
   bool     debug;
   bool     silent;
+  bool     decode_pdcch;
   char*    input_file_name;
   char*    output_file_name;
   int      file_offset_time;

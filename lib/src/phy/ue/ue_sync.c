@@ -945,19 +945,19 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
           // Run mode-specific find operation
           if (q->mode == SYNC_MODE_PSS) {
             ret = srsran_ue_sync_run_find_pss_mode(q, input_buffer);
-            switch (ret) {
-              case SRSRAN_SYNC_NOFOUND:
-                fprintf(stdout, "SYNC NOT FOUND: ret=%d\n", ret);
-                break;
-              case SRSRAN_SYNC_FOUND_NOSPACE:
-                fprintf(stdout, "SYNC FOUND NOSPACE: ret=%d\n", ret);
-                break;
-              case SRSRAN_SYNC_ERROR: 
-                fprintf(stdout, "SYNC ERROR: ret=%d\n", ret);
-                break;
-              case SRSRAN_SYNC_FOUND:
-                break;
-            }
+            // switch (ret) {
+            //   case SRSRAN_SYNC_NOFOUND:
+            //     fprintf(stdout, "SYNC NOT FOUND: ret=%d\n", ret);
+            //     break;
+            //   case SRSRAN_SYNC_FOUND_NOSPACE:
+            //     fprintf(stdout, "SYNC FOUND NOSPACE: ret=%d\n", ret);
+            //     break;
+            //   case SRSRAN_SYNC_ERROR: 
+            //     fprintf(stdout, "SYNC ERROR: ret=%d\n", ret);
+            //     break;
+            //   case SRSRAN_SYNC_FOUND:
+            //     break;
+            // }
           } else if (q->mode == SYNC_MODE_GNSS) {
             ret = srsran_ue_sync_run_find_gnss_mode(q, input_buffer, max_num_samples);
           }
@@ -1026,8 +1026,8 @@ int srsran_ue_sync_run_find_pss_mode(srsran_ue_sync_t* q, cf_t* input_buffer[SRS
       break;
   }
 
-  printf("SYNC FIND: sf_idx=%d, ret=%d, peak_pos=%d, peak_value=%.2f, mean_cp_cfo=%.2f, mean_pss_cfo=%.2f, "
-       "total_cfo_khz=%.1f\n",
+  INFO("SYNC FIND: sf_idx=%d, ret=%d, peak_pos=%d, peak_value=%.2f, mean_cp_cfo=%.2f, mean_pss_cfo=%.2f, "
+       "total_cfo_khz=%.1f",
        q->sf_idx,
        ret,
        q->peak_idx,
