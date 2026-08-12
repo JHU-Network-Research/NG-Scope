@@ -119,7 +119,9 @@ int ngscope_main(ngscope_config_t* config)
         prog_args[i].rf_args    = (char*) malloc(100 * sizeof(char));
         strcpy(prog_args[i].rf_args, config->rf_config[i].rf_args);
         strcpy(prog_args[i].sib_logs, config->sib_logs_path);
+        printf("Starting scheduler thread %d!\n", i);
         pthread_create(&task_thd[i], NULL, task_scheduler_thread, (void*)( &prog_args[i] ));
+        printf("Scheduler thread %d started!\n", i);
     }
 
     pthread_t status_thd;

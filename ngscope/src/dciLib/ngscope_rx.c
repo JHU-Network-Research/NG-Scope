@@ -353,8 +353,8 @@ int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uin
             if (debug)
                 printf("REPLAY: replay returned %d when reading header\n", n);
             if (feof(replay_fh)){
-                if (debug)
-                    printf("REPLAY: reached end of replay file\n");
+                // if (debug)
+                printf("REPLAY: reached end of replay file\n");
                 sleep(1); // let decoding finish
                 raise(SIGINT);
                 return 0;
