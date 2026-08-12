@@ -690,9 +690,9 @@ void* task_scheduler_thread(void* p){
 			//fprintf(fd_1, "%d\t", sfn);
             /******************* END OF SFN handling *******************/
 
-          	decode_pdcch = false; 
+          	// decode_pdcch = false; 
             /***************** Tell the decoder to decode the PDCCH *********/          
-            if(decode_pdcch && prog_args){  // We only decode when we got the SFN
+            if(decode_pdcch && prog_args->decode_pdcch){  // We only decode when we got the SFN
 				if((last_tti != 10239) && (last_tti+1 != tti) && !silent){
 					printf("Last tti:%d current tti:%d\n", last_tti, tti);
 				}
