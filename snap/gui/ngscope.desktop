@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=NG-Scope
+GenericName=LTE DCI Sniffer
+Comment=Decode LTE downlink control information from a live cell
+Exec=ngscope
+Terminal=true
+Categories=Science;Network;HamRadio;
+Keywords=LTE;SDR;USRP;UHD;DCI;PDCCH;srsRAN;
+StartupNotify=false

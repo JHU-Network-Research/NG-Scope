@@ -1,0 +1,6 @@
+build/
+*.snap
+parts/
+stage/
+prime/
+.github/

@@ -1,0 +1,300 @@
+name: ngscope
+base: core22
+adopt-info: ngscope
+summary: LTE downlink control information (DCI) sniffer
+description: |
+  NG-Scope decodes the LTE downlink control channel (PDCCH) of a live cell and
+  logs the DCI messages it carries, giving per-subframe visibility into how a
+  base station schedules every UE attached to it. It is built on srsRAN and
+  drives an Ettus USRP through UHD.
+
+  Supported radios: USRP B200/B210 over USB 3.0, and USRP X300/X310/X410 over
+  Ethernet. Run `ngscope.uhd-find` to check the radio is visible before
+  anything else.
+
+  First run writes a starter configuration to
+  `~/snap/ngscope/common/config.cfg`. Edit it (at minimum `rf_freq` and
+  `rf_args`) and pass it with `-c`:
+
+      ngscope -c ~/snap/ngscope/common/config.cfg
+
+  DCI logs, decoded SIBs and the various debug text files are written relative
+  to the current directory, so run it from somewhere under your home
+  directory. USB radios need one extra step after install:
+
+      sudo snap connect ngscope:raw-usb
+
+  plus a host udev rule -- see the README shipped at
+  `/snap/ngscope/current/etc/udev/rules.d/uhd-usrp.rules`.
+
+license: AGPL-3.0-or-later
+source-code: https://github.com/PrincetonUniversity/NG-Scope
+issues: https://github.com/PrincetonUniversity/NG-Scope/issues
+website: https://paws.princeton.edu/
+
+confinement: strict
+# `devel` would permanently bar a later store release; keep this stable so the
+# same artifact can be uploaded unchanged if auto-updates are wanted.
+grade: stable
+
+architectures:
+  - build-on: amd64
+    build-for: amd64
+# amd64 only, deliberately. The ISA baseline below (-DGCC_ARCH=x86-64-v3) is
+# x86-specific; an arm64 build would need -DGCC_ARCH=armv8-a instead, and
+# srsRAN's NEON paths are far less exercised than its AVX2 paths.
+
+# UHD comes from the jammy archive (libuhd-dev + uhd-host, 4.1.0.5).
+#
+# Deliberately NOT ppa:ettusresearch/uhd. That PPA publishes only the newest
+# libuhd-dev (4.10.0.0) -- no versioned dev packages -- and UHD's headers became
+# C++17-only somewhere after 4.6: uhd/utils/cast.hpp uses std::is_same_v and
+# `if constexpr`, and uhd/rfnoc/actions.hpp uses std::optional. srsRAN pins
+# -std=c++14 at CMakeLists.txt:392, so lib/src/phy/rf/rf_uhd_imp.cc fails to
+# compile against those headers. The archive's 4.1.0.5 is C++14-clean.
+
+apps:
+  ngscope:
+    command: bin/ngscope-launch
+    extensions: [kde-neon]
+    # kde-neon already contributes desktop, desktop-legacy, opengl, wayland,
+    # x11, unity7, audio-playback, network and network-bind, plus the
+    # snap/command-chain/desktop-launch wrapper. Only the rest is listed here.
+    plugs:
+      # Auto-connected on install:
+      #   home            - DCI logs / decoded_sibs / rsrp.txt land in the CWD
+      # Needs `snap connect`:
+      #   raw-usb         - B200/B210 over USB 3.0
+      #   removable-media - only to capture onto an external drive
+      - home
+      - raw-usb
+      - hardware-observe
+      - removable-media
+
+  remote-client:
+    command: usr/bin/remote_client
+    plugs: [home, network, network-bind]
+    environment:
+      LD_LIBRARY_PATH: $SNAP/usr/lib:$SNAP/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+
+  remote-server:
+    command: usr/bin/remote_server
+    plugs: [home, network, network-bind]
+    environment:
+      LD_LIBRARY_PATH: $SNAP/usr/lib:$SNAP/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+
+  # Diagnostics: run this first when ngscope cannot open the radio.
+  uhd-find:
+    command: bin/uhd-find-launch
+    plugs: [network, raw-usb, hardware-observe]
+
+  # There is deliberately no `uhd-images` app. uhd_images_downloader is a
+  # Python script, and snapcraft stages uhd-host's Python *libraries*
+  # (libpython3.10, python3-requests, python3-numpy) without the `python3`
+  # interpreter itself, so it cannot run inside the snap. Images beyond the
+  # bundled b2xx set are added by running uhd_images_downloader on the host
+  # and copying the result into ~/snap/ngscope/common/uhd-images -- see
+  # SNAP.md. uhd_setup_images_dir() in bin/uhd-env.sh prefers that directory
+  # over the bundled one as soon as it is non-empty.
+
+parts:
+  # --------------------------------------------------------------------------
+  # srsGUI: the plotting library ngscope links for its live constellation and
+  # channel-response windows. It is not in the Ubuntu archive, which is why
+  # the upstream build instructions have you `sudo make install` it by hand.
+  # --------------------------------------------------------------------------
+  srsgui:
+    plugin: cmake
+    source: https://github.com/srsRAN/srsGUI.git
+    source-type: git
+    # Qt5 headers and libs come from the kde-neon SDK snaps (kde-qt5-core22-sdk,
+    # Qt 5.15.15). The extension already puts them on CMAKE_PREFIX_PATH ahead of
+    # /usr for every part, so find_package(Qt5 COMPONENTS Widgets) resolves
+    # there. Do NOT add qtbase5-dev as a build-package -- mixing archive Qt5
+    # with the extension's Qt5 is the classic way to get link-time grief.
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      # Force a plain lib/ dir. Left to GNUInstallDirs this lands in
+      # lib/x86_64-linux-gnu, which NG-Scope's FindSRSGUI.cmake does not look
+      # in -- it only hints at $SRSGUI_DIR/lib (cmake/modules/FindSRSGUI.cmake:47).
+      - -DCMAKE_INSTALL_LIBDIR=lib
+    build-packages:
+      # srsGUI: FIND_PACKAGE(Boost 1.37 REQUIRED thread unit_test_framework system)
+      - libboost-thread-dev
+      - libboost-test-dev
+      - libboost-system-dev
+      # Qwt 6 is required (srsGUI asserts QWT_MAJOR_VERSION EQUAL 6).
+      - libqwt-qt5-dev
+    stage-packages:
+      - libqwt-qt5-6
+
+  # --------------------------------------------------------------------------
+  # NG-Scope itself (a fork of srsRAN 23.04).
+  # --------------------------------------------------------------------------
+  ngscope:
+    after: [srsgui]
+    plugin: cmake
+    source: .
+    source-type: local
+    override-pull: |
+      craftctl default
+      # A stale local ./build tree gets copied in with the source and is
+      # megabytes of dead weight; the real build happens out-of-tree anyway
+      # (CMakeLists.txt:25-27 hard-blocks in-tree builds).
+      rm -rf "$CRAFT_PART_SRC/build"
+      # Derive the version from the real repo, not the copy.
+      cd "$CRAFT_PROJECT_DIR"
+      if git describe --tags >/dev/null 2>&1; then
+        VERSION="$(git describe --tags --dirty)"
+      elif git rev-parse --short HEAD >/dev/null 2>&1; then
+        VERSION="23.04.0+git.$(git rev-parse --short HEAD)"
+      else
+        VERSION="23.04.0"
+      fi
+      craftctl set version="$VERSION"
+    build-environment:
+      # FindSRSGUI.cmake hints at $ENV{SRSGUI_DIR}/include and
+      # $ENV{SRSGUI_DIR}/lib -- exactly where the srsgui part staged itself.
+      - SRSGUI_DIR: $CRAFT_STAGE/usr
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_LIBDIR=lib
+
+      # --- ISA baseline -----------------------------------------------------
+      # GCC_ARCH defaults to `native` (CMakeLists.txt:113-120) and FindSSE.cmake
+      # decides HAVE_AVX2/HAVE_AVX512 with check_c_source_runs, i.e. from the
+      # *builder's* CPU. Left alone, a snap built on an AVX-512 machine
+      # SIGILLs everywhere else.
+      #
+      # Do NOT "fix" this with -DAUTO_DETECT_ISA=OFF: that leaves HAVE_SSE
+      # unset and trips `message(FATAL_ERROR "no SIMD instructions found")`
+      # at CMakeLists.txt:503-505.
+      #
+      # x86-64-v3 == SSE4.2 + AVX + AVX2 + FMA + BMI: Haswell (2013) and newer.
+      # Needs GCC 11+, and jammy ships 11.4.
+      - -DGCC_ARCH=x86-64-v3
+      - -DENABLE_AVX512=OFF
+
+      # --- what to build ----------------------------------------------------
+      - -DENABLE_NGSCOPE=ON
+      - -DENABLE_GUI=ON
+      - -DENABLE_UHD=ON
+      - -DENABLE_RF_PLUGINS=ON
+      # Not requested, and each one drags in another SDK library.
+      - -DENABLE_BLADERF=OFF
+      - -DENABLE_SOAPYSDR=OFF
+      - -DENABLE_ZEROMQ=OFF
+      - -DENABLE_CELLSCANNER=OFF
+      - -DENABLE_CELLINSPECTOR=OFF
+      - -DENABLE_SRSUE=OFF
+      - -DENABLE_SRSENB=OFF
+      - -DENABLE_SRSEPC=OFF
+    build-packages:
+      - git
+      - libfftw3-dev
+      - libmbedtls-dev
+      - libboost-program-options-dev
+      - libsctp-dev
+      # libconfig is an *undeclared* dependency: ngscope/src/dciLib/CMakeLists.txt:9
+      # links the bare target name `config` with no find_package to back it up,
+      # so without this the link fails with a bare `-lconfig` error.
+      - libconfig-dev
+      - libconfig++-dev
+      - libuhd-dev
+    stage-packages:
+      - libfftw3-single3
+      - libmbedcrypto7
+      - libboost-program-options1.74.0
+      - libconfig9
+      - libsctp1
+      # uhd-host pulls in libuhd as a dependency and adds uhd_find_devices and
+      # uhd_images_downloader, which back the ngscope.uhd-find and
+      # ngscope.uhd-images apps. It also drags in python3 + numpy + mako +
+      # requests (~25 MB compressed); drop it and stage libuhd4.1.0 alone for a
+      # leaner snap without those two helper apps.
+      - uhd-host
+    override-build: |
+      # Fail fast on a UHD too new for srsRAN's -std=c++14. Without this the
+      # symptom is ~300 lines of template errors out of uhd/utils/cast.hpp and
+      # uhd/rfnoc/actions.hpp, which reads like a source bug rather than a
+      # dependency-version problem.
+      #
+      # This most often fires when a build container was created while
+      # ppa:ettusresearch/uhd was still configured: apt reports libuhd-dev as
+      # "already installed" and keeps 4.10 even after the PPA is removed from
+      # this file. The fix is `snapcraft clean`, not an edit here.
+      UHD_VERSION="$(pkg-config --modversion uhd 2>/dev/null || echo 0)"
+      UHD_MINOR="$(echo "$UHD_VERSION" | cut -d. -f2)"
+      if [ "${UHD_MINOR:-0}" -ge 7 ] 2>/dev/null; then
+        echo "ERROR: found UHD $UHD_VERSION; its headers require C++17 but" >&2
+        echo "       srsRAN pins -std=c++14 (CMakeLists.txt:392)." >&2
+        echo "       Expected UHD 4.1.x from the Ubuntu 22.04 archive." >&2
+        echo "       Run 'snapcraft clean' to rebuild the container without" >&2
+        echo "       any stale ppa:ettusresearch/uhd packages." >&2
+        exit 1
+      fi
+      craftctl default
+      # Upstream builds these two but never installs them
+      # (ngscope/src/CMakeLists.txt:38-39 have no matching install() rule).
+      install -Dm755 "$CRAFT_PART_BUILD/ngscope/src/remote_client" \
+                     "$CRAFT_PART_INSTALL/usr/bin/remote_client"
+      install -Dm755 "$CRAFT_PART_BUILD/ngscope/src/remote_server" \
+                     "$CRAFT_PART_INSTALL/usr/bin/remote_server"
+      # srsran_install_configs.sh writes to /etc/srsran or $HOME/.config/srsran
+      # and applies to srsue/srsenb/srsepc, none of which are built here.
+      # It cannot work under confinement; drop it rather than ship a trap.
+      rm -f "$CRAFT_PART_INSTALL/usr/bin/srsran_install_configs.sh"
+    prime:
+      # Headers and static libs are build artefacts; the snap only needs the
+      # executables, libsrsran_rf.so and its dlopen'ed RF plugins.
+      - -usr/include
+      - -usr/lib/*.a
+      - -usr/lib/pkgconfig
+      # uhd_images_downloader cannot run here: snapcraft stages uhd-host's
+      # Python *libraries* but not the `python3` interpreter. Drop the script
+      # so it is not shipped as a trap.
+      - -usr/bin/uhd_images_downloader
+      - -usr/lib/uhd/utils
+      #
+      # DO NOT also prune libpython3.10 or /usr/lib/python3.10. Jammy builds
+      # UHD with the Python API, so libuhd.so.4.1.0 has a NEEDED entry for
+      # libpython3.10.so.1.0. Removing it breaks *everything* that touches
+      # libuhd -- uhd_find_devices dies with "error while loading shared
+      # libraries", and ngscope's RF plugin fails to dlopen. Costs ~9 MB.
+
+  # --------------------------------------------------------------------------
+  # UHD FPGA/firmware images.
+  #
+  # The uhd-host deb ships the *downloader*, not the images. A B200/B210
+  # cannot even enumerate without its FPGA image, so bundle that set (14 MB).
+  # x3xx (123 MB) and x4xx (99 MB) are left to `ngscope.uhd-images` on demand,
+  # since neither needs host-side images for normal streaming -- only for
+  # uhd_image_loader.
+  # --------------------------------------------------------------------------
+  uhd-images:
+    plugin: nil
+    build-packages:
+      - uhd-host
+    override-build: |
+      mkdir -p "$CRAFT_PART_INSTALL/usr/share/uhd/images"
+      uhd_images_downloader \
+        --types b2xx \
+        --install-location "$CRAFT_PART_INSTALL/usr/share/uhd/images"
+      # Fail loudly rather than shipping a snap in which a B210 silently
+      # refuses to enumerate.
+      test -f "$CRAFT_PART_INSTALL/usr/share/uhd/images/usrp_b210_fpga.bin"
+
+  # --------------------------------------------------------------------------
+  # Launchers, seed config and the host udev rule.
+  # --------------------------------------------------------------------------
+  launchers:
+    plugin: dump
+    source: snap/local
+    organize:
+      ngscope-launch: bin/ngscope-launch
+      uhd-find-launch: bin/uhd-find-launch
+      uhd-env.sh: bin/uhd-env.sh
+      config.cfg: etc/ngscope/config.cfg
+      uhd-usrp.rules: etc/udev/rules.d/uhd-usrp.rules

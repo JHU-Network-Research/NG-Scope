@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# Wrapper for uhd_find_devices -- the first thing to run when ngscope cannot
+# open the radio. It isolates "can UHD see the hardware at all?" from "is the
+# NG-Scope build wrong?".
+#
+# If this finds nothing:
+#   USB (B200/B210/B2xxmini) -> check `snap connect ngscope:raw-usb` and the
+#                       host udev rule (see SNAP.md); try
+#                       `sudo snap run ngscope.uhd-find`
+#   Ethernet (X3x0/X410) -> check the interface address and `ping` the device;
+#                       the `network` interface is auto-connected, so a failure
+#                       here is almost always host network configuration
+#
+set -e
+
+. "$SNAP/bin/uhd-env.sh"
+uhd_setup_libs
+uhd_setup_images_dir
+
+exec "$SNAP/usr/bin/uhd_find_devices" "$@"

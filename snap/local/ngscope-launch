@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Launcher for the ngscope app inside the snap.
+#
+# Responsibilities:
+#   - make libsrsran_rf.so and its dlopen'ed RF plugins resolvable
+#   - give UHD a single writable images directory it can manage
+#   - seed a starter config.cfg the user can edit
+#   - keep the process in a directory it is allowed to write to
+#
+set -e
+
+# --- shared libraries and UHD images ----------------------------------------
+. "$SNAP/bin/uhd-env.sh"
+uhd_setup_libs
+uhd_setup_images_dir
+
+# --- starter config ---------------------------------------------------------
+SEED_CONFIG="$SNAP_USER_COMMON/config.cfg"
+if [ ! -f "$SEED_CONFIG" ] && [ -f "$SNAP/etc/ngscope/config.cfg" ]; then
+    cp "$SNAP/etc/ngscope/config.cfg" "$SEED_CONFIG"
+    echo "ngscope: wrote a starter config to $SEED_CONFIG" >&2
+fi
+
+# --- working directory ------------------------------------------------------
+#
+# ngscope writes everything relative to the CWD (dci_output/, decoded_sibs,
+# rsrp.txt, cellcfg.txt ...) and shells out to `mkdir -p`. Under strict
+# confinement the CWD is only writable if it sits under $HOME (the `home`
+# interface) or on removable media. Fall back rather than failing obscurely
+# part-way through a capture.
+if [ ! -w . ]; then
+    echo "ngscope: current directory is not writable inside the snap sandbox;" >&2
+    echo "         falling back to $SNAP_USER_COMMON for output files." >&2
+    echo "         Run from a directory under \$HOME to keep output where you expect." >&2
+    cd "$SNAP_USER_COMMON"
+fi
+
+# --- argument handling ------------------------------------------------------
+#
+# -c is mandatory and has no built-in default (ngscope/src/main.c:130-133);
+# without it ngscope just prints its help. Point it at the seeded config so a
+# bare `snap run ngscope` does something useful, but never override an
+# explicit -c, and stay out of the way for -h.
+_have_c=0
+_have_h=0
+for _arg in "$@"; do
+    case "$_arg" in
+        -c) _have_c=1 ;;
+        -h) _have_h=1 ;;
+    esac
+done
+
+if [ "$_have_c" -eq 0 ] && [ "$_have_h" -eq 0 ]; then
+    echo "ngscope: no -c given, using $SEED_CONFIG" >&2
+    set -- -c "$SEED_CONFIG" "$@"
+fi
+
+exec "$SNAP/usr/bin/ngscope" "$@"
