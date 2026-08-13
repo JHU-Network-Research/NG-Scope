@@ -10,6 +10,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <sys/stat.h>
 
 #include "srsran/common/crash_handler.h"
 #include "srsran/srsran.h"
@@ -27,6 +28,7 @@
 const char* DEFAULT_CELLCFG_OUTPUT = "cell_cfg"; // global variable, default cell configuration output file
 const char* DEFAULT_SIB_OUTPUT = "decoded_sibs"; // global variable, default sib output file
 const char* DEFAULT_DCI_OUTPUT = "dci_output"; // global variable, default dci output file
+const char* DEFAULT_OUTDIR = "ngscope_out";
 
 bool go_exit = false; // global variable for signaling
 bool have_sib1 = false; // global variable for sib1 decoding
@@ -141,7 +143,7 @@ int main(int argc, char** argv)
     }
     /* Check DCI output */
     if(out_path == NULL) {
-      out_path = DEFAULT_DCI_OUTPUT;
+      out_path = DEFAULT_OUTDIR;
       printf("DCI logs folder not specified (using '%s')\n", out_path);
     } else {
       printf("DCI logs folder: %s\n", out_path);
@@ -159,8 +161,51 @@ int main(int argc, char** argv)
     /* Load the configurations */
     ngscope_read_config(&config, config_path);
     /* Set DCI logs output folder path  */
-    config.dci_logs_path = out_path;
-    config.sib_logs_path = sib_path;
+
+    char path[128];
+    char dci_out_path[256];
+    char sib_out_path[256];
+    char timestamp[32];
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);  // or gmtime(&now) for UTC
+
+    strftime(timestamp, sizeof(timestamp), "%Y_%m_%d_%H_%M_%S", tm_info);
+
+    snprintf(path, sizeof(path), "%s/%s/", out_path, timestamp);
+    snprintf(dci_out_path, sizeof(dci_out_path), "%s%s/", path, DEFAULT_DCI_OUTPUT);
+    snprintf(sib_out_path, sizeof(sib_out_path), "%s%s/", path, DEFAULT_SIB_OUTPUT);
+
+    int ret;
+    ret = mkdir(out_path, 0755);
+    if (ret < 0){
+      if (errno != EEXIST){
+        fprintf(stderr, "Error: Could not create %s\n", out_path);
+        return 0;
+      }
+    }
+
+    if (mkdir(path, 0755) < 0){
+      fprintf(stderr, "Error: Could not create %s\n", path);
+      return 0;
+    }
+
+    if (mkdir(dci_out_path, 0755) < 0){
+      fprintf(stderr, "Error: Could not create %s\n", dci_out_path);
+      return 0;
+    }
+
+    if (mkdir(sib_out_path, 0755) < 0){
+      fprintf(stderr, "Error: Could not create %s\n", sib_out_path);
+      return 0;
+    }
+
+    config.out_path = path;
+    config.dci_logs_path = dci_out_path;
+    config.sib_logs_path = sib_out_path;
+
+    fprintf(stdout,"Using DCI Path: %s\n", config.dci_logs_path);
+    fprintf(stdout,"Using SIB Path: %s\n", config.sib_logs_path);
 
     ngscope_main(&config);
     return 1;

@@ -345,10 +345,12 @@ void* cell_status_thread(void* arg){
 
 	// --> init the cell status
 	for(int i=0; i<info.nof_cell; i++){
-		dci_ring_buffer_init(&cell_status[i], info.targetRNTI, info.cell_prb[i], i, buf_size);
+		dci_ring_buffer_init(&cell_status[i], info.targetRNTI, info.cell_prb[i], i, buf_size, info.out_dir);
 	}
 
-	FILE* fd = fopen("cell_status.txt","w+");
+	char statuspath[1024];
+	sprintf(statuspath,"%scell_status.txt",info.out_dir);
+	FILE* fd = fopen(statuspath,"w+");
 	//FILE* fd_log = fopen("dci_log.txt","w+");
 	//FILE* fd_tti = fopen("tti_log.txt","w+");
 

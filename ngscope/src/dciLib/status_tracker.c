@@ -152,6 +152,7 @@ void* status_tracker_thread(void* p){
 	info.nof_cell 		= nof_dev;
 	info.remote_sock 	= status_tracker.remote_sock;
 	info.remote_enable 	= remote_enable;
+    strcpy(info.out_dir, config->out_path);
 
 	memcpy(info.cell_prb, status_tracker.cell_prb, nof_dev * sizeof(int));
     pthread_create(&cell_stat_thd, NULL, cell_status_thread, (void*)(&info));
@@ -162,7 +163,9 @@ void* status_tracker_thread(void* p){
     	pthread_create(&dci_log_thd, NULL, dci_log_thread, (void*)(&dci_log_config));
 	}
 
-	FILE* fd = fopen("status_tracker.txt","w+");
+    char trackerpath[1024];
+    sprintf(trackerpath,"%sstatus_tracker.txt",config->out_path);
+	FILE* fd = fopen(trackerpath,"w+");
 
     while(true){
         if(go_exit) break;

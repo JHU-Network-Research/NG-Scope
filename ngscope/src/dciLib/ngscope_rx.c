@@ -493,7 +493,7 @@ void flush_record(void *arg){
         while (!buf->flush && !go_exit){
             pthread_cond_wait(&buf->cond,&buf->mutex);
         }
-
+        // printf("[FLUSH] out of wait\n");
         record_ring_buffer_flush(buf);
 
         pthread_mutex_unlock(&buf->mutex);

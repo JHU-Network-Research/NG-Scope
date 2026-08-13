@@ -16,7 +16,7 @@ typedef struct{
     int         log_phich;
 
     ngscope_mode_t      mode; // operating mode (0=NORMAL, 1=RECORD, 2=REPLAY)
-    const char *        rr_fname; // record/replay filename
+    const char *        replay_fname; // record/replay filename
     int         debug;
     int         silent;
     int         decode_pdcch;
@@ -40,6 +40,7 @@ typedef struct{
 	int 				decode_SIB;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
+    const char *        out_path;
 
     dci_log_config_t    dci_log_config;
     rf_dev_config_t     rf_config[MAX_NOF_RF_DEV];

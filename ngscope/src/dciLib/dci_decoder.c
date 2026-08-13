@@ -335,7 +335,9 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	
 	pthread_mutex_lock(&token_mutex[0]);
-	FILE* rsrpoutfile = fopen("rsrp.txt", "a");
+	char rsrppath[1024];
+	sprintf(rsrppath, "%srsrp.txt", dci_decoder->prog_args.out_path);
+	FILE* rsrpoutfile = fopen(rsrppath, "a");
 	fprintf(rsrpoutfile, "reference_signal_received_power: %4fdBm\n", dci_decoder->ue_dl.chest_res.rsrp_dbm);
 	fclose(rsrpoutfile);
 	pthread_mutex_unlock(&token_mutex[0]);
@@ -410,9 +412,9 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 
 			FILE *decodelog;
-			char fname[64];
-			memset(fname,0,64);
-			snprintf(fname, sizeof(fname),"dci-decode-debug-%d.csv",decoder_idx);
+			char fname[1024];
+			memset(fname,0,1024);
+			sprintf(fname,"%sdci-decode-debug-%d.csv",dci_decoder->prog_args.out_path,decoder_idx);
 			decodelog=fopen(fname,"a"); 
 
 			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
@@ -641,8 +643,8 @@ void* dci_decoder_thread(void* p){
 	}
 #endif
 //    uint64_t t1=0, t2=0, t3=0, t4=0;  
-	char fileName[100];
-	sprintf(fileName,"decoder_%d.txt", decoder_idx);
+	char fileName[1024];
+	snprintf(fileName,sizeof(fileName),"%sdecoder_%d.txt",dci_decoder->prog_args.out_path, decoder_idx);
 	FILE* fd = fopen(fileName,"w+");
 
     printf("Decoder thread idx:%d\n\n\n",decoder_idx);

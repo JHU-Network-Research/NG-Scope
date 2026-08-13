@@ -570,20 +570,27 @@ void* task_scheduler_thread(void* p){
     } else {
         perror("Error physical resource block number!\n");
     }
+
+    char cellcfgpath[1024];
+    sprintf(cellcfgpath,"%scell_type.json", task_scheduler->prog_args.out_path);
     FILE* cellcfgfile = NULL;
-    cellcfgfile = fopen("cell_type.json", "w");
+    cellcfgfile = fopen(cellcfgpath, "w");
     fprintf(cellcfgfile,"{\n");
     fprintf(cellcfgfile,"\"frame_type\": \"%s\",\n", duplymode);
     fprintf(cellcfgfile,"\"bandwidth\": \"%d\"\n", bw);
     fprintf(cellcfgfile,"}");
     fclose(cellcfgfile);
 
-    FILE* rsrpoutfile = fopen("rsrp.txt", "w");
+    char rsrppath[1024];
+    sprintf(rsrppath, "%srsrp.txt", task_scheduler->prog_args.out_path);
+    FILE* rsrpoutfile = fopen(rsrppath, "w");
 	fclose(rsrpoutfile);
 
     // JH open log file
+    char decodepath[1024];
+    sprintf(decodepath,"%sdci-decode-debug.csv",task_scheduler->prog_args.out_path);
 	FILE *decodelog;
-  	decodelog=fopen("dci-decode-debug.csv","w");
+  	decodelog=fopen(decodepath,"w");
   	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2\n");
 	fclose(decodelog);
 
@@ -615,8 +622,9 @@ void* task_scheduler_thread(void* p){
     uint32_t    tti = 0;
     bool        decode_pdcch = false;
 	uint32_t 	sf_idx = 0;
-
-	FILE* 		fd = fopen("task_scheduler.txt","w+");
+    char tspath[1024];
+    sprintf(tspath,"%stask_scheduler.txt",task_scheduler->prog_args.out_path);
+	FILE* 		fd = fopen(tspath,"w+");
 	//FILE* 		fd_1 = fopen("sf_sfn.txt","w+");
     uint8_t* data[SRSRAN_MAX_CODEWORDS];
 	
@@ -624,10 +632,15 @@ void* task_scheduler_thread(void* p){
         data[i] = srsran_vec_u8_malloc(2000 * 8);
     }
 
-    FILE*       timelog = fopen("collection_times.csv","w+");
+    char timepath[1024];
+    sprintf(timepath, "%scollection_times.csv",task_scheduler->prog_args.out_path);
+    FILE*       timelog = fopen(timepath,"w+");
     fprintf(timelog, "collection_time,clock_time\n");
 
-    FILE*       nreadslog = fopen("file_reads.txt","w+");
+
+    char readspath[1024];
+    sprintf(readspath, "%sfile_reads.txt", task_scheduler->prog_args.out_path);
+    FILE*       nreadslog = fopen(readspath,"w+");
     int readctr = 0;
 
 	//uint64_t t1=0, t2=0, t3=0;

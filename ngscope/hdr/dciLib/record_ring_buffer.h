@@ -14,8 +14,6 @@
 
 #include "srsran/srsran.h"
 
-#define BUF_FLUSH_THRESHOLD 8*1024*1024 // flush every 8 mb
-
 typedef struct {
     FILE *fp;
     uint64_t capacity;

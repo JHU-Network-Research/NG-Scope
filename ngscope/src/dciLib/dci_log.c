@@ -604,7 +604,9 @@ void fill_dci_log_config(ngscope_dci_log_config_t* q, ngscope_config_t* config){
 	fill_file_descriptor(q->fd_dl, q->fd_ul, q->fd_phich, config);
 
 #ifdef LOG_DCI_LOGGER
-	q->fd_log_cell = fopen("dci_log_cell.txt", "w+");
+	char logcellpath[1024];
+	sprintf(logcellpath,"%sdci_log_cell.txt", config->out_path);
+	q->fd_log_cell = fopen(logcellpath, "w+");
 #endif
 
 	return;
@@ -651,13 +653,15 @@ void* dci_log_thread(void* p){
 	// --> init the CA status
 	CA_status_init(&ca_status, buf_size, dci_log_config.targetRNTI, dci_log_config.nof_cell, log_config->cell_prb);
 
-	FILE* fd = fopen("dci_log.txt", "w+");
+	char dcilogpath[1024];
+	sprintf(dcilogpath, "%sdci_log.txt",log_config->config.out_path);
+	FILE* fd = fopen(dcilogpath, "w+");
 
 	printf("\n\n\n nof_cell:%d targetRNTI:%d \n\n\n", dci_log_config.nof_cell, dci_log_config.targetRNTI);
 
 	// --> init the cell status
 	for(int i=0; i<dci_log_config.nof_cell; i++){
-		dci_ring_buffer_init(&cell_status[i], dci_log_config.targetRNTI, log_config->cell_prb[i], i, buf_size);
+		dci_ring_buffer_init(&cell_status[i], dci_log_config.targetRNTI, log_config->cell_prb[i], i, buf_size, log_config->config.out_path);
 	}
 	
 	uint64_t last_time = timestamp_ms();

@@ -27,6 +27,7 @@ typedef struct{
     int         remote_sock;
 	bool 		remote_enable;
     int         cell_prb[MAX_NOF_RF_DEV];
+    char        out_dir[512];
 }cell_status_info_t;
 
 void* cell_status_thread(void* arg);

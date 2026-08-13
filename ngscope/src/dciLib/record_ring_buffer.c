@@ -16,6 +16,7 @@
 
 extern bool debug;
 
+const uint64_t BUF_FLUSH_THRESHOLD = 2147483648; // flush every 2 GB
 
 int record_ring_buffer_init(record_ring_buffer_t *buf, uint64_t capacity, const char *path){
 
@@ -87,7 +88,7 @@ int record_ring_buffer_insert(record_ring_buffer_t *buf, void *data, size_t size
         buf->head += size;
     }
     if (debug)
-        printf("FLUSH: old buf size: %ld, wrote %ld bytes, new size: %ld, threshold: %d\n", buf->size, size, buf->size + size, BUF_FLUSH_THRESHOLD);
+        printf("FLUSH: old buf size: %ld, wrote %ld bytes, new size: %ld, threshold: %ld\n", buf->size, size, buf->size + size, BUF_FLUSH_THRESHOLD);
     buf->size += size;
 
     // if (debug)
@@ -96,7 +97,7 @@ int record_ring_buffer_insert(record_ring_buffer_t *buf, void *data, size_t size
     if (buf->size > BUF_FLUSH_THRESHOLD){
         buf->flush = true;
         if (debug)
-            printf("FLUSH: buffer size %ld over threshold %d, signaling to flush\n", buf->size, BUF_FLUSH_THRESHOLD);
+            printf("FLUSH: buffer size %ld over threshold %ld, signaling to flush\n", buf->size, BUF_FLUSH_THRESHOLD);
         pthread_cond_signal(&buf->cond);
     }
     pthread_mutex_unlock(&buf->mutex);
@@ -118,7 +119,7 @@ int record_ring_buffer_flush(record_ring_buffer_t *buf){
         return 0;
     }
 
-    int nwritten;
+    uint64_t nwritten;
     if (buf->head > buf->tail){
         if (debug)
             printf("FLUSH: flush does not wrap around\n");
@@ -143,6 +144,7 @@ int record_ring_buffer_flush(record_ring_buffer_t *buf){
         buf->tail = (n1 == first_chunk) ? n2 : buf->tail + n1;
         buf->tail %= buf->capacity;
     }
+    // printf("Wrote %ld bytes!\n", nwritten);
     fflush(buf->fp);
 
     if (buf->size < BUF_FLUSH_THRESHOLD)

@@ -108,11 +108,12 @@ int ngscope_main(ngscope_config_t* config)
 
         prog_args[i].mode          = config->rf_config[i].mode;
         if (config->rf_config[i].mode == 1){
-            prog_args[i].output_file_name      = (char*) malloc(100 * sizeof(char));
-            strcpy(prog_args[i].output_file_name, config->rf_config[i].rr_fname);
+            prog_args[i].output_file_name      = (char*) malloc(1024);
+            sprintf(prog_args[i].output_file_name,"%s/recorded-samples.bin",config->out_path);
+            // strcpy(prog_args[i].output_file_name, );
         }else if (config->rf_config[i].mode == 2){
-            prog_args[i].input_file_name      = (char*) malloc(100 * sizeof(char));
-            strcpy(prog_args[i].input_file_name, config->rf_config[i].rr_fname);
+            prog_args[i].input_file_name      = (char*) malloc(1024);
+            strcpy(prog_args[i].input_file_name, config->rf_config[i].replay_fname);
         }
         prog_args[i].debug         = config->rf_config[i].debug;        
         prog_args[i].silent        = config->rf_config[i].silent;
@@ -120,6 +121,7 @@ int ngscope_main(ngscope_config_t* config)
         prog_args[i].rf_args    = (char*) malloc(100 * sizeof(char));
         strcpy(prog_args[i].rf_args, config->rf_config[i].rf_args);
         strcpy(prog_args[i].sib_logs, config->sib_logs_path);
+        strcpy(prog_args[i].out_path, config->out_path);
         printf("Starting scheduler thread %d!\n", i);
         pthread_create(&task_thd[i], NULL, task_scheduler_thread, (void*)( &prog_args[i] ));
         printf("Scheduler thread %d started!\n", i);

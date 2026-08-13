@@ -309,7 +309,8 @@ int dci_ring_buffer_init(ngscope_cell_dci_ring_buffer_t* q,
                          uint16_t                        targetRNTI,
                          int                             cell_prb,
                          int                             cell_idx,
-                         int                             buf_size)
+                         int                             buf_size,
+                         const char*                     out_path)
 {
   q->targetRNTI  = targetRNTI;
   q->cell_prb    = cell_prb;
@@ -324,7 +325,9 @@ int dci_ring_buffer_init(ngscope_cell_dci_ring_buffer_t* q,
   q->sub_stat = (sf_status_t*)calloc(buf_size, sizeof(sf_status_t));
 
 #ifdef LOG_DCI_RING_BUFFER
-  q->fd_log = fopen("dci_ring_buffer.txt", "w+");
+  char ringbufpath[1024];
+  sprintf(ringbufpath, "%sdci_ring_buffer.txt", out_path);
+  q->fd_log = fopen(ringbufpath, "w+");
 #endif
   return 0;
 }

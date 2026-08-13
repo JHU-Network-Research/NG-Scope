@@ -16,7 +16,8 @@
 
 #include "ngscope_def.h"
 
-#define SIB_LOGS_PATH_MAX_LEN 1024
+#define SIB_LOGS_PATH_MAX_LEN 512
+#define OUT_PATH_MAX_LEN 512
 
 typedef struct {
   int      nof_subframes;
@@ -72,6 +73,7 @@ typedef struct {
   bool     enable_256qam;
   bool     use_standard_lte_rate;
   char sib_logs[SIB_LOGS_PATH_MAX_LEN];
+  char out_path[OUT_PATH_MAX_LEN];
 } prog_args_t;
 
 void args_default(prog_args_t* args);

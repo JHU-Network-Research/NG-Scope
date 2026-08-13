@@ -167,14 +167,14 @@ int ngscope_read_config(ngscope_config_t* config, char * path)
         }
         
 
-        sprintf(name, "rf_config%d.rr_fname",i);
-        if(! config_lookup_string(cfg, name, &config->rf_config[i].rr_fname)){
-            printf("ERROR: reading rr_fname\n");
-            config->rf_config[i].rr_fname = NULL;
+        sprintf(name, "rf_config%d.replay_fname",i);
+        if(! config_lookup_string(cfg, name, &config->rf_config[i].replay_fname)){
+            printf("ERROR: reading replay_fname\n");
+            config->rf_config[i].replay_fname = NULL;
         }
-        printf("rr_fname: %s\n", config->rf_config[i].rr_fname);
+        printf("replay_fname: %s\n", config->rf_config[i].replay_fname);
 
-        if ((config->rf_config[i].mode == 1 || config->rf_config[i].mode == 2) && !config->rf_config[i].rr_fname){
+        if ((config->rf_config[i].mode == 1 || config->rf_config[i].mode == 2) && !config->rf_config[i].replay_fname){
             printf("Error: no filename provided for record/replay, exiting...\n");
             exit(0);
         }

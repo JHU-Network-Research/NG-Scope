@@ -79,7 +79,7 @@ void CA_status_update_header(CA_status_t* q, ngscope_cell_dci_ring_buffer_t  p[M
 
 
 /*Single Cell related */
-int dci_ring_buffer_init(ngscope_cell_dci_ring_buffer_t* q, uint16_t targetRNTI, int cell_prb, int cell_idx, int buf_size);
+int dci_ring_buffer_init(ngscope_cell_dci_ring_buffer_t* q, uint16_t targetRNTI, int cell_prb, int cell_idx, int buf_size, const char* out_path);
 int dci_ring_buffer_delete(ngscope_cell_dci_ring_buffer_t* q);
 void dci_ring_buffer_put_dci(ngscope_cell_dci_ring_buffer_t* q, ngscope_status_buffer_t* dci_buffer, int remote_sock);
 void dci_ring_buffer_clear_cell_fill_flag(ngscope_cell_dci_ring_buffer_t* q, int cell_idx);
