@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # snapcraft.yaml derives the version from `git describe`, which needs
           # the full history and tags rather than the default shallow clone.
@@ -40,28 +40,42 @@ jobs:
           sudo snap install --dangerous "${{ steps.build.outputs.snap }}"
           # -h exercises the launcher, the dynamic linker and the Qt5 content
           # snap without needing a radio attached.
-          snap run ngscope -h
-          # Every dependency must resolve inside /snap; a "not found" here means
-          # a missing stage-package, and an absolute host path such as
-          # /usr/local/lib/libsrsgui.so means the build leaked off the runner.
-          ldd /snap/ngscope/current/usr/bin/ngscope | tee /tmp/ldd.txt
+          # This alone proves every NEEDED library resolved: the binary could
+          # not reach its help text otherwise. It also proves the RF plugin
+          # dlopen'ed, since ngscope prints "Active RF plugins:" before parsing
+          # arguments (lib/src/phy/rf/rf_imp.c:112-118).
+          snap run ngscope -h | tee /tmp/help.txt
+          grep -q "Active RF plugins: libsrsran_rf_uhd.so" /tmp/help.txt \
+            || { echo "::error::UHD RF plugin did not load"; exit 1; }
+
+          # Belt and braces on top of the above. ldd must run with the same
+          # library path the launcher sets, so source the snap's own helper
+          # rather than reimplementing it -- a bare `ldd` here runs OUTSIDE the
+          # sandbox with no LD_LIBRARY_PATH and reports every bundled library
+          # as "not found", which is a property of the shell, not the snap.
+          export SNAP=/snap/ngscope/current
+          . "$SNAP/bin/uhd-env.sh"
+          uhd_setup_libs
+          ldd "$SNAP/usr/bin/ngscope" | tee /tmp/ldd.txt
           if grep -q "not found" /tmp/ldd.txt; then
             echo "::error::unresolved shared libraries in the built snap"
             exit 1
           fi
-          # The RF plugin is dlopen'ed by bare soname at runtime
-          # (lib/src/phy/rf/rf_imp.c:430), so its presence is not visible to ldd.
-          test -f /snap/ngscope/current/usr/lib/libsrsran_rf_uhd.so \
-            || { echo "::error::UHD RF plugin missing from the snap"; exit 1; }
+          # A host path such as /usr/local/lib/libsrsgui.so would mean the
+          # build leaked off the runner instead of using the srsgui part.
+          if grep -q "/usr/local/" /tmp/ldd.txt; then
+            echo "::error::snap links a host /usr/local library"
+            exit 1
+          fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ngscope-snap
           path: ${{ steps.build.outputs.snap }}
 
       - name: Attach the snap to the release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ steps.build.outputs.snap }}
           body: |
