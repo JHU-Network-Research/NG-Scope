@@ -1,0 +1,76 @@
+name: Build snap
+
+on:
+  push:
+    branches: [master, snap]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# softprops/action-gh-release creates a release and uploads an asset, which
+# needs write access. The default GITHUB_TOKEN is read-only on repositories
+# created since 2023 (and wherever an org sets it that way), so without this
+# the build succeeds and the release step fails with 403.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # snapcraft.yaml derives the version from `git describe`, which needs
+          # the full history and tags rather than the default shallow clone.
+          fetch-depth: 0
+
+      - name: Build the snap
+        id: build
+        uses: snapcore/action-build@v1
+
+      - name: Smoke-test the built snap
+        run: |
+          # The kde-neon extension supplies Qt5 through this content snap.
+          # snapd does not pull default-providers in for a --dangerous local
+          # install, so ngscope would otherwise start without its Qt5 libraries.
+          sudo snap install kf5-core22
+          sudo snap install --dangerous "${{ steps.build.outputs.snap }}"
+          # -h exercises the launcher, the dynamic linker and the Qt5 content
+          # snap without needing a radio attached.
+          snap run ngscope -h
+          # Every dependency must resolve inside /snap; a "not found" here means
+          # a missing stage-package, and an absolute host path such as
+          # /usr/local/lib/libsrsgui.so means the build leaked off the runner.
+          ldd /snap/ngscope/current/usr/bin/ngscope | tee /tmp/ldd.txt
+          if grep -q "not found" /tmp/ldd.txt; then
+            echo "::error::unresolved shared libraries in the built snap"
+            exit 1
+          fi
+          # The RF plugin is dlopen'ed by bare soname at runtime
+          # (lib/src/phy/rf/rf_imp.c:430), so its presence is not visible to ldd.
+          test -f /snap/ngscope/current/usr/lib/libsrsran_rf_uhd.so \
+            || { echo "::error::UHD RF plugin missing from the snap"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ngscope-snap
+          path: ${{ steps.build.outputs.snap }}
+
+      - name: Attach the snap to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.build.outputs.snap }}
+          body: |
+            Install:
+
+            ```
+            sudo snap install --dangerous ngscope_*.snap
+            sudo snap connect ngscope:raw-usb            # USB radios (B200/B210) only
+            ```
+
+            See `SNAP.md` for the host udev rule that USB radios also
+            need, and for UHD FPGA version requirements on X310/X410.
