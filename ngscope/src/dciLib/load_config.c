@@ -174,7 +174,7 @@ int ngscope_read_config(ngscope_config_t* config, char * path)
         }
         printf("replay_fname: %s\n", config->rf_config[i].replay_fname);
 
-        if ((config->rf_config[i].mode == 1 || config->rf_config[i].mode == 2) && !config->rf_config[i].replay_fname){
+        if (config->rf_config[i].mode == 2 && !config->rf_config[i].replay_fname){
             printf("Error: no filename provided for record/replay, exiting...\n");
             exit(0);
         }
