@@ -40,7 +40,7 @@ add_executable(remote_server remote_server.c)
 
 set(SRSRAN_SOURCES srsran_common srsran_mac srsran_phy srsran_radio srsran_gtpu  srsran_rlc srsran_pdcp rrc_asn1 srslog support system)
 # set(SRSRAN_SOURCES ${SRSRAN_SOURCES} rrc_nr_asn1 ngap_nr_asn1)
-set(SRSRAN_SOURCES ${SRSRAN_SOURCES} ngscope_rx ngscope_dci rrc_nr_asn1 ngap_nr_asn1)
+set(SRSRAN_SOURCES ${SRSRAN_SOURCES} ngscope_rx rach_filter ngscope_dci rrc_nr_asn1 ngap_nr_asn1)
 
 
 target_link_libraries(ngscope ${SRSRAN_SOURCES}

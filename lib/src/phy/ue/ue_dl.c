@@ -24,7 +24,7 @@
 #include "srsran/srsran.h"
 // #include "dciLib/ngscope_rx.h"
 #include <string.h>
-// #include "dciLib/load_config.h"
+#include "dciLib/rach_filter.h"
 // #include "srsran/phy/ue/ngscope_consistency.h"
 
 #define CURRENT_FFTSIZE srsran_symbol_sz(q->cell.nof_prb)
@@ -688,6 +688,11 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
 
         // if (mode == 2){
         // JH RNTI FILTERING
+        if (!ngscope_rach_filter_pass(0, dci_msg[nof_dci].rnti)){
+          // printf("Filtering invalid dci: %d\n", dci_msg[nof_dci].rnti);
+          continue;
+        }
+
         // if(true){
         //   if (dci_msg[nof_dci].rnti < 70 || dci_msg[nof_dci].rnti > 107){
         //     printf("DEBUG: Skipping due to invalid RNTI %d\n", dci_msg[nof_dci].rnti);
@@ -744,13 +749,13 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
           // 0.5 is set from pdcch_test
 
           // JH CORR_FILTER
-          if (!isnormal(corr) || corr <= 0.5f) {
-            //printf("Corr skip!\n");
-            if (debug)
-              printf("DEBUG: Skipping message at TTI=%d, format=%s, ncce=%d, L=%d, rnti=%d, because corr=%.3f (< 0.5)\n", 
-            sf->tti, srsran_dci_format_string(search_space->formats[f]), search_space->loc[l].ncce, search_space->loc[l].L, dci_msg[nof_dci].rnti, corr);
-            continue;
-          }
+          // if (!isnormal(corr) || corr <= 0.5f) {
+          //   //printf("Corr skip!\n");
+          //   if (debug)
+          //     printf("DEBUG: Skipping message at TTI=%d, format=%s, ncce=%d, L=%d, rnti=%d, because corr=%.3f (< 0.5)\n", 
+          //   sf->tti, srsran_dci_format_string(search_space->formats[f]), search_space->loc[l].ncce, search_space->loc[l].L, dci_msg[nof_dci].rnti, corr);
+          //   continue;
+          // }
 
           // When searching for format 1A, we also need to consider format 0         
           //if(search_space->formats[f]  == SRSRAN_DCI_FORMAT1A){

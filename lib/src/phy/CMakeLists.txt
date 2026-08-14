@@ -58,5 +58,5 @@ set(srsran_srcs     $<TARGET_OBJECTS:srsran_agc>
         )
 
 add_library(srsran_phy STATIC ${srsran_srcs} )
-target_link_libraries(srsran_phy pthread m ${FFT_LIBRARIES})
+target_link_libraries(srsran_phy pthread m rach_filter ${FFT_LIBRARIES})
 install(TARGETS srsran_phy DESTINATION ${LIBRARY_DIR} OPTIONAL)

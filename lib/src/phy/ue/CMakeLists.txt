@@ -20,5 +20,5 @@
 
 file(GLOB SOURCES "*.c")
 add_library(srsran_ue OBJECT ${SOURCES})
-
+target_include_directories(srsran_ue PRIVATE ${CMAKE_SOURCE_DIR}/ngscope/hdr)
 add_subdirectory(test)

@@ -1,6 +1,7 @@
 file(GLOB_RECURSE SOURCES "*.cpp" "*.c")
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/ngscope_rx.c)
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/record_ring_buffer.c)
+list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/rach_filter.c)
 
 #file(GLOB_RECURSE SOURCES "*.c")
 
@@ -34,5 +35,11 @@ add_library(ngscope_rx STATIC ngscope_rx.c record_ring_buffer.c)
 target_include_directories(ngscope_rx PUBLIC
     ${CMAKE_SOURCE_DIR}/ngscope/hdr
     ${CMAKE_SOURCE_DIR}/lib/include
+)
+
+add_library(rach_filter STATIC rach_filter.c)
+target_include_directories(rach_filter PUBLIC 
+  ${CMAKE_SOURCE_DIR}/ngscope/hdr
+  ${CMAKE_SOURCE_DIR}/lib/include
 )
 target_link_libraries(ngscope_rx srsran_phy)
