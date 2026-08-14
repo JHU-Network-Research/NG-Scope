@@ -28,7 +28,7 @@ const uint64_t RECORD_BUF_CAP = 1024*1024*80;
 // pthread_cond_t rb_cond = PTHREAD_COND_INITIALIZER;
 
 record_ring_buffer_t record_buf;
-static uint8_t replay_buf[23040*8];
+static uint8_t replay_buf[51200*8];
 
 pthread_t flush_thread;
 
@@ -220,6 +220,15 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
 
         if (debug)
             printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
+
+
+        size_t replay_buf_cap = sizeof(replay_buf) / sizeof(cf_t); // 23040
+        if (hdr.nof_samples > replay_buf_cap) {
+            fprintf(stderr, "REPLAY: ERROR: frame has %ld samples, exceeds replay_buf capacity %zu\n",
+                    hdr.nof_samples, replay_buf_cap);
+            return 0; // or abort — silently overflowing is worse than refusing
+        }
+
         n = fread(replay_buf, sizeof(cf_t), hdr.nof_samples, replay_fh);
         nreplayed += (n*sizeof(cf_t));
         if (debug)
