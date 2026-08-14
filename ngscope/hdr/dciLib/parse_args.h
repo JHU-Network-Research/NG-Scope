@@ -25,8 +25,6 @@ typedef struct {
   bool     disable_plots;
   bool     disable_plots_except_constellation;
   bool     disable_cfo;
-  bool     log_dl;
-  bool     log_ul;
   uint32_t time_offset;
   int      force_N_id_2;
   uint16_t rnti;
@@ -55,6 +53,9 @@ typedef struct {
   int      remote_enable;
   int 	   decode_single_ue;
   int 	   decode_SIB;
+  int 	   decode_RAR;
+  int 	   rar_seed_tracker;
+  int 	   rach_filter_only;
 
   float    rf_gain;
   int      net_port;

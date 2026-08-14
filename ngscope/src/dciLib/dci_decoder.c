@@ -29,6 +29,8 @@
 #include "ngscope/hdr/dciLib/sib1_helper.h"
 
 #include "ngscope/hdr/dciLib/decode_sib.h"
+#include "ngscope/hdr/dciLib/decode_rar.h"
+#include "ngscope/hdr/dciLib/rach_filter.h"
 
 #include "srsran/phy/ue/ngscope_consistency.h"
 
@@ -278,6 +280,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	bool decode_single_ue 	= dci_decoder->prog_args.decode_single_ue;
 	bool decode_SIB 		= dci_decoder->prog_args.decode_SIB;
+	bool decode_RAR 		= dci_decoder->prog_args.decode_RAR;
     uint16_t targetRNTI 	= dci_decoder->prog_args.rnti;  
 
 	int rf_idx 				= dci_decoder->prog_args.rf_index;
@@ -333,7 +336,33 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 		}
 	}
 
-	
+	// Random access: decode the RARs (Msg2) of this subframe, so we can record the
+	// Temporary C-RNTIs handed out during RACH alongside the DCI logs.
+	if (decode_RAR) {
+		ngscope_rar_t rars[NGSCOPE_MAX_RAR_PER_SF];
+		int nof_rar = srsran_ue_dl_find_and_decode_rar(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars);
+		for (int i = 0; i < nof_rar; i++) {
+			ngscope_rar_log_write(dci_decoder->prog_args.out_path, rf_idx, tti, \
+									dci_per_sub->timestamp, dci_per_sub->collection_time, &rars[i]);
+
+			// Remember the RNTI regardless of whether the filter is on, so that turning it
+			// on costs nothing extra and the set is always available.
+			ngscope_rach_filter_add(rf_idx, rars[i].temp_crnti, tti);
+		}
+
+		// Feed the RACH-assigned RNTIs back into the UE tracker, so the next genuine
+		// sighting of one promotes it instead of needing two sightings of its own.
+		// This is the only part of the RAR path that can influence the DCI output.
+		if (dci_decoder->prog_args.rar_seed_tracker && nof_rar > 0) {
+			pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
+			for (int i = 0; i < nof_rar; i++) {
+				ngscope_ue_tracker_seed_rach_rnti(&ue_tracker[rf_idx], tti, rars[i].temp_crnti);
+			}
+			pthread_mutex_unlock(&ue_tracker_mutex[rf_idx]);
+		}
+	}
+
 	pthread_mutex_lock(&token_mutex[0]);
 	char rsrppath[1024];
 	sprintf(rsrppath, "%srsrp.txt", dci_decoder->prog_args.out_path);
@@ -445,7 +474,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 				if(decodelog){
 					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
 					fprintf(decodelog,
-						"%lu,%lu, normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d\n",
+						"%lu,%lu, normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
 						dci_per_sub->timestamp,
 						dci_per_sub->collection_time,
 						tti,
@@ -471,7 +500,10 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 						tb2.mcs,
 						tb2.tbs,
 						tb2.rv,
-						tb2.ndi
+						tb2.ndi,
+						// whether this RNTI would survive rach_filter_only; recorded even when
+						// the filter is off so a single run shows what it would have dropped
+						ngscope_rach_filter_pass(rf_idx, dl_msg.rnti) ? 1 : 0
 						);
 					}
 				if(debug)
@@ -512,6 +544,18 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			if (!silent)
 				printf("\n");
 
+		}
+
+		// Restrict the reported DCIs to RNTIs that were seen completing RACH. Applied after
+		// the debug CSV is written, so that file stays a complete record of what the decoder
+		// found and its rach_ok column shows exactly what this drops. Everything downstream
+		// -- the .dciLog files, cell_status and the remote sink -- reads the filtered result.
+		if (dci_decoder->prog_args.rach_filter_only) {
+			int dropped = ngscope_rach_filter_apply(rf_idx, dci_per_sub);
+			if (debug && dropped > 0) {
+				printf("DEBUG: TTI=%d RACH filter dropped %d DCIs, %d dl / %d ul remain\n",
+						tti, dropped, dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci);
+			}
 		}
 	}
     return SRSRAN_SUCCESS;

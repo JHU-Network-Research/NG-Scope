@@ -24,8 +24,6 @@ typedef struct{
 
 typedef struct{
     int     nof_cell;
-    int     log_ul;
-    int     log_dl; 
 
 	// Any value larger than 0 indicates the log files will be separated into multiple files
 	int 	log_interval; // in seconds
@@ -38,6 +36,9 @@ typedef struct{
     int                 remote_enable;
 	int 				decode_single_ue;
 	int 				decode_SIB;
+	int 				decode_RAR;
+	int 				rar_seed_tracker;
+	int 				rach_filter_only;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
     const char *        out_path;
@@ -46,6 +47,70 @@ typedef struct{
     rf_dev_config_t     rf_config[MAX_NOF_RF_DEV];
 }ngscope_config_t;
 
+/****************************************************************************
+ * Configuration schema
+ *
+ * These three tables are the single source of truth for what NG-Scope accepts. Adding a
+ * setting is one line here plus the struct field it writes to -- the parser is generated
+ * from the table, so no lookup code has to be touched, and any additional config backend
+ * (e.g. TOML) can walk the same tables rather than duplicating the key list.
+ *
+ * Columns:  X(TYPE, "key", struct_field, default, required)
+ *
+ *   TYPE     INT | INT64 | BOOL | STRBUF (fixed char[]) | STRPTR (borrowed const char*)
+ *   required true means there is no sane default: if the key is absent NG-Scope reports
+ *            it and exits rather than running with a fabricated value.
+ *
+ * Every optional key MUST have a usable default. ngscope_config_t is a stack local in
+ * main(), so a key with no default and no value leaves the field holding garbage.
+ ****************************************************************************/
+
+/* Top-level keys, written to ngscope_config_t */
+#define NGSCOPE_TOP_LEVEL_KEYS(X)                                                          \
+    X(INT,    "nof_rf_dev",        nof_rf_dev,         1,      false)                      \
+    X(INT,    "rnti",              rnti,               0,      true)                       \
+    X(BOOL,   "remote_enable",     remote_enable,      false,  false)                      \
+    X(BOOL,   "decode_single_ue",  decode_single_ue,   false,  false)                      \
+    X(BOOL,   "decode_SIB",        decode_SIB,         false,  false)                      \
+    X(BOOL,   "decode_RAR",        decode_RAR,         false,  false)                      \
+    X(BOOL,   "rar_seed_tracker",  rar_seed_tracker,   false,  false)                      \
+    X(BOOL,   "rach_filter_only",  rach_filter_only,   false,  false)
+
+/* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
+#define NGSCOPE_RF_DEV_KEYS(X)                                                             \
+    X(INT64,  "rf_freq",           rf_freq,            0,      true)                       \
+    X(INT,    "N_id_2",            N_id_2,             -1,     false)                      \
+    X(INT,    "nof_thread",        nof_thread,         4,      false)                      \
+    X(STRBUF, "rf_args",           rf_args,            "",     false)                      \
+    X(BOOL,   "disable_plot",      disable_plot,       true,   false)                      \
+    X(BOOL,   "log_dl",            log_dl,             true,   false)                      \
+    X(BOOL,   "log_ul",            log_ul,             true,   false)                      \
+    X(BOOL,   "log_phich",         log_phich,          false,  false)                      \
+    X(INT,    "mode",              mode,               0,      false)                      \
+    X(STRPTR, "replay_fname",      replay_fname,       NULL,   false)                      \
+    X(BOOL,   "debug",             debug,              false,  false)                      \
+    X(BOOL,   "silent",            silent,             false,  false)                      \
+    X(BOOL,   "decode_pdcch",      decode_pdcch,       true,   false)
+
+/* Logging keys, written to ngscope_config_t.dci_log_config, read from "dci_log_config.<key>" */
+#define NGSCOPE_LOG_KEYS(X)                                                                \
+    X(INT,    "log_interval",      log_interval,       -1,     false)
+
+/* Reads `path` into `config`. The backend is chosen by extension: *.toml is parsed as TOML,
+ * anything else as libconfig. Both fill the same struct from the same schema above. */
 int ngscope_read_config(ngscope_config_t* config, char * path);
+
+/* TOML backend (load_config_toml.c). Call ngscope_read_config() instead. */
+int ngscope_read_config_toml(ngscope_config_t* config, char * path);
+
+/* Shared by every backend: a required key was absent. */
+void ngscope_config_report_missing(const char* path);
+void ngscope_config_reset_missing(void);
+
+/* Shared validation. check_nof_rf_dev() must run before any rf_config[] indexing;
+ * finalize() applies the cross-key rules and exits if a required key was missing. */
+void ngscope_config_check_nof_rf_dev(ngscope_config_t* config);
+void ngscope_config_finalize(ngscope_config_t* config, const char* path);
+
 bool ngscope_config_check_log(ngscope_config_t* config);
 #endif

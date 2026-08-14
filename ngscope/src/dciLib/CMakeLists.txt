@@ -4,9 +4,14 @@ list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/record_ring_buffer.c)
 
 #file(GLOB_RECURSE SOURCES "*.c")
 
-add_library(ngscope_dci STATIC ${SOURCES})
+# Vendored TOML parser (MIT) backing the .toml config backend -- see
+# ngscope/external/tomlc99/README.md
+set(TOMLC99_DIR ${CMAKE_SOURCE_DIR}/ngscope/external/tomlc99)
 
-target_link_libraries(ngscope_dci config rrc_asn1 asn1_utils srsran_common)
+add_library(ngscope_dci STATIC ${SOURCES} ${TOMLC99_DIR}/toml.c)
+target_include_directories(ngscope_dci PUBLIC ${TOMLC99_DIR})
+
+target_link_libraries(ngscope_dci config rrc_asn1 asn1_utils srsran_common srsran_mac)
 
 # Link with C++ standard library
 if(BUILD_STATIC)

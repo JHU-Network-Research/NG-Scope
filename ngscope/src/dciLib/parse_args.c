@@ -26,8 +26,6 @@ void args_default(prog_args_t* args)
   args->input_file_name                    = NULL;
   args->output_file_name                   = NULL;
   args->disable_cfo                        = false;
-  args->log_dl                             = false;
-  args->log_ul                             = false;
   args->time_offset                        = 0;
   args->file_nof_prb                       = 25;
   args->file_nof_ports                     = 1;
@@ -42,6 +40,9 @@ void args_default(prog_args_t* args)
   args->remote_enable                      = false;
   args->decode_single_ue                   = false;
   args->decode_SIB                   	   = false;
+  args->decode_RAR                   	   = false;
+  args->rar_seed_tracker             	   = false;
+  args->rach_filter_only             	   = false;
 
   args->enable_cfo_ref                     = false;
   args->estimator_alg                      = (char*)"interpolate";

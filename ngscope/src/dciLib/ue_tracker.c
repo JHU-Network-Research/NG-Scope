@@ -193,6 +193,28 @@ void ngscope_ue_tracker_enqueue_ue_rnti(ngscope_ue_tracker_t* q, uint32_t tti, u
     return;
 }
 
+// Seed an RNTI observed in a Random Access Response. See ue_tracker.h for why this
+// deliberately does less than ngscope_ue_tracker_enqueue_ue_rnti().
+void ngscope_ue_tracker_seed_rach_rnti(ngscope_ue_tracker_t* q, uint32_t tti, uint16_t rnti){
+	if(rnti == 0){
+		return;
+	}
+	if(q->ue_cnt[rnti] == 0){
+		q->ue_enter_time[rnti] = tti;
+	}
+	q->ue_cnt[rnti]++;
+	q->ue_dl_cnt[rnti]++;
+
+	// Only mark it as recently seen. active_ue_list and top_N are left to the normal
+	// enqueue path, which requires a real PDCCH decode.
+	q->ue_last_active[rnti] = tti;
+
+	if (debug)
+		printf("DEBUG: TTI=%d seeded RACH rnti=%d ue_cnt=%d active=%d\n",
+				tti, rnti, q->ue_cnt[rnti], q->active_ue_list[rnti]);
+	return;
+}
+
 void ngscope_ue_tracker_update_per_tti(ngscope_ue_tracker_t* q, uint32_t tti){
 	// remove those ue that has been inactive for 
 	int nof_active_ue 	= kick_inactive_ue(q, tti);

@@ -23,6 +23,8 @@
 #include "ngscope/hdr/dciLib/thread_exit.h"
 #include "ngscope/hdr/dciLib/ue_tracker.h"
 #include "ngscope/hdr/dciLib/decode_sib.h"
+#include "ngscope/hdr/dciLib/decode_rar.h"
+#include "ngscope/hdr/dciLib/rach_filter.h"
 
 #include "ngscope/hdr/dciLib/ngscope_rx.h"
 #include "ngscope/hdr/dciLib/load_config.h"
@@ -591,8 +593,13 @@ void* task_scheduler_thread(void* p){
     sprintf(decodepath,"%sdci-decode-debug.csv",task_scheduler->prog_args.out_path);
 	FILE *decodelog;
   	decodelog=fopen(decodepath,"w");
-  	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2\n");
+  	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2,rach_ok\n");
 	fclose(decodelog);
+
+    // RACH log: one row per decoded Random Access Response
+    if(task_scheduler->prog_args.decode_RAR){
+        ngscope_rar_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
+    }
 
 
     for(int i = 0; i < nof_decoder; i++){
@@ -788,6 +795,10 @@ void* task_scheduler_thread(void* p){
 	//fclose(fd_1);
 
 //--> Deal with the exit and free memory 
+
+	if(prog_args->decode_RAR){
+		ngscope_rach_filter_report(rf_idx);
+	}
 
 	// wait until its our turn to close
 	printf("wait for scheduler to be ready!\n");

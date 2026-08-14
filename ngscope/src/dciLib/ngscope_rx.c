@@ -28,7 +28,14 @@ const uint64_t RECORD_BUF_CAP = 1024*1024*80;
 // pthread_cond_t rb_cond = PTHREAD_COND_INITIALIZER;
 
 record_ring_buffer_t record_buf;
-static uint8_t replay_buf[23040*8];
+
+/* ue_sync does not always ask for exactly one subframe: while re-acquiring PSS or applying a
+ * timing correction it requests a longer block, and the recorder faithfully stores frames of
+ * that size. The buffer therefore has to cover the largest read the task scheduler can ask
+ * for, which is 3 * SRSRAN_SF_LEN_PRB(cell.nof_prb) (see task_scheduler.c:506). Sizing this
+ * for a single 100-PRB subframe used to overflow it on the first oversized frame. */
+#define REPLAY_BUF_NOF_SAMPLES (3 * SRSRAN_SF_LEN_MAX)
+static uint8_t replay_buf[REPLAY_BUF_NOF_SAMPLES * sizeof(cf_t)];
 
 pthread_t flush_thread;
 
@@ -179,9 +186,20 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         if (debug)
             printf("REPLAY: read header: nof_samples=%ld, sec=%ld, nsec=%f\n", hdr.nof_samples, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
         
+        /* Both bail-outs below have already consumed the frame header, so the payload has to
+         * be skipped as well -- otherwise the next header read lands in the middle of the IQ
+         * samples and the stream never recovers. */
         if (hdr.nof_samples != nsamples){
             if (debug)
                 printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
+            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
+            return 0;
+        }
+
+        if (hdr.nof_samples > REPLAY_BUF_NOF_SAMPLES){
+            fprintf(stderr, "REPLAY: ERROR: frame of %ld samples exceeds the %d sample replay buffer, skipping\n",
+                    hdr.nof_samples, REPLAY_BUF_NOF_SAMPLES);
+            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
             return 0;
         }
         
@@ -368,9 +386,20 @@ int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uin
         if (debug)
             printf("REPLAY: read header: nof_samples=%ld, sec=%ld, nsec=%f\n", hdr.nof_samples, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
         
+        /* Both bail-outs below have already consumed the frame header, so the payload has to
+         * be skipped as well -- otherwise the next header read lands in the middle of the IQ
+         * samples and the stream never recovers. */
         if (hdr.nof_samples != nsamples){
             if (debug)
                 printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
+            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
+            return 0;
+        }
+
+        if (hdr.nof_samples > REPLAY_BUF_NOF_SAMPLES){
+            fprintf(stderr, "REPLAY: ERROR: frame of %ld samples exceeds the %d sample replay buffer, skipping\n",
+                    hdr.nof_samples, REPLAY_BUF_NOF_SAMPLES);
+            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
             return 0;
         }
         

@@ -32,6 +32,22 @@ NG-Scope incorporates a powerful real-time processing library that operates on t
  
 In conclusion, NG-Scope offers a comprehensive and efficient workflow for decoding control channels from multiple base stations. Its parallel processing capabilities, intelligent data ordering, and user-friendly features make it an invaluable tool for analyzing and interpreting cellular communication data in real-time.
 
+## Usage
+
+```
+ngscope -c <config file> [-o <output folder>]
+```
+
+NG-Scope is driven entirely by a config file passed with `-c`, in either **TOML** or
+**libconfig** format — the backend is chosen by file extension, and both accept exactly the
+same settings. See **[docs/configuration.md](docs/configuration.md)** for a full reference:
+every top-level, per-device and logging parameter, the layout of the output directory, the
+record/replay modes, the RACH decoding and RNTI filtering options, and a list of known
+quirks in the current configuration handling.
+
+Example configurations are provided at [`ngscope/config.toml`](ngscope/config.toml) (TOML)
+and [`ngscope/config.cfg`](ngscope/config.cfg) (libconfig).
+
 ## NG-Scope Version 2.1 Release Notes
 
 We are excited to announce the release of NG-Scope 2.1, featuring significant updates and new functionalities. Let's explore what's new:

@@ -1,0 +1,86 @@
+# NG-Scope configuration, TOML flavour. Full reference: docs/configuration.md
+#
+# Equivalent to config.cfg -- the backend is chosen by file extension, so `-c config.toml`
+# reads this and `-c config.cfg` reads the libconfig version. Both accept exactly the same
+# settings, because both are generated from the schema in hdr/dciLib/load_config.h.
+
+# ------------------------------- Top level -------------------------------
+
+# Target RNTI. Required: there is no safe default (0 is not inert -- it matches empty
+# decoder-tree slots and floods the output).
+rnti = 9185
+
+# Stream decoded DCIs to remote subscribers over the network (the DCI sink server).
+remote_enable = false
+
+# Decode only `rnti` instead of running the multi-UE blind search. Much cheaper.
+decode_single_ue = false
+
+# Decode SIB1/SIB2 and write cell identity and reference signal power to cellcfg.json.
+decode_SIB = false
+
+# Decode Random Access Responses (Msg2) and write one row per RAR to
+# <out_dir>/<timestamp>/rar_log-<rf_idx>.csv. Gives you the TTI at which each RNTI was
+# assigned. Costs roughly +25% decode time per subframe. Does not change the DCI output.
+decode_RAR = true
+
+# Prime the UE tracker with each RACH-assigned RNTI, so its next genuine PDCCH sighting
+# promotes it to "active" instead of needing two. Measured effect on DCI yield: none.
+rar_seed_tracker = false
+
+# Report ONLY RNTIs seen completing RACH, plus SI-RNTI/P-RNTI/RA-RNTI which never RACH.
+# Applies to the .dciLog files, cell_status and the remote sink; dci-decode-debug-*.csv is
+# always written unfiltered with a trailing rach_ok column showing what this would drop.
+# Implies decode_RAR. On a 60s commercial capture: 6244 distinct RNTIs -> 95, 84% of DCI
+# records dropped -- most of which is real traffic from UEs that RACHed before capture start.
+rach_filter_only = false
+
+# ----------------------------- RF devices --------------------------------
+# One [[rf_config]] table per cell, max 4. Unlike the .cfg format there is no nof_rf_dev to
+# keep in sync -- it is the number of tables below. Two devices may not share rf_freq.
+
+[[rf_config]]
+# Downlink centre frequency in Hz. Required.
+rf_freq = 2680_000_000
+
+# Force the PSS sequence (0-2), or -1 to search all three.
+N_id_2 = -1
+
+# Passed straight to the SDR driver, e.g. "type=b200,clock_source=external". Max 100 chars.
+rf_args = "type=b200"
+
+# DCI decoder threads for this cell. Max 8. Too few and subframes are dropped in live
+# capture, or replay falls behind real time.
+nof_thread = 5
+
+# Disable the GUI for this cell. Only meaningful in builds with ENABLE_GUI.
+disable_plot = true
+
+# These three control which .dciLog files are written, per cell.
+log_dl = true
+log_ul = true
+log_phich = false
+
+# 0 = normal, 1 = record IQ to disk, 2 = replay IQ from disk.
+mode = 1
+
+# Source file for mode 2. Ignored otherwise: recording always writes to
+# <out_dir>/<timestamp>/recorded-samples.bin.
+replay_fname = "/tmp/ngscope_iq.bin"
+
+# Verbose per-subframe tracing. Thousands of lines per second.
+debug = false
+
+# Suppress the per-subframe summary lines.
+silent = false
+
+# Decode the control channel. false synchronises and records without decoding, which is
+# what you want for a pure IQ capture.
+decode_pdcch = true
+
+# ----------------------------- DCI logging -------------------------------
+
+[dci_log_config]
+# Seconds between log file rotations; each rotation opens a new timestamped file.
+# -1 or 0 disables rotation.
+log_interval = -1
