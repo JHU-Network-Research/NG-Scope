@@ -63,6 +63,10 @@ typedef struct{
  *
  * Every optional key MUST have a usable default. ngscope_config_t is a stack local in
  * main(), so a key with no default and no value leaves the field holding garbage.
+ *
+ * These tables are mirrored in gui/ngscope_gui/schema.py, which is what the GUI renders
+ * its form and writes its TOML from. Adding a setting here means adding the matching line
+ * there, or the GUI will not be able to set it.
  ****************************************************************************/
 
 /* Top-level keys, written to ngscope_config_t */

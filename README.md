@@ -48,6 +48,31 @@ quirks in the current configuration handling.
 Example configurations are provided at [`ngscope/config.toml`](ngscope/config.toml) (TOML)
 and [`ngscope/config.cfg`](ngscope/config.cfg) (libconfig).
 
+### Desktop GUI
+
+Rather than editing a config file by hand, you can drive NG-Scope from a desktop app that
+writes the config for you, launches ngscope, and shows its output and plots live:
+
+```
+./gui/ngscope-gui
+```
+
+The first run creates a virtualenv under `gui/.venv` and installs its one dependency; after
+that it starts straight away. It needs the system PyGObject and WebKitGTK bindings, which on
+Debian/Ubuntu are:
+
+```
+sudo apt install python3-gi gir1.2-webkit2-4.1
+```
+
+Build ngscope first (see above) — the GUI finds the binary in `build/ngscope/src/ngscope`,
+on `PATH`, or wherever you point it under **Advanced**.
+
+It covers every setting in the config schema, remembers them between sessions, converts
+EARFCN to a downlink frequency, and renders the PDCCH constellation and channel response
+in-window instead of in separate srsGUI windows. See
+**[gui/README.md](gui/README.md)** for details.
+
 ## NG-Scope Version 2.1 Release Notes
 
 We are excited to announce the release of NG-Scope 2.1, featuring significant updates and new functionalities. Let's explore what's new:

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Launch the NG-Scope GUI, creating its virtualenv on first run.
+#
+# Works from any directory: everything is resolved relative to this script, not $PWD.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV="$HERE/.venv"
+PY="$VENV/bin/python"
+
+# The WebKitGTK backend imports the system PyGObject, so the venv must be able to see
+# system site-packages. A venv built without it fails at import gi, not at launch.
+if [ ! -x "$PY" ]; then
+  echo "Creating virtualenv in $VENV ..."
+  python3 -m venv --system-site-packages "$VENV"
+fi
+
+if ! "$PY" -c "import webview" >/dev/null 2>&1; then
+  echo "Installing dependencies ..."
+  "$PY" -m pip install --quiet --upgrade pip
+  "$PY" -m pip install --quiet -r "$HERE/requirements.txt"
+fi
+
+if ! "$PY" -c "import gi" >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+error: PyGObject (python3-gi) is not available to this virtualenv.
+
+  On Debian/Ubuntu:
+      sudo apt install python3-gi gir1.2-webkit2-4.1
+
+  If those are installed and this still fails, the virtualenv was created without
+  --system-site-packages. Delete gui/.venv and re-run this script.
+EOF
+  exit 1
+fi
+
+# `python -m ngscope_gui` needs the package on the path; do not depend on the caller's cwd.
+exec env PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m ngscope_gui "$@"

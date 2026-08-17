@@ -77,7 +77,13 @@ int radio_init_and_start(srsran_rf_t* rf,
     } while (ret == 0 && !go_exit);
 
     if (go_exit) {
-      srsran_rf_close(rf);
+      /* Only close what was opened. In REPLAY the block above never called
+       * srsran_rf_open_devname(), and *rf is uninitialised (the task scheduler is
+       * malloc'd, not calloc'd), so closing it here dereferences a garbage rf->dev and
+       * crashes on every Ctrl-C taken while still searching for a cell. */
+      if (mode != REPLAY) {
+        srsran_rf_close(rf);
+      }
       exit(0);
     }
     if (debug)

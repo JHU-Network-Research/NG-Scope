@@ -10,15 +10,105 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 /* We force to use srsgui */
 #ifdef ENABLE_GUI
 #include "srsgui/srsgui.h"
 #endif
 #include "ngscope/hdr/dciLib/status_plot.h"
+#include "ngscope/hdr/dciLib/time_stamp.h"
 
 #define NOF_PLOT_SF 500
-#define MOV_AVE_LEN 5 
+#define MOV_AVE_LEN 5
+
+/****************************************************************************
+ * Plot sink
+ *
+ * The same two series srsGUI draws -- the PDCCH equalized-symbol constellation and the
+ * channel-response magnitude -- can instead be streamed to a listener over a unix socket,
+ * so a front end can render them in its own window.
+ *
+ * Opt-in and side-effect free: the socket path comes from NGSCOPE_PLOT_SOCK, and with the
+ * variable unset (anyone running ngscope from a terminal) nothing changes -- srsGUI opens
+ * its windows exactly as before.
+ *
+ * Frames are little-endian host-order binary; producer and consumer are always the same
+ * machine, since it is a unix socket.
+ *
+ *   uint32 magic 'NGP1'   uint32 seq   uint16 nof_const   uint16 nof_csi
+ *   float  iq[2 * nof_const]           (I,Q interleaved, equalized PDCCH symbols)
+ *   float  csi[nof_csi]                (channel response magnitude, dB)
+ ****************************************************************************/
+#define NGSCOPE_PLOT_MAGIC   0x3150474eu /* "NGP1" */
+#define NGSCOPE_PLOT_MAX_FPS 20          /* srsGUI cannot draw 1000 subframes/s either */
+
+static int plot_sink_connect(void)
+{
+    const char* path = getenv("NGSCOPE_PLOT_SOCK");
+    if (path == NULL || path[0] == '\0') {
+        return -1;
+    }
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        printf("plot: socket() failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        printf("plot: cannot connect to %s: %s -- falling back to srsGUI\n", path, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    printf("plot: streaming PDCCH symbols and channel response to %s\n", path);
+    return fd;
+}
+
+/* Returns 0 on success, -1 once the peer has gone away. */
+static int plot_sink_write(int fd, const void* buf, size_t len)
+{
+    const uint8_t* p = (const uint8_t*)buf;
+    while (len > 0) {
+        ssize_t n = send(fd, p, len, MSG_NOSIGNAL);
+        if (n > 0) {
+            p += n;
+            len -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && (errno == EINTR)) {
+            continue;
+        }
+        return -1;
+    }
+    return 0;
+}
+
+static int plot_sink_send(int fd, uint32_t seq, const cf_t* iq, int nof_const, const float* csi, int nof_csi)
+{
+    uint32_t header[2] = {NGSCOPE_PLOT_MAGIC, seq};
+    uint16_t counts[2] = {(uint16_t)nof_const, (uint16_t)nof_csi};
+
+    if (plot_sink_write(fd, header, sizeof(header)) < 0 ||
+        plot_sink_write(fd, counts, sizeof(counts)) < 0) {
+        return -1;
+    }
+    /* cf_t is a complex float: contiguous (I,Q) pairs, so it goes out as-is. */
+    if (nof_const > 0 && plot_sink_write(fd, iq, (size_t)nof_const * 2 * sizeof(float)) < 0) {
+        return -1;
+    }
+    if (nof_csi > 0 && plot_sink_write(fd, csi, (size_t)nof_csi * sizeof(float)) < 0) {
+        return -1;
+    }
+    return 0;
+}
 extern bool go_exit;
 extern pthread_mutex_t     plot_mutex;
 extern ngscope_plot_t      plot_data;
@@ -300,30 +390,81 @@ void* plot_pdcch_run(void* arg)
     plot_scatter_t pdcch;
     plot_real_t csi;
 
-    sdrgui_init();
+    /* NGSCOPE_PLOT_SOCK routes the same two series to a front end instead of opening
+     * srsGUI's own windows. Unset -> unchanged behaviour. */
+    int sink = plot_sink_connect();
 
-   	plot_scatter_init(&pdcch);
-    plot_scatter_setTitle(&pdcch, "PDCCH - Equalized Symbols");
-    plot_scatter_setXAxisScale(&pdcch, -3, 3);
-    plot_scatter_setYAxisScale(&pdcch, -3, 3);
+    if (sink < 0) {
+        sdrgui_init();
 
-    plot_real_addToWindowGrid(&pdcch, (char*)"pdsch_ue", 0, 0);
+        plot_scatter_init(&pdcch);
+        plot_scatter_setTitle(&pdcch, "PDCCH - Equalized Symbols");
+        plot_scatter_setXAxisScale(&pdcch, -3, 3);
+        plot_scatter_setYAxisScale(&pdcch, -3, 3);
 
-    plot_real_init(&csi);
-    plot_real_setTitle(&csi, "Channel Response - Magnitude");
-    plot_real_setLabels(&csi, "Subcarrier Index", "dB");
-    plot_real_setYAxisScale(&csi, -40, 40);
-    plot_real_addToWindowGrid(&csi, (char*)"pdsch_ue", 0, 1);
+        plot_real_addToWindowGrid(&pdcch, (char*)"pdsch_ue", 0, 0);
 
+        plot_real_init(&csi);
+        plot_real_setTitle(&csi, "Channel Response - Magnitude");
+        plot_real_setLabels(&csi, "Subcarrier Index", "dB");
+        plot_real_setYAxisScale(&csi, -40, 40);
+        plot_real_addToWindowGrid(&csi, (char*)"pdsch_ue", 0, 1);
+    }
+
+    /* Snapshot buffers: the socket write must not happen under dci_plot_mutex, or a slow
+     * reader would stall the decoder thread that signals us. */
+    cf_t*  iq_snapshot  = NULL;
+    float* csi_snapshot = NULL;
+    if (sink >= 0) {
+        iq_snapshot  = srsran_vec_cf_malloc(nof_pdcch_sample > 0 ? nof_pdcch_sample : 1);
+        csi_snapshot = srsran_vec_f_malloc(size > 0 ? size : 1);
+        if (iq_snapshot == NULL || csi_snapshot == NULL) {
+            printf("plot: out of memory for snapshot buffers\n");
+            close(sink);
+            sink = -1;
+        }
+    }
+
+    uint32_t seq          = 0;
+    int64_t  next_frame_us = 0;
 
     while(!go_exit){
-        pthread_mutex_lock(&dci_plot_mutex);    
+        pthread_mutex_lock(&dci_plot_mutex);
 		//printf("waiting for signal!\n");
-        pthread_cond_wait(&dci_plot_cond, &dci_plot_mutex); 
+        pthread_cond_wait(&dci_plot_cond, &dci_plot_mutex);
+
+        if (sink >= 0) {
+            /* Decoding runs at 1000 subframes/s; nothing can usefully draw that fast, so
+             * drop frames rather than queue them and fall behind. */
+            int64_t now = timestamp_us();
+            if (now < next_frame_us) {
+                pthread_mutex_unlock(&dci_plot_mutex);
+                continue;
+            }
+            next_frame_us = now + 1000000 / NGSCOPE_PLOT_MAX_FPS;
+
+            memcpy(iq_snapshot, pdcch_buf, (size_t)nof_pdcch_sample * sizeof(cf_t));
+            memcpy(csi_snapshot, csi_amp, (size_t)size * sizeof(float));
+            pthread_mutex_unlock(&dci_plot_mutex);
+
+            if (plot_sink_send(sink, seq++, iq_snapshot, nof_pdcch_sample, csi_snapshot, size) < 0) {
+                printf("plot: listener closed the connection, stopping plot stream\n");
+                close(sink);
+                sink = -1;
+            }
+            continue;
+        }
+
       	plot_scatter_setNewData(&pdcch, pdcch_buf, nof_pdcch_sample);
       	plot_real_setNewData(&csi, csi_amp, size);
-        pthread_mutex_unlock(&dci_plot_mutex);    
+        pthread_mutex_unlock(&dci_plot_mutex);
 	}
+
+    if (sink >= 0) {
+        close(sink);
+    }
+    free(iq_snapshot);
+    free(csi_snapshot);
 #endif
 
 	return NULL;

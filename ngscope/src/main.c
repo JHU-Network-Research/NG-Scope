@@ -181,23 +181,23 @@ int main(int argc, char** argv)
     if (ret < 0){
       if (errno != EEXIST){
         fprintf(stderr, "Error: Could not create %s\n", out_path);
-        return 0;
+        return 1;
       }
     }
 
     if (mkdir(path, 0755) < 0){
       fprintf(stderr, "Error: Could not create %s\n", path);
-      return 0;
+      return 1;
     }
 
     if (mkdir(dci_out_path, 0755) < 0){
       fprintf(stderr, "Error: Could not create %s\n", dci_out_path);
-      return 0;
+      return 1;
     }
 
     if (mkdir(sib_out_path, 0755) < 0){
       fprintf(stderr, "Error: Could not create %s\n", sib_out_path);
-      return 0;
+      return 1;
     }
 
     config.out_path = path;
@@ -208,5 +208,7 @@ int main(int argc, char** argv)
     fprintf(stdout,"Using SIB Path: %s\n", config.sib_logs_path);
 
     ngscope_main(&config);
-    return 1;
+    /* 0 = ran to completion. Every caller-visible failure above returns non-zero, so
+     * `ngscope ... && <next step>` behaves the way a shell expects. */
+    return 0;
 }

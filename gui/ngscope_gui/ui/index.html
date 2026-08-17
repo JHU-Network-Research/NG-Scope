@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NG-Scope</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="name">NG-Scope</span>
+    </div>
+
+    <div class="status" id="status" data-state="idle">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="status-text" id="status-text">Idle</span>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="btn ghost" id="btn-load">Load&nbsp;.toml</button>
+      <button class="btn ghost" id="btn-save-as">Save&nbsp;as&hellip;</button>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="btn primary" id="btn-start">
+        <span class="glyph" aria-hidden="true">&#9654;</span> Start
+      </button>
+      <button class="btn danger" id="btn-stop" disabled>
+        <span class="glyph" aria-hidden="true">&#9632;</span> Stop
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ------------------------------------------------------ configuration -->
+    <section class="pane pane-config">
+      <div class="pane-scroll" id="config-scroll">
+
+        <article class="card">
+          <header class="card-head">
+            <h2>Run</h2>
+            <p class="card-sub">Where ngscope writes, and which binary runs.</p>
+          </header>
+          <div class="card-body">
+            <div class="field">
+              <label for="out-dir">Output directory</label>
+              <div class="path-row">
+                <input type="text" id="out-dir" spellcheck="false" placeholder="Choose a directory&hellip;">
+                <button class="btn ghost small" id="btn-out-dir">Browse</button>
+              </div>
+              <p class="help">
+                Passed as <code>-o</code>. Each run creates
+                <code>&lt;dir&gt;/&lt;timestamp&gt;/</code> for the DCI logs, decoded SIBs,
+                and any IQ recording.
+              </p>
+              <p class="field-error" data-error-for="out_dir"></p>
+            </div>
+
+            <details class="advanced">
+              <summary>Advanced</summary>
+              <div class="field">
+                <label for="binary">ngscope executable</label>
+                <div class="path-row">
+                  <input type="text" id="binary" spellcheck="false" placeholder="Auto-detect">
+                  <button class="btn ghost small" id="btn-binary">Browse</button>
+                </div>
+                <p class="help" id="binary-help">Resolving&hellip;</p>
+              </div>
+            </details>
+          </div>
+        </article>
+
+        <article class="card">
+          <header class="card-head">
+            <h2>Cells</h2>
+            <p class="card-sub">One RF device per cell, up to <span id="max-cells">4</span>.</p>
+          </header>
+          <div class="tabs" id="cell-tabs" role="tablist"></div>
+          <div class="card-body" id="cell-body"></div>
+        </article>
+
+        <article class="card feature">
+          <header class="card-head">
+            <h2>RACH</h2>
+            <p class="card-sub">The two settings that most change what ends up in your logs.</p>
+          </header>
+          <div class="card-body" id="rach-body"></div>
+        </article>
+
+        <article class="card">
+          <header class="card-head">
+            <h2>Decoding</h2>
+            <p class="card-sub">Applies to every cell.</p>
+          </header>
+          <div class="card-body" id="top-body"></div>
+        </article>
+
+        <article class="card">
+          <header class="card-head">
+            <h2>Logging</h2>
+          </header>
+          <div class="card-body" id="log-body"></div>
+        </article>
+
+        <p class="state-note" id="state-note"></p>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ console -->
+    <section class="pane pane-console">
+      <!-- The two series srsGUI draws, rendered in-window. Titles and axis scales match
+           status_plot.c so the view is the same one. -->
+      <div class="plots" id="plots">
+        <div class="plots-head">
+          <h2>Plots</h2>
+          <span class="plots-note" id="plots-note">Waiting for a run&hellip;</span>
+          <button class="btn ghost small" id="btn-plots-toggle">Hide</button>
+        </div>
+        <div class="plots-body" id="plots-body">
+          <figure class="plot square">
+            <figcaption>PDCCH &mdash; Equalized Symbols</figcaption>
+            <canvas id="plot-const"></canvas>
+          </figure>
+          <figure class="plot">
+            <figcaption>Channel Response &mdash; Magnitude</figcaption>
+            <canvas id="plot-csi"></canvas>
+          </figure>
+        </div>
+      </div>
+
+      <div class="console-head">
+        <div class="console-title">
+          <h2>Console</h2>
+          <span class="line-count" id="line-count">0 lines</span>
+        </div>
+        <div class="console-tools">
+          <div class="search">
+            <input type="search" id="console-filter" placeholder="Filter output" spellcheck="false">
+          </div>
+          <label class="mini-toggle">
+            <input type="checkbox" id="opt-autoscroll" checked>
+            <span>Follow</span>
+          </label>
+          <label class="mini-toggle">
+            <input type="checkbox" id="opt-wrap">
+            <span>Wrap</span>
+          </label>
+          <button class="btn ghost small" id="btn-run-dir" disabled>Open run folder</button>
+          <button class="btn ghost small" id="btn-copy">Copy</button>
+          <button class="btn ghost small" id="btn-save-console">Save</button>
+          <button class="btn ghost small" id="btn-clear">Clear</button>
+        </div>
+      </div>
+      <div class="console" id="console" role="log" aria-live="polite"></div>
+      <div class="console-empty" id="console-empty">
+        <p>Nothing yet.</p>
+        <p class="dim">Output from ngscope appears here as it runs.</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
