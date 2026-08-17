@@ -167,8 +167,7 @@ if(RF_FOUND)
   # Tests
   if (UHD_FOUND AND UHD_ENABLE_CUSTOM_RFNOC)
     add_executable(rfnoc_test rfnoc_test.cc)
-    target_link_libraries(rfnoc_test srsran_rf ${UHD_LIBRARIES} ${Boost_LIBRARIES} /usr/lib/x86_64-linux-gnu/libboost_system.so)
-    message(info ${Boost_LIBRARIES})
+    target_link_libraries(rfnoc_test srsran_rf ${UHD_LIBRARIES} ${Boost_LIBRARIES})
   endif (UHD_FOUND AND UHD_ENABLE_CUSTOM_RFNOC)
 
   if (ZEROMQ_FOUND)
