@@ -5,10 +5,13 @@ dialogs, the config file, the subprocess -- goes through the Api class below, wh
 pywebview exposes to the page as `window.pywebview.api`.
 """
 
+import copy
+import csv
 import json
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import webview
@@ -16,6 +19,7 @@ import webview
 from . import config_io, earfcn, schema, state as state_mod
 from .plotfeed import PlotFeed
 from .runner import Runner, describe_exit, find_binary
+from .sweep import Sweep
 
 UI_DIR = Path(__file__).parent / "ui"
 
@@ -23,6 +27,15 @@ UI_DIR = Path(__file__).parent / "ui"
 DCI_PATH_MARKER = "Using DCI Path:"
 
 RUN_CONFIG_NAME = "ngscope-gui-run.toml"
+
+# ngscope's own run-directory format (main.c:173), reused so everything the GUI stamps
+# reads the same way.
+STAMP_FORMAT = "%Y_%m_%d_%H_%M_%S"
+
+SWEEP_SUMMARY_COLUMNS = [
+    "pass", "earfcn", "band", "freq_hz", "locked", "pci", "prb",
+    "lock_s", "listen_s", "total_s", "exit_code", "run_dir",
+]
 
 # srsRAN colours its log lines (ERROR red, WARNING yellow, INFO green). The escapes are
 # noise in a HTML console, but the colour itself is the most reliable severity signal the
@@ -59,6 +72,14 @@ class Api:
         self.run_dir = None
         # Receives the two series srsGUI would have drawn; see plotfeed.py.
         self._plots = PlotFeed(lambda frame: self._js("onPlotFrame", frame))
+        self._sweep = Sweep(
+            launch=self._sweep_launch,
+            stop=lambda: self._runner.stop(),
+            progress=lambda state: self._js("onSweepProgress", state),
+            on_result=self._sweep_write_row,
+        )
+        # The config and output directory a sweep was started with, reused for every step.
+        self._sweep_ctx = None
 
     # ------------------------------------------------------------------ bridge
 
@@ -82,10 +103,18 @@ class Api:
                 if run_dir.is_dir():
                     self.run_dir = str(run_dir)
                     self._js("onRunDir", self.run_dir)
+                    self._sweep.note_run_dir(self.run_dir)
+            self._sweep.note_line(item["text"])
         self._js("appendLines", decorated)
 
     def _push_exit(self, code):
         message, kind = describe_exit(code)
+        if self._sweep.active:
+            # Mid-sweep an exit is the end of one channel, not the end of the run: report
+            # it in the console but let the sweep decide what happens next.
+            self._push_lines([f"[gui] channel finished ({message})"])
+            self._sweep.on_exit(code)
+            return
         self._js("onExit", {"code": code, "message": message, "kind": kind})
 
     # ------------------------------------------------------------------ startup
@@ -212,29 +241,20 @@ class Api:
             return []
         return [{"earfcn": e, "band": b} for e, b in earfcn.freq_to_earfcns(hz)]
 
-    def start(self, config, out_dir, binary_override=""):
-        if self._runner.running:
-            return {"ok": False, "error": "ngscope is already running."}
-
-        errors, warnings = config_io.validate(config, out_dir)
-        if errors:
-            return {"ok": False, "errors": errors, "warnings": warnings}
-
+    def _spawn(self, config, out_dir, binary_override, config_name):
+        """Write the config and launch ngscope. Returns (ok, detail)."""
         binary, _source = find_binary(binary_override)
         if not binary:
-            return {
-                "ok": False,
-                "error": (
-                    "Could not find the ngscope executable. Build it, or set the path "
-                    "under Advanced."
-                ),
-            }
+            return False, (
+                "Could not find the ngscope executable. Build it, or set the path "
+                "under Advanced."
+            )
 
-        config_path = str(Path(out_dir) / RUN_CONFIG_NAME)
+        config_path = str(Path(out_dir) / config_name)
         try:
             config_io.write(config, config_path)
         except OSError as exc:
-            return {"ok": False, "error": f"Could not write {config_path}: {exc}"}
+            return False, f"Could not write {config_path}: {exc}"
 
         argv = [binary, "-c", config_path, "-o", str(out_dir)]
         self.run_dir = None
@@ -244,7 +264,7 @@ class Api:
         try:
             pid = self._runner.start(argv, cwd=out_dir, env_extra=env_extra)
         except OSError as exc:
-            return {"ok": False, "error": f"Could not launch ngscope: {exc}"}
+            return False, f"Could not launch ngscope: {exc}"
 
         self._push_lines(
             [
@@ -252,13 +272,145 @@ class Api:
                 f"[gui] pid {pid}, config written to {config_path}",
             ]
         )
-        return {"ok": True, "pid": pid, "argv": argv, "warnings": warnings}
+        return True, {"pid": pid, "argv": argv}
+
+    def start(self, config, out_dir, binary_override=""):
+        if self._runner.running:
+            return {"ok": False, "error": "ngscope is already running."}
+
+        errors, warnings = config_io.validate(config, out_dir)
+        if errors:
+            return {"ok": False, "errors": errors, "warnings": warnings}
+
+        ok, detail = self._spawn(config, out_dir, binary_override, RUN_CONFIG_NAME)
+        if not ok:
+            return {"ok": False, "error": detail}
+        return {"ok": True, "warnings": warnings, **detail}
 
     def stop(self):
+        if self._sweep.active:
+            self._sweep.cancel()
+            return {"ok": True, "sweep": True}
         if not self._runner.running:
             return {"ok": False, "error": "Not running."}
         self._runner.stop()
         return {"ok": True}
+
+    # ------------------------------------------------------------------ sweep
+
+    def parse_earfcn_list(self, text):
+        """Live feedback for the sweep list field."""
+        values, errors = earfcn.parse_list(text or "")
+        preview = []
+        for value in values[:6]:
+            info = earfcn.describe(value)
+            preview.append({"earfcn": value, "band": info["band"], "mhz": info["mhz"]})
+        return {"count": len(values), "errors": errors, "preview": preview}
+
+    def _sweep_launch(self, value):
+        """Launch one channel of the sweep, overriding the first cell's frequency."""
+        ctx = self._sweep_ctx
+        info = earfcn.describe(value)
+        if ctx is None or info is None:
+            return False, f"EARFCN {value} is not valid."
+
+        config = copy.deepcopy(ctx["config"])
+        cell = config["cells"][0]
+        cell["rf_freq"] = info["freq_hz"]
+        cell["gui_freq_mode"] = "earfcn"
+        cell["gui_earfcn"] = value
+
+        # Each channel gets its own subdirectory, so ngscope's timestamped run folders end
+        # up grouped by EARFCN instead of in one undifferentiated pile.
+        channel_dir = Path(ctx["out_dir"]) / f"earfcn-{value}"
+        try:
+            channel_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return False, f"Could not create {channel_dir}: {exc}"
+
+        self._push_lines([
+            f"[gui] --- EARFCN {value} · band {info['band']} · {info['mhz']:.1f} MHz · "
+            f"listen {ctx['dwell']:g}s from lock, give up after {ctx['acquire']:g}s ---"
+        ])
+        # The config lands in the channel's own directory, beside its captures.
+        return self._spawn(config, str(channel_dir), ctx["binary"],
+                           f"ngscope-gui-sweep-{value}.toml")
+
+    def _sweep_write_row(self, step):
+        """Append one channel's result to the sweep summary as soon as it finishes."""
+        ctx = self._sweep_ctx
+        if ctx is None or not ctx.get("summary"):
+            return
+        path = Path(ctx["summary"])
+        new = not path.exists()
+        with open(path, "a", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            if new:
+                writer.writerow(SWEEP_SUMMARY_COLUMNS)
+            writer.writerow([
+                step.get("cycle"),
+                step.get("earfcn"),
+                step.get("band"),
+                step.get("freq_hz"),
+                1 if step.get("locked") else 0,
+                step.get("pci"),
+                step.get("prb"),
+                step.get("lock_s"),
+                step.get("listen_s"),
+                step.get("seconds"),
+                step.get("exit_code"),
+                step.get("run_dir"),
+            ])
+
+    def sweep_start(self, config, out_dir, earfcn_text, dwell, acquire, repeat, binary_override=""):
+        if self._runner.running or self._sweep.active:
+            return {"ok": False, "error": "Already running."}
+
+        values, parse_errors = earfcn.parse_list(earfcn_text or "")
+        if parse_errors:
+            return {"ok": False, "error": "; ".join(parse_errors[:4])}
+        if not values:
+            return {"ok": False, "error": "Enter at least one EARFCN to sweep."}
+        try:
+            dwell = float(dwell)
+        except (TypeError, ValueError):
+            dwell = 0
+        if dwell < 1:
+            return {"ok": False, "error": "Listen time must be at least 1 second."}
+        try:
+            acquire = float(acquire)
+        except (TypeError, ValueError):
+            acquire = 0
+        if acquire < 1:
+            return {"ok": False, "error": "Give-up time must be at least 1 second."}
+
+        # Validate with the first channel applied, so frequency-dependent rules (the
+        # duplicate-frequency check in particular) are exercised against a real value.
+        probe = copy.deepcopy(config)
+        first = earfcn.describe(values[0])
+        probe["cells"][0]["rf_freq"] = first["freq_hz"]
+        errors, warnings = config_io.validate(probe, out_dir)
+        if errors:
+            return {"ok": False, "errors": errors, "warnings": warnings}
+
+        # Stamped at sweep start, so one file covers the whole sweep including every repeat
+        # pass, and a later sweep into the same directory cannot overwrite it.
+        stamp = datetime.now().strftime(STAMP_FORMAT)
+        summary = str(Path(out_dir) / f"sweep-summary-{stamp}.csv")
+
+        self._sweep_ctx = {
+            "config": copy.deepcopy(config),
+            "out_dir": out_dir,
+            "binary": binary_override,
+            "dwell": dwell,
+            "acquire": acquire,
+            "summary": summary,
+        }
+        result = self._sweep.start(values, dwell, acquire, repeat)
+        if not result.get("ok"):
+            return result
+        self._push_lines([f"[gui] sweep summary: {summary}"])
+        return {"ok": True, "earfcns": values, "summary": summary, "warnings": warnings}
 
     def status(self):
         return {"running": self._runner.running, "stopping": self._runner.stopping}

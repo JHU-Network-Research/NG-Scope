@@ -72,6 +72,81 @@
 
         <article class="card">
           <header class="card-head">
+            <h2>EARFCN sweep</h2>
+            <p class="card-sub">Cycle cell 1 through a list of channels, dwelling on each.</p>
+          </header>
+          <div class="card-body">
+            <div class="toggles">
+              <label class="toggle">
+                <span class="toggle-head"><span class="toggle-label">Sweep EARFCNs</span></span>
+                <span class="switch">
+                  <input type="checkbox" id="sweep-enabled">
+                  <span class="track"></span><span class="thumb"></span>
+                </span>
+                <p class="help">
+                  ngscope has no scanning mode, so each channel is a separate run with its
+                  own output folder. Start and Stop drive the sweep while this is on.
+                </p>
+              </label>
+            </div>
+
+            <div id="sweep-fields" hidden>
+              <div class="field">
+                <label for="sweep-earfcns">Channels</label>
+                <input type="text" id="sweep-earfcns" spellcheck="false"
+                       placeholder="66636, 2850, 5230-5240:5">
+                <p class="hint" id="sweep-count"></p>
+                <p class="help">
+                  EARFCNs separated by commas or spaces. Ranges are allowed
+                  (<code>5230-5240</code>), with an optional step (<code>5230-5240:5</code>).
+                </p>
+                <p class="field-error" data-error-for="sweep.earfcns"></p>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="sweep-dwell">Listen per channel (s)</label>
+                  <input type="number" id="sweep-dwell" min="1">
+                  <p class="help">Timed from cell lock, so cell-search time is not counted.</p>
+                </div>
+                <div class="field">
+                  <label for="sweep-acquire">Give up after (s)</label>
+                  <input type="number" id="sweep-acquire" min="1">
+                  <p class="help">Skip the channel if no cell locks within this long.</p>
+                </div>
+              </div>
+
+              <div class="toggles">
+                <label class="toggle">
+                  <span class="toggle-head"><span class="toggle-label">Repeat</span></span>
+                  <span class="switch">
+                    <input type="checkbox" id="sweep-repeat">
+                    <span class="track"></span><span class="thumb"></span>
+                  </span>
+                  <p class="help">Keep cycling until you press Stop.</p>
+                </label>
+              </div>
+              <p class="hint" id="sweep-total"></p>
+
+              <p class="help" id="sweep-summary-row" hidden>
+                Summary: <code id="sweep-summary-path"></code>
+              </p>
+
+              <div id="sweep-progress" hidden>
+                <table class="sweep-table">
+                  <thead>
+                    <tr><th>EARFCN</th><th>Band</th><th>MHz</th><th>PCI</th><th>PRB</th>
+                        <th>Lock</th><th>Listen</th></tr>
+                  </thead>
+                  <tbody id="sweep-rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <header class="card-head">
             <h2>Cells</h2>
             <p class="card-sub">One RF device per cell, up to <span id="max-cells">4</span>.</p>
           </header>

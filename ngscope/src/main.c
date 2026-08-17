@@ -162,9 +162,11 @@ int main(int argc, char** argv)
     ngscope_read_config(&config, config_path);
     /* Set DCI logs output folder path  */
 
-    char path[128];
-    char dci_out_path[256];
-    char sib_out_path[256];
+    /* All three are bounded by OUT_PATH_MAX_LEN / SIB_LOGS_PATH_MAX_LEN, which is what the
+     * prog_args buffers these are later strcpy'd into can hold. */
+    char path[OUT_PATH_MAX_LEN];
+    char dci_out_path[OUT_PATH_MAX_LEN];
+    char sib_out_path[SIB_LOGS_PATH_MAX_LEN];
     char timestamp[32];
 
     time_t now = time(NULL);
@@ -172,9 +174,21 @@ int main(int argc, char** argv)
 
     strftime(timestamp, sizeof(timestamp), "%Y_%m_%d_%H_%M_%S", tm_info);
 
-    snprintf(path, sizeof(path), "%s/%s/", out_path, timestamp);
-    snprintf(dci_out_path, sizeof(dci_out_path), "%s%s/", path, DEFAULT_DCI_OUTPUT);
-    snprintf(sib_out_path, sizeof(sib_out_path), "%s%s/", path, DEFAULT_SIB_OUTPUT);
+    /* Truncation here used to be silent, and produced a run directory with half a
+     * timestamp in its name plus sibling "<partial>dci_output" directories. Refuse rather
+     * than write the logs somewhere nobody asked for. */
+    if ((size_t)snprintf(path, sizeof(path), "%s/%s/", out_path, timestamp) >= sizeof(path) ||
+        (size_t)snprintf(dci_out_path, sizeof(dci_out_path), "%s%s/", path, DEFAULT_DCI_OUTPUT) >=
+            sizeof(dci_out_path) ||
+        (size_t)snprintf(sib_out_path, sizeof(sib_out_path), "%s%s/", path, DEFAULT_SIB_OUTPUT) >=
+            sizeof(sib_out_path)) {
+      fprintf(stderr,
+              "Error: output path is too long (limit %d characters, including the timestamped "
+              "run directory): %s\n",
+              OUT_PATH_MAX_LEN,
+              out_path);
+      return 1;
+    }
 
     int ret;
     ret = mkdir(out_path, 0755);

@@ -49,6 +49,38 @@ cannot open a window. If you hit that, delete `gui/.venv` and re-run the launche
   `<output directory>/<timestamp>/recorded-samples.bin`; that path is fixed by
   `ngscope_main.c:113`, so the GUI lets you choose the *directory* rather than pretending
   the filename is settable. Replay takes an explicit file, chosen with a native dialog.
+* **EARFCN sweep** — cycle cell 1 through a list of channels. ngscope has no scanning mode,
+  so each channel is a separate run with its own `<timestamp>/` folder and its own
+  `ngscope-gui-sweep-<earfcn>.toml`. The list takes EARFCNs separated by commas or spaces,
+  plus ranges with an optional step (`5230-5240:5`).
+
+  Each channel has two phases. **Listen** is timed from cell lock, so a channel whose cell
+  search took four seconds still gets its full listening time; **Give up after** bounds the
+  search, because a channel with nothing on it would otherwise retry forever. A pass
+  therefore takes between `n × listen` and `n × (listen + giveup)`, which the UI quotes.
+
+  Results build up in a table as it goes — band, frequency, PCI, PRB, time to lock, and
+  time spent listening — so a pass tells you which channels had a cell and how quickly it
+  locked. `Repeat` keeps cycling until you press Stop.
+
+  Output is grouped by channel, with one summary per sweep:
+
+  ```
+  <output directory>/
+  ├── sweep-summary-2026_08_17_10_16_02.csv     stamped when the sweep started
+  ├── earfcn-66636/
+  │   ├── ngscope-gui-sweep-66636.toml          the config this channel ran with
+  │   ├── 2026_08_17_10_16_02/                  one ngscope run per visit
+  │   └── 2026_08_17_10_16_13/
+  └── earfcn-2850/
+      └── …
+  ```
+
+  The summary has a row per channel visit, appended as each finishes so an interrupted
+  sweep still leaves its results: `pass, earfcn, band, freq_hz, locked, pci, prb, lock_s,
+  listen_s, total_s, exit_code, run_dir`. `run_dir` points at the capture, so the CSV is
+  the index from channel to data. One `Repeat` cycle bumps `pass`; a second sweep into the
+  same directory gets its own summary rather than overwriting.
 * **Plots** — the two series srsGUI draws, rendered in this window instead of its own:
   **PDCCH — Equalized Symbols** and **Channel Response — Magnitude**, with the same axis
   scales `status_plot.c` gives srsGUI (±3 for the constellation, −40..40 dB for the

@@ -439,7 +439,15 @@ function renderCells() {
       `cells.${index}.replay_fname`, (cur) => api.pick_replay_file(cur)));
   }
 
-  body.appendChild(tuningField(cell, index));
+  /* While a sweep is armed it supplies cell 1's frequency, so editing it here would be
+     misleading -- say what is driving it instead. */
+  if (index === 0 && sweepOn()) {
+    const note = el('div', 'callout info');
+    note.innerHTML = 'Tuning for this cell is driven by the <b>EARFCN sweep</b> above.';
+    body.appendChild(note);
+  } else {
+    body.appendChild(tuningField(cell, index));
+  }
 
   const grid = el('div', 'grid-2');
   ['nof_thread', 'N_id_2'].forEach((key) => {
@@ -589,6 +597,12 @@ function renderAll() {
   $('console').classList.toggle('wrap', !!S.console.wrap);
   $('plots').classList.toggle('collapsed', !!S.console.plotsCollapsed);
   $('btn-plots-toggle').textContent = S.console.plotsCollapsed ? 'Show' : 'Hide';
+  $('sweep-enabled').checked = sweepOn();
+  $('sweep-earfcns').value = S.sweep.earfcns || '';
+  $('sweep-dwell').value = S.sweep.dwell;
+  $('sweep-acquire').value = S.sweep.acquire;
+  $('sweep-repeat').checked = !!S.sweep.repeat;
+  refreshSweepFields();
   syncPlotsVisibility();
 }
 
@@ -725,6 +739,110 @@ function visibleConsoleText() {
   return Array.from(consoleEl().querySelectorAll('.line:not(.hidden)'))
     .map((n) => n.dataset.raw || '').join('\n');
 }
+
+/* ------------------------------------------------------------------- sweep */
+
+let sweepState = null;      // last onSweepProgress payload
+let sweepSummary = null;    // path of the summary CSV for the current sweep
+
+function sweepOn() {
+  return !!(S.sweep && S.sweep.enabled);
+}
+
+async function refreshSweepFields() {
+  const on = sweepOn();
+  $('sweep-fields').hidden = !on;
+  if (!on) return;
+
+  const parsed = await api.parse_earfcn_list(S.sweep.earfcns || '');
+  const slot = document.querySelector('[data-error-for="sweep.earfcns"]');
+  if (parsed.errors.length) {
+    slot.textContent = parsed.errors[0];
+    slot.classList.add('show');
+    $('sweep-count').textContent = '';
+    $('sweep-total').textContent = '';
+    return;
+  }
+  slot.classList.remove('show');
+  slot.textContent = '';
+
+  const shown = parsed.preview
+    .map((p) => `${p.earfcn} (b${p.band}, ${p.mhz.toFixed(1)})`)
+    .join(', ');
+  const more = parsed.count > parsed.preview.length ? `, +${parsed.count - parsed.preview.length} more` : '';
+  $('sweep-count').textContent = parsed.count
+    ? `${parsed.count} channel${parsed.count === 1 ? '' : 's'}: ${shown}${more}`
+    : '';
+
+  /* A pass is bounded, not fixed: a channel that locks immediately costs the listen time,
+     one with no cell costs the give-up time. Quote the range rather than a fake single
+     number. */
+  const dwell = Number(S.sweep.dwell) || 0;
+  const acquire = Number(S.sweep.acquire) || 0;
+  if (parsed.count && dwell && acquire) {
+    const fmt = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+    $('sweep-total').textContent =
+      `one pass: ${fmt(parsed.count * dwell)} if every channel locks at once, `
+      + `up to ${fmt(parsed.count * (dwell + acquire))} in the worst case`;
+  } else {
+    $('sweep-total').textContent = '';
+  }
+}
+
+function sweepRow(entry, cls) {
+  const tr = el('tr', cls);
+  const mhz = entry.freq_hz ? (entry.freq_hz / 1e6).toFixed(1) : '';
+  const noCell = !entry.locked;
+  const cells = [
+    { v: entry.earfcn },
+    { v: entry.band == null ? '' : `b${entry.band}` },
+    { v: mhz },
+    { v: entry.pci == null ? '—' : entry.pci, dim: entry.pci == null },
+    { v: entry.prb == null ? '—' : entry.prb, dim: entry.prb == null },
+    // Lock: how long cell search took, or that it never did.
+    { v: entry.lock_s == null ? (noCell ? 'no cell' : '—') : `${entry.lock_s}s`, dim: noCell },
+    { v: entry.listen_s == null ? '—' : `${entry.listen_s}s`, dim: entry.listen_s == null },
+  ];
+  cells.forEach(({ v, dim }) => tr.appendChild(el('td', dim ? 'nocell' : null, String(v))));
+  return tr;
+}
+
+window.onSweepProgress = function onSweepProgress(state) {
+  sweepState = state;
+  $('sweep-progress').hidden = false;
+
+  const rows = $('sweep-rows');
+  rows.innerHTML = '';
+  state.results.forEach((r) => rows.appendChild(sweepRow(r, null)));
+  if (state.current) rows.appendChild(sweepRow(state.current, 'current'));
+
+  if (state.active) {
+    const pass = state.repeat ? ` · pass ${state.cycle}` : '';
+    const where = state.current ? ` · EARFCN ${state.current.earfcn}` : '';
+    const what = { acquiring: ' · searching', listening: ' · listening', 'no-cell': ' · no cell' };
+    setStatus(state.phase === 'stopping' || state.phase === 'no-cell' ? 'stopping' : 'running',
+              `Sweep ${state.index + 1}/${state.total}${where}${what[state.phase] || ''}${pass}`);
+    return;
+  }
+
+  running = false;
+  stopping = false;
+  syncButtons();
+  const found = state.results.filter((r) => r.locked).length;
+  if (state.phase === 'error') {
+    setStatus('error', state.error || 'Sweep failed');
+    toast(state.error || 'Sweep failed', 'error');
+  } else {
+    const verb = state.phase === 'cancelled' ? 'Sweep stopped' : 'Sweep complete';
+    setStatus('ok', `${verb} — ${found}/${state.results.length} with a cell`);
+    toast(`${verb}: ${found} of ${state.results.length} channels had a cell.`, 'ok',
+          sweepSummary ? [sweepSummary] : null);
+  }
+  if (sweepSummary) {
+    $('sweep-summary-row').hidden = false;
+    $('sweep-summary-path').textContent = sweepSummary;
+  }
+};
 
 /* ------------------------------------------------------------------- plots */
 
@@ -918,7 +1036,10 @@ window.onExit = function onExit(info) {
 
 async function start() {
   clearErrors();
-  const result = await api.start(S.config, S.out_dir, S.binary);
+  const result = sweepOn()
+    ? await api.sweep_start(S.config, S.out_dir, S.sweep.earfcns, S.sweep.dwell,
+                            S.sweep.acquire, !!S.sweep.repeat, S.binary)
+    : await api.start(S.config, S.out_dir, S.binary);
 
   if (!result.ok) {
     if (result.errors) {
@@ -946,7 +1067,13 @@ async function start() {
   syncPlotsVisibility();
   $('btn-run-dir').disabled = true;
   syncButtons();
-  setStatus('running', 'Running');
+  if (sweepOn()) {
+    $('sweep-rows').innerHTML = '';
+    sweepSummary = result.summary || null;
+    setStatus('running', `Sweep 1/${result.earfcns.length}`);
+  } else {
+    setStatus('running', 'Running');
+  }
 }
 
 async function stop() {
@@ -1046,6 +1173,34 @@ function bind() {
     if (!runDir) return;
     const result = await api.open_path(runDir);
     if (!result.ok) toast(result.error, 'warn');
+  });
+
+  $('sweep-enabled').addEventListener('change', (e) => {
+    S.sweep.enabled = e.target.checked;
+    scheduleSave();
+    refreshSweepFields();
+    renderCells();     // cell 1's tuning field is driven by the sweep while it is on
+  });
+  $('sweep-earfcns').addEventListener('input', (e) => {
+    S.sweep.earfcns = e.target.value;
+    scheduleSave();
+    refreshSweepFields();
+  });
+  $('sweep-dwell').addEventListener('input', (e) => {
+    const n = parseInt(e.target.value, 10);
+    S.sweep.dwell = Number.isNaN(n) ? '' : n;
+    scheduleSave();
+    refreshSweepFields();
+  });
+  $('sweep-acquire').addEventListener('input', (e) => {
+    const n = parseInt(e.target.value, 10);
+    S.sweep.acquire = Number.isNaN(n) ? '' : n;
+    scheduleSave();
+    refreshSweepFields();
+  });
+  $('sweep-repeat').addEventListener('change', (e) => {
+    S.sweep.repeat = e.target.checked;
+    scheduleSave();
   });
 
   $('btn-plots-toggle').addEventListener('click', () => {

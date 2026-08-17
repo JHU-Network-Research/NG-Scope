@@ -135,6 +135,67 @@ def freq_to_earfcns(freq_hz):
     return out
 
 
+def parse_list(text):
+    """Parse an EARFCN sweep list into (earfcns, errors).
+
+    Accepts comma- and/or whitespace-separated entries, each either a single EARFCN or an
+    inclusive range with an optional step:
+
+        66636, 2850              -> [66636, 2850]
+        2850-2853                -> [2850, 2851, 2852, 2853]
+        2850-2870:10             -> [2850, 2860, 2870]
+
+    Order is preserved and duplicates dropped, so the sweep visits each channel once per
+    pass in the order written.
+    """
+    earfcns, errors, seen = [], [], set()
+
+    for token in (t for t in text.replace(",", " ").split() if t):
+        step = 1
+        body = token
+        if ":" in token:
+            body, _, step_text = token.partition(":")
+            try:
+                step = int(step_text)
+                if step < 1:
+                    raise ValueError
+            except ValueError:
+                errors.append(f"'{token}': step must be a positive integer.")
+                continue
+
+        if "-" in body.lstrip("-"):
+            lo_text, _, hi_text = body.partition("-")
+            try:
+                lo, hi = int(lo_text), int(hi_text)
+            except ValueError:
+                errors.append(f"'{token}': not a range of integers.")
+                continue
+            if hi < lo:
+                errors.append(f"'{token}': range end is below its start.")
+                continue
+            candidates = range(lo, hi + 1, step)
+        else:
+            if step != 1:
+                errors.append(f"'{token}': a step only makes sense on a range.")
+                continue
+            try:
+                candidates = [int(body)]
+            except ValueError:
+                errors.append(f"'{token}': not an integer.")
+                continue
+
+        for value in candidates:
+            if earfcn_to_freq(value) is None:
+                errors.append(f"EARFCN {value} is outside 0..{MAX_DL_EARFCN}.")
+                continue
+            if value in seen:
+                continue
+            seen.add(value)
+            earfcns.append(value)
+
+    return earfcns, errors
+
+
 def describe(earfcn):
     """Human-readable summary for the UI, or None if the EARFCN is invalid."""
     result = earfcn_to_freq(earfcn)

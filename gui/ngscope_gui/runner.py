@@ -202,14 +202,19 @@ class Runner:
 
     def stop(self):
         """Ask ngscope to exit; escalate if it does not. Returns immediately."""
-        if not self.running:
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
             return False
         self._stopping = True
-        threading.Thread(target=self._stop_sequence, name="ngscope-stop", daemon=True).start()
+        # Bind the escalation to this exact process, so it cannot outlive the run and
+        # signal whatever started next.
+        threading.Thread(
+            target=self._stop_sequence, args=(proc,), name="ngscope-stop", daemon=True
+        ).start()
         return True
 
-    def _signal(self, sig):
-        proc = self._proc
+    def _signal(self, sig, proc=None):
+        proc = proc if proc is not None else self._proc
         if proc is None:
             return
         try:
@@ -217,34 +222,42 @@ class Runner:
         except (ProcessLookupError, PermissionError):
             pass
 
-    def _wait_for_exit(self, timeout):
+    @staticmethod
+    def _wait_for_proc(proc, timeout):
+        """Wait for *this* process, not for 'nothing is running'.
+
+        The distinction matters as soon as runs are sequenced: an escalation thread that
+        polls a global 'is something running' flag will see the *next* run and, when its
+        grace period expires, signal that instead of the process it was asked to stop.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if not self.running:
+            if proc.poll() is not None:
                 return True
             time.sleep(0.1)
-        return not self.running
+        return proc.poll() is not None
 
-    def _stop_sequence(self):
+    def _stop_sequence(self, proc):
         self._queue(["[gui] SIGINT sent -- waiting for ngscope to flush and exit"])
-        self._signal(signal.SIGINT)
-        if self._wait_for_exit(SIGINT_GRACE):
+        self._signal(signal.SIGINT, proc)
+        if self._wait_for_proc(proc, SIGINT_GRACE):
             return
 
         self._queue([f"[gui] still running after {SIGINT_GRACE:.0f}s, sending SIGTERM"])
-        self._signal(signal.SIGTERM)
-        if self._wait_for_exit(SIGTERM_GRACE):
+        self._signal(signal.SIGTERM, proc)
+        if self._wait_for_proc(proc, SIGTERM_GRACE):
             return
 
         self._queue([f"[gui] still running after {SIGTERM_GRACE:.0f}s, sending SIGKILL"])
-        self._signal(signal.SIGKILL)
+        self._signal(signal.SIGKILL, proc)
 
     def kill_now(self):
         """Used on window close -- no point waiting for a graceful unwind."""
-        if self.running:
-            self._signal(signal.SIGINT)
-            if not self._wait_for_exit(3.0):
-                self._signal(signal.SIGKILL)
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            self._signal(signal.SIGINT, proc)
+            if not self._wait_for_proc(proc, 3.0):
+                self._signal(signal.SIGKILL, proc)
 
 
 def describe_exit(code):

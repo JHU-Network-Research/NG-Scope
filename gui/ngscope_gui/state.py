@@ -23,6 +23,9 @@ def default_state():
         "out_dir": str(Path.home() / "ngscope_out"),
         "binary": "",
         "active_cell": 0,
+        # GUI-side EARFCN sweep; ngscope has no scanning mode of its own.
+        "sweep": {"enabled": False, "earfcns": "", "dwell": 30, "acquire": 20,
+                  "repeat": False},
         "console": {"autoscroll": True, "wrap": False},
         "window": {"width": 1440, "height": 920},
     }
