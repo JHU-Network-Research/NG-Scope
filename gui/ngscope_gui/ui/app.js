@@ -22,6 +22,9 @@ const FIELD_GROUPS = {
      the logs at all, and rach_filter_only silently forces decode_RAR on. */
   rachPrimary: ['decode_RAR', 'rach_filter_only'],
   rachDependent: ['rar_seed_tracker'],
+  /* Its own card: it is the only setting that decodes UE payload rather than just
+     filtering or logging what the DCI search already found. */
+  securityPrimary: ['mark_security_phase'],
   topToggles: ['decode_single_ue', 'decode_SIB', 'remote_enable'],
 };
 
@@ -31,6 +34,10 @@ const IMPACT = {
   decode_RAR: [{ text: '+25% decode time', kind: 'cost' }],
   rach_filter_only: [{ text: 'implies Decode RAR', kind: 'link' }],
   rar_seed_tracker: [{ text: 'measured effect: none', kind: 'muted' }],
+  mark_security_phase: [
+    { text: 'implies Decode RAR', kind: 'link' },
+    { text: 'decodes UE RRC', kind: 'muted' },
+  ],
 };
 
 let api = null;          // window.pywebview.api
@@ -542,6 +549,53 @@ function renderRach() {
   body.appendChild(dependent);
 }
 
+/* The Security context card. Separate from RACH because it does something different in
+   kind: it decodes the UE's own transport blocks to find securityModeCommand, rather than
+   filtering the DCI stream. It still depends on decode_RAR for the per-RNTI anchor. */
+function renderSecurity() {
+  const body = $('security-body');
+  body.innerHTML = '';
+  const top = S.config.top;
+
+  const field = fieldByKey(SCHEMA.top_level, 'mark_security_phase');
+  if (!field) return;
+
+  const toggles = el('div', 'toggles');
+  toggles.appendChild(toggleRow(field, top.mark_security_phase, (value) => {
+    top.mark_security_phase = value;
+    scheduleSave();
+    renderSecurity();
+    renderRach();       // it forces decode_RAR on, which that card reports
+    renderTopLevel();
+  }, { prominent: true }));
+  body.appendChild(toggles);
+
+  if (!top.mark_security_phase) return;
+
+  if (!top.decode_RAR) {
+    const note = el('div', 'callout info');
+    note.innerHTML = 'The boundary is anchored on each UE\'s RAR, so ngscope will enable '
+      + '<code>decode_RAR</code> for this run.';
+    body.appendChild(note);
+  }
+
+  /* What it actually produces, and the one thing a user has to know to read it correctly:
+     the per-DCI label understates the pre-security population. */
+  const out = el('div', 'callout good');
+  out.innerHTML = 'Writes <code>security_log-&lt;rf&gt;.csv</code>, one row per observed '
+    + 'boundary. Join it with <code>security_phase_join.py</code> rather than reading '
+    + 'the per-DCI <code>security_phase</code> directly &mdash; the live label is stamped '
+    + 'before the boundary is known, so it marks only a fraction of the pre-security DCIs.';
+  body.appendChild(out);
+
+  const caveat = el('p', 'help');
+  caveat.innerHTML = 'Security truly activates at <b>SecurityModeComplete</b>, which is '
+    + 'uplink and invisible here, so the boundary is the <b>SecurityModeCommand</b> a few '
+    + 'milliseconds earlier. While this is on, srsRAN PHY errors are routed to srslog: '
+    + 'probing UE transport blocks provokes thousands of them.';
+  body.appendChild(caveat);
+}
+
 function renderTopLevel() {
   const body = $('top-body');
   body.innerHTML = '';
@@ -568,6 +622,7 @@ function renderTopLevel() {
   const { rest } = orderedFields(SCHEMA.top_level, [
     ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topToggles,
     ...FIELD_GROUPS.rachPrimary, ...FIELD_GROUPS.rachDependent,
+    ...FIELD_GROUPS.securityPrimary,
   ]);
   appendLeftovers(body, rest, top, set, 'top');
 }
@@ -587,6 +642,7 @@ function renderLog() {
 function renderAll() {
   renderCells();
   renderRach();
+  renderSecurity();
   renderTopLevel();
   renderLog();
   $('out-dir').value = S.out_dir || '';

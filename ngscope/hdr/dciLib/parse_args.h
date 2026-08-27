@@ -56,6 +56,7 @@ typedef struct {
   int 	   decode_RAR;
   int 	   rar_seed_tracker;
   int 	   rach_filter_only;
+  int 	   mark_security_phase;
 
   float    rf_gain;
   int      net_port;

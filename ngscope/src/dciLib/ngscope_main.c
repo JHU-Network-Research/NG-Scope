@@ -98,6 +98,7 @@ int ngscope_main(ngscope_config_t* config)
 		prog_args[i].decode_RAR 	  = config->decode_RAR;
 		prog_args[i].rar_seed_tracker = config->rar_seed_tracker;
 		prog_args[i].rach_filter_only = config->rach_filter_only;
+		prog_args[i].mark_security_phase = config->mark_security_phase;
 
         prog_args[i].rf_index      = i;
         prog_args[i].rf_freq       = config->rf_config[i].rf_freq;

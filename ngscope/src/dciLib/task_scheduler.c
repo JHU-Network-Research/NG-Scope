@@ -25,6 +25,7 @@
 #include "ngscope/hdr/dciLib/decode_sib.h"
 #include "ngscope/hdr/dciLib/decode_rar.h"
 #include "ngscope/hdr/dciLib/rach_filter.h"
+#include "ngscope/hdr/dciLib/security_ctx.h"
 
 #include "ngscope/hdr/dciLib/ngscope_rx.h"
 #include "ngscope/hdr/dciLib/load_config.h"
@@ -798,6 +799,9 @@ void* task_scheduler_thread(void* p){
 
 	if(prog_args->decode_RAR){
 		ngscope_rach_filter_report(rf_idx);
+	}
+	if(prog_args->mark_security_phase){
+		ngscope_sec_report(rf_idx);
 	}
 
 	// wait until its our turn to close

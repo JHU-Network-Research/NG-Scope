@@ -39,6 +39,7 @@ typedef struct{
 	int 				decode_RAR;
 	int 				rar_seed_tracker;
 	int 				rach_filter_only;
+	int 				mark_security_phase;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
     const char *        out_path;
@@ -78,7 +79,8 @@ typedef struct{
     X(BOOL,   "decode_SIB",        decode_SIB,         false,  false)                      \
     X(BOOL,   "decode_RAR",        decode_RAR,         false,  false)                      \
     X(BOOL,   "rar_seed_tracker",  rar_seed_tracker,   false,  false)                      \
-    X(BOOL,   "rach_filter_only",  rach_filter_only,   false,  false)
+    X(BOOL,   "rach_filter_only",  rach_filter_only,   false,  false)                      \
+    X(BOOL,   "mark_security_phase", mark_security_phase, false, false)
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \

@@ -37,6 +37,31 @@ rar_seed_tracker = false
 # so a single run shows the effect whether or not this is set.
 rach_filter_only = false
 
+# Label each unicast DCI in the .dciLog files as "pre", "post" or "unknown" relative to the
+# UE establishing an AS security context with the cell. Implies decode_RAR, which supplies
+# the per-RNTI anchor.
+#
+# The boundary is observed, not inferred. NG-Scope decodes the UE's still-unciphered RRC on
+# its C-RNTI and looks for securityModeCommand; nothing is guessed from elapsed time or
+# grant counts, and a DCI that cannot be placed stays "unknown". That matters because the
+# RAR-to-SecurityModeCommand delay is not a constant: measured on a band 12 capture it ran
+# from 49 ms to 2964 ms, so no fixed window would have worked.
+#
+# Two honest limits. AS security actually activates at SecurityModeComplete, which is
+# uplink and so invisible to a downlink sniffer, making this boundary a few ms early. And
+# coverage depends on the transport block decoding: Format2/2A/2B grants are skipped
+# because srsRAN cannot predecode spatial multiplexing on a 4-port cell.
+# Also writes <out_dir>/<timestamp>/security_log-<rf_idx>.csv: one row per RNTI whose
+# boundary was observed (rnti, rar_tti, rar_timestamp, smc_tti, smc_timestamp,
+# rar_to_smc_ms). Prefer joining that on rnti and comparing timestamps over reading the
+# .dciLog label directly. The label is stamped as each subframe is decoded, so a DCI that
+# precedes its boundary cannot be recognised at the time it is written and stays
+# "unknown"; measured on a band 12 capture the in-stream label caught about 10% of the
+# pre-security DCIs that the join places exactly.
+# tools/security_phase_join.py does the join; -f dcilog rewrites the .dciLog files with
+# the corrected labels, unchanged in every other respect.
+mark_security_phase = false
+
 # ----------------------------- RF devices --------------------------------
 # One [[rf_config]] table per cell, max 4. Unlike the .cfg format there is no nof_rf_dev to
 # keep in sync -- it is the number of tables below. Two devices may not share rf_freq.

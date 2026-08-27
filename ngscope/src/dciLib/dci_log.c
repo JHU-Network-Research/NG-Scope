@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <stdint.h>
 
+#include "ngscope/hdr/dciLib/security_ctx.h"
 #include "ngscope/hdr/dciLib/dci_log.h"
 #include "ngscope/hdr/dciLib/cell_status.h"
 #include "ngscope/hdr/dciLib/socket.h"
@@ -64,6 +65,8 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 			// TTI RNTI
 			fprintf(fd_dl,"\"tti\": \"%d\",\n", q->tti);
 			fprintf(fd_dl,"\"rnti\": \"%d\",\n", q->dl_msg[i].rnti);
+			fprintf(fd_dl,"\"security_phase\": \"%s\",\n",
+					ngscope_sec_phase_str((ngscope_sec_phase_t)q->dl_msg[i].sec_phase));
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", q->cell_dl_prb);
@@ -112,6 +115,9 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 		// TTI RNTI
 		fprintf(fd_dl,"\"tti\": \"%d\",\n", q->tti);
 		fprintf(fd_dl,"\"rnti\": \"%d\",\n", 0);
+		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
+		fprintf(fd_dl,"\"security_phase\": \"%s\",\n",
+				ngscope_sec_phase_str(NGSCOPE_SEC_UNKNOWN));
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", 0);
@@ -227,6 +233,8 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 			// TTI RNTI
 			fprintf(fd_ul,"\"tti\": \"%d\",\n", q->tti);
 			fprintf(fd_ul,"\"rnti\": \"%d\",\n", q->ul_msg[i].rnti);
+			fprintf(fd_ul,"\"security_phase\": \"%s\",\n",
+					ngscope_sec_phase_str((ngscope_sec_phase_t)q->ul_msg[i].sec_phase));
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", q->cell_ul_prb);
@@ -274,6 +282,9 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 		// TTI RNTI
 		fprintf(fd_ul,"\"tti\": \"%d\",\n", q->tti);
 		fprintf(fd_ul,"\"rnti\": \"%d\",\n", 0);
+		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
+		fprintf(fd_ul,"\"security_phase\": \"%s\",\n",
+				ngscope_sec_phase_str(NGSCOPE_SEC_UNKNOWN));
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", 0);
