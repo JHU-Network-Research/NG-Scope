@@ -25,7 +25,10 @@ Output
 
 Usage
 -----
-    tools/security_phase_join.py <run-dir> [-f csv|dcilog|both] [-o PATH] [--summary-only]
+    tools/security_phase_join.py [run-dir] [-f csv|dcilog|both] [-o PATH] [--summary-only]
+
+run-dir defaults to the current directory, so from inside a run you can just run the
+script with no arguments.
 
 <run-dir> is one timestamped run directory, e.g.
     ~/ngscope_out/2026_08_17_15_27_10/
@@ -141,7 +144,9 @@ def write_dcilog(path, records):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("run_dir", help="one timestamped ngscope run directory")
+    ap.add_argument("run_dir", nargs="?", default=".",
+                    help="one timestamped ngscope run directory (default: the "
+                         "current directory)")
     ap.add_argument("-o", "--out",
                     help="csv: output file (default <run-dir>/security_phase.csv). "
                          "dcilog: output directory (default <run-dir>/dci_output_joined)")
@@ -158,8 +163,26 @@ def main():
 
     boundaries, sec_files = load_boundaries(run_dir)
     if not sec_files:
-        sys.exit("error: no security_log-*.csv here. Was the run made with "
-                 "mark_security_phase = true (which also needs decode_RAR)?")
+        # Easy to be one level up: an output directory holds timestamped run directories,
+        # and a sweep nests them another level under earfcn-<n>/. Point at them rather than
+        # just refusing.
+        candidates = sorted(
+            os.path.dirname(p) for p in
+            glob.glob(os.path.join(run_dir, "*", "security_log-*.csv")) +
+            glob.glob(os.path.join(run_dir, "*", "*", "security_log-*.csv"))
+        )
+        msg = ["error: no security_log-*.csv in " + run_dir]
+        if candidates:
+            msg.append("")
+            one = len(candidates) == 1
+            msg.append(f"{len(candidates)} run director{'y' if one else 'ies'} below this one "
+                       f"{'does' if one else 'do'} have one:")
+            msg += [f"    {os.path.relpath(c, run_dir)}" for c in candidates[:10]]
+            if len(candidates) > 10:
+                msg.append(f"    ... and {len(candidates) - 10} more")
+        else:
+            msg.append("Was the run made with mark_security_phase = true?")
+        sys.exit("\n".join(msg))
 
     dci_files = sorted(glob.glob(os.path.join(run_dir, "dci_output", "*.dciLog")))
     if not dci_files:
