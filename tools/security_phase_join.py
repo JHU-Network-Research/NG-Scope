@@ -42,6 +42,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import sys
 from collections import Counter, defaultdict
 
@@ -150,10 +151,11 @@ def main():
     ap.add_argument("-o", "--out",
                     help="csv: output file (default <run-dir>/security_phase.csv). "
                          "dcilog: output directory (default <run-dir>/dci_output_joined)")
-    ap.add_argument("-f", "--format", choices=("csv", "dcilog", "both"), default="csv",
-                    help="csv adds derived columns; dcilog rewrites the .dciLog files in "
-                         "place-compatible form, same keys and order, with only "
-                         "security_phase replaced, so existing readers work unchanged")
+    ap.add_argument("-f", "--format", choices=("csv", "dcilog", "both"), default="dcilog",
+                    help="dcilog (default) rewrites the DL and UL .dciLog files in "
+                         "place-compatible form -- same keys, order and layout, only "
+                         "security_phase replaced -- so existing readers work unchanged. "
+                         "csv writes a flat table with extra derived columns instead.")
     ap.add_argument("--summary-only", action="store_true", help="print the summary, write nothing")
     args = ap.parse_args()
 
@@ -203,8 +205,14 @@ def main():
     want_dcilog = args.format in ("dcilog", "both") and not args.summary_only
 
     for path in dci_files:
-        direction = "ul" if re.search(r"_ul_", os.path.basename(path)) else "dl"
-        if want_dcilog:
+        name = os.path.basename(path)
+        if name.startswith("dci_raw_log_dl_"):
+            direction = "dl"
+        elif name.startswith("dci_raw_log_ul_"):
+            direction = "ul"
+        else:
+            direction = "phich"   # phich_log_ul_freq_*.dciLog -- also matches "_ul_"
+        if want_dcilog and direction in ("dl", "ul"):
             rewritten[path] = []
         for rec in load_dcilog(path):
             try:
@@ -220,7 +228,7 @@ def main():
                 per_rnti[rnti][phase] += 1
 
             streamed = rec.get("security_phase", "")
-            if want_dcilog:
+            if want_dcilog and direction in ("dl", "ul"):
                 # ngscope only ever writes pre|post|unknown, so collapse the CSV's richer
                 # "n/a" back to "unknown" here. A drop-in replacement must not introduce a
                 # fourth value that existing readers have never had to handle; the
@@ -294,6 +302,16 @@ def main():
             dst = os.path.join(out_dir, os.path.basename(src))
             write_dcilog(dst, records)
             print(f"wrote {len(records):,} records to {dst}")
+
+        # Mirror anything not rewritten so the directory is a complete stand-in for
+        # dci_output/. PHICH records carry no security_phase, and inventing one would
+        # change a format this tool does not own.
+        for src in dci_files:
+            if src in rewritten:
+                continue
+            dst = os.path.join(out_dir, os.path.basename(src))
+            shutil.copyfile(src, dst)
+            print(f"copied {os.path.basename(src)} unchanged (no security_phase field)")
 
 
 if __name__ == "__main__":
