@@ -56,6 +56,8 @@ typedef struct {
   int 	   decode_RAR;
   int 	   rar_seed_tracker;
   int 	   rach_filter_only;
+  int 	   pcap_mac;
+  int 	   pcap_max_mb;
 
   float    rf_gain;
   int      net_port;

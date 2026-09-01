@@ -1,2 +1,5 @@
 build/
 .idea/
+build-docker/
+recordings/
+measurements/results/

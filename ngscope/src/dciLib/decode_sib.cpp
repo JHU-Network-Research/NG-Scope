@@ -15,6 +15,26 @@ extern pthread_mutex_t token_mutex[MAX_NOF_RF_DEV];
 #define USE_JSON
 
 #define CELL_CFG_FILE_JSON  "cellcfg.json"
+#define CELL_CFG_FILE_TXT   "cellcfg.txt"
+
+/* Output directory for the cell-config files, set once at startup. Empty means the working
+ * directory, which is what these writers used unconditionally before. */
+static char sib_out_path[1024] = "";
+
+void ngscope_sib_set_out_path(const char* out_path)
+{
+  if (out_path == NULL) {
+    sib_out_path[0] = '\0';
+    return;
+  }
+  snprintf(sib_out_path, sizeof(sib_out_path), "%s", out_path);
+}
+
+/* <out_path><name>, or just <name> when no output directory was set. */
+static void cellcfg_path(char* dst, size_t dst_len, const char* name)
+{
+  snprintf(dst, dst_len, "%s%s", sib_out_path, name);
+}
 
 
 typedef struct sib_record_s{
@@ -49,7 +69,9 @@ void save_cellcfg_from_sib1_json(asn1::rrc::sib_type1_s* sib1){
   sib_json_record.id = sib1->cell_access_related_info.cell_id.to_number();
   sib_json_record.tac = sib1->cell_access_related_info.tac.to_number();
 
-  FILE *cellcfgfile = fopen(CELL_CFG_FILE_JSON, "w");
+  char cfgpath[1280];
+  cellcfg_path(cfgpath, sizeof(cfgpath), CELL_CFG_FILE_JSON);
+  FILE *cellcfgfile = fopen(cfgpath, "w");
 
   if(cellcfgfile == NULL){
     return;
@@ -85,7 +107,9 @@ void save_cellcfg_from_sib2_json(asn1::rrc::sib_type2_s* sib2){
     return;
   }
 
-  FILE *cellcfgfile = fopen(CELL_CFG_FILE_JSON, "w");
+  char cfgpath[1280];
+  cellcfg_path(cfgpath, sizeof(cfgpath), CELL_CFG_FILE_JSON);
+  FILE *cellcfgfile = fopen(cfgpath, "w");
 
   if(cellcfgfile == NULL){
     return;
@@ -236,7 +260,9 @@ srsran_dci_location_t *sib_loc
     pthread_mutex_lock(&token_mutex[0]);
     if(sib1.cell_access_related_info.plmn_id_list.size() > 0){
 #ifndef USE_JSON
-      FILE *cellcfgfile = fopen("cellcfg.txt", "a");
+      char cfgpath[1280];
+      cellcfg_path(cfgpath, sizeof(cfgpath), CELL_CFG_FILE_TXT);
+      FILE *cellcfgfile = fopen(cfgpath, "a");
       fprintf(cellcfgfile, "cell.mcc: %d%d%d\n", \
         sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[0], \
         sib1.cell_access_related_info.plmn_id_list[0].plmn_id.mcc[1], \
@@ -382,7 +408,9 @@ srsran_dci_location_t *sib_loc
           pthread_mutex_lock(&token_mutex[0]);
 
   #ifndef USE_JSON
-          FILE *cellcfgfile = fopen("cellcfg.txt", "a");
+          char cfgpath[1280];
+      cellcfg_path(cfgpath, sizeof(cfgpath), CELL_CFG_FILE_TXT);
+      FILE *cellcfgfile = fopen(cfgpath, "a");
           fprintf(cellcfgfile, "cell.pdsch_reference_signal_power: %ddBm\n", sib2.rr_cfg_common.pdsch_cfg_common.ref_sig_pwr);
           fclose(cellcfgfile);
   #else

@@ -10,6 +10,11 @@
 extern "C" {
 #endif
 
+/* Where cellcfg.json and cellcfg.txt are written. Call once at startup, before any decoder
+ * thread runs; without it they land in the process working directory, which for a normally
+ * launched ngscope means the repository root rather than the run's output directory. */
+void ngscope_sib_set_out_path(const char* out_path);
+
 int srsran_ue_dl_find_and_decode_sib1(srsran_ue_dl_t *q, srsran_dl_sf_cfg_t *sf, srsran_ue_dl_cfg_t *cfg, srsran_pdsch_cfg_t *pdsch_cfg, uint8_t *data[SRSRAN_MAX_CODEWORDS], bool acks[SRSRAN_MAX_CODEWORDS],  srsran_dci_location_t *sib_loc);
 
 int srsran_ue_dl_find_and_decode_sib2(srsran_ue_dl_t *q, srsran_dl_sf_cfg_t *sf, srsran_ue_dl_cfg_t *cfg, srsran_pdsch_cfg_t *pdsch_cfg, uint8_t *data[SRSRAN_MAX_CODEWORDS], bool acks[SRSRAN_MAX_CODEWORDS],  srsran_dci_location_t *sib_loc);

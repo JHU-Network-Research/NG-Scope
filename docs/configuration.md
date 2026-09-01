@@ -127,6 +127,9 @@ Note also that `rf_freq` takes no `L` suffix in TOML, since its integers are alr
 | `decode_RAR` | bool | `false` | Decode Random Access Responses. See [RACH decoding](#rach-decoding) below. |
 | `rar_seed_tracker` | bool | `false` | Prime the UE tracker with RACH-assigned RNTIs. See [RACH decoding](#rach-decoding). |
 | `rach_filter_only` | bool | `false` | Report only RNTIs observed completing RACH. See [RACH decoding](#rach-decoding). |
+| `pcap_mac` | bool | `false` | Write decoded downlink MAC PDUs to `mac-<rf_idx>.pcapng` in MAC-LTE encapsulation. See [docs/pcap.md](pcap.md) for the Wireshark setup, which is not optional — DLT 147 is `DLT_USER0` and dissects as nothing until configured. |
+| `pcap_max_mb` | int | `0` | Per-file cap in MB, `0` for unlimited. |
+| `enable_256qam` | bool | `true` | Use the 256QAM MCS→TBS table for C-RNTI Format1/2 grants. Only correct when the cell configures `altCQI-Table-r12`, which a downlink sniffer cannot observe, so it is a guess either way. It selects the MCS→TBS mapping, so it sets the `tbs` values in the `.dciLog` files — a wrong guess gives wrong throughput figures. srsRAN forces it off for Format1A and non-user RNTIs, so SIB, RAR and paging are unaffected. |
 
 A missing optional key is not fatal: it falls back to the default above and says so. A
 missing **required** key is fatal — NG-Scope lists what is missing and exits.
@@ -140,6 +143,7 @@ missing **required** key is fatal — NG-Scope lists what is missing and exits.
 | `rf_freq` | int64 | **required** | Downlink centre frequency in Hz. In libconfig it needs the int64 suffix (`2680000000L`); in TOML it does not. Two devices may not share a frequency — NG-Scope exits if they do, because log files are named by frequency. |
 | `N_id_2` | int | `-1` | Force the PSS sequence (0–2). `-1` searches all three. |
 | `rf_args` | string | `""` | Passed to the SDR driver, e.g. `"type=b200"`, `"type=x300,clock_source=external"`. Max 100 chars. |
+| `nof_rx_ant` | int | `1` | Receive channels to open on this SDR. **Two are required for transmission modes 3 and 4 with two spatial layers** — `srsran_predecoding_ccd_zf()` needs `nof_ports == 2 && nof_rxant == 2`, so with one antenna every such grant fails. Needs two coherent RX channels (B210; X310 with two daughterboards). Useless on a 4-port cell, where srsRAN has no spatial-multiplexing predecoder at any antenna count. Recording only stores channel 0, so a two-antenna capture cannot yet be replayed as two antennas. |
 | `nof_thread` | int | `4` | DCI decoder threads for this cell. Max 8 (`MAX_NOF_DCI_DECODER`). Too few and subframes are skipped in live capture, or the replay falls behind real time. |
 | `disable_plot` | bool | `true` | Disable the GUI for this cell. Only effective in builds with `ENABLE_GUI`. |
 | `log_dl` | bool | `true` | Write the downlink `.dciLog` file. **This is the flag that controls DL logging**, not `dci_log_config.log_dl`. |
@@ -214,6 +218,37 @@ Measured on a 21-second capture: promotion happens a median of 10 TTIs earlier, 
 cases. Measured effect on DCI yield: **none** (+1 record, inside run-to-run noise). Left in
 because it is free and safe, but do not expect it to help.
 
+### Choosing an operating mode
+
+`rach_filter_only` is not merely a noise filter — it selects between two fundamentally
+different decoders, and which one is right depends on the question being asked.
+
+**`false` (blind).** The search recovers each RNTI from the descrambled PDCCH CRC, so it sees
+every UE on the cell including those already connected when the capture began. It also
+manufactures RNTIs: a false alarm yields a uniformly distributed 16-bit value. Measured on a
+60 s band-12 capture: 53,953 DCIs across 6,369 distinct RNTIs, of which only a few hundred
+are real UEs. Right for cell-level load and bandwidth measurement, where the aggregate
+matters and per-UE attribution does not.
+
+**`true` (RACH-gated).** Only RNTIs observed being handed out in a Random Access Response are
+reported. Same capture: 25,760 DCIs across 188 RNTIs. This is the model LTESniffer uses --
+it searches each known UE's search space with `srsran_ue_dl_find_dl_dci()`, so the PDCCH CRC
+is checked against a known RNTI rather than recovered from it, and a hit cannot be
+manufactured. The cost is that a UE which connected before the capture started is invisible.
+
+**For per-UE analysis -- connection tracking, security-context state, IMSI-catcher detection
+-- use `true`.** Every UE relevant to those questions performs RACH within the capture by
+definition, and per-UE conclusions drawn over blind-mode RNTIs are unsound.
+
+One deliberate difference from LTESniffer: NG-Scope admits an RNTI on the RAR alone, whereas
+LTESniffer waits for an `RRCConnectionSetup` to confirm it. NG-Scope's rule is looser but
+keeps UEs that attempted to attach and never got further -- which is precisely the population
+that distinguishes a fake base station from a real one.
+
+Note also that the re-encode correlation gate in the blind search (`ue_dl.c`, `JH
+CORR_FILTER`) is currently commented out, so with `rach_filter_only = false` there is no
+false-positive gate at all.
+
 ### `rach_filter_only`
 
 Restricts reported RNTIs to those observed completing RACH, plus SI-RNTI, P-RNTI and RA-RNTI
@@ -268,6 +303,7 @@ RACH filter (cell 0): 96 RNTIs admitted, 11952 DCIs kept, 63292 dropped (84.1%)
 ├── dci-decode-debug.csv          header row only
 ├── dci-decode-debug-<n>.csv      one file per decoder thread, no header
 ├── rar_log-<rf_idx>.csv          decode_RAR only
+├── mac-<rf_idx>.pcapng           pcap_mac only -- see docs/pcap.md
 ├── rsrp.txt, cell_type.json, cellcfg.json
 ├── decoder_<n>.txt, task_scheduler.txt, collection_times.csv, file_reads.txt
 └── recorded-samples.bin          mode = 1 only
