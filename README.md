@@ -45,6 +45,15 @@ every top-level, per-device and logging parameter, the layout of the output dire
 record/replay modes, the RACH decoding and RNTI filtering options, and a list of known
 quirks in the current configuration handling.
 
+Further documentation:
+
+| document | covers |
+|---|---|
+| [docs/configuration.md](docs/configuration.md) | every setting, the output layout, record/replay |
+| [docs/pcap.md](docs/pcap.md) | the MAC pcap output and the Wireshark setup it needs |
+| [docs/security-measurement.md](docs/security-measurement.md) | measuring AS security establishment, and how to read the numbers |
+| [docs/security-implementation.md](docs/security-implementation.md) | how that is implemented, and what is deliberately not done |
+
 Example configurations are provided at [`ngscope/config.toml`](ngscope/config.toml) (TOML)
 and [`ngscope/config.cfg`](ngscope/config.cfg) (libconfig).
 

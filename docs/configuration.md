@@ -228,6 +228,10 @@ because it is free and safe, but do not expect it to help.
 
 ### Choosing an operating mode
 
+> For the measurement this setting exists to support, and how to read its output, see
+> [security-measurement.md](security-measurement.md).
+
+
 `rach_filter_only` is not merely a noise filter — it selects between two fundamentally
 different decoders, and which one is right depends on the question being asked.
 
