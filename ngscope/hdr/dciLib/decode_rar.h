@@ -38,12 +38,17 @@ typedef struct {
  * parsed and one entry per RAR subheader is appended to out[].
  *
  * Returns the number of entries written to out[], or a negative value on error. */
+/* rf_idx and ts_us are carried only so a decoded Msg2 can be written to the MAC pcap with the
+ * same identity and timestamp as everything else; they do not affect decoding. */
 int srsran_ue_dl_find_and_decode_rar(srsran_ue_dl_t*     q,
                                      srsran_dl_sf_cfg_t* sf,
                                      srsran_ue_dl_cfg_t* cfg,
                                      srsran_pdsch_cfg_t* pdsch_cfg,
                                      uint8_t*            data[SRSRAN_MAX_CODEWORDS],
-                                     ngscope_rar_t       out[NGSCOPE_MAX_RAR_PER_SF]);
+                                     ngscope_rar_t       out[NGSCOPE_MAX_RAR_PER_SF],
+                                     int                 rf_idx,
+                                     uint64_t            ts_us,
+                                     uint64_t            collection_time);
 
 /* Truncate <out_path>rar_log-<rf_idx>.csv and write its header row. Call once per RF
  * device, before any decoder thread for that device starts. */

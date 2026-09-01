@@ -1,6 +1,7 @@
 #include "../../hdr/dciLib/decode_rar.h"
 #include "ngscope/hdr/dciLib/ngscope_def.h"
 
+#include "ngscope/hdr/dciLib/mac_pcap.h"
 #include "srsran/mac/pdu.h"
 #include "srsran/srslog/srslog.h"
 
@@ -29,7 +30,10 @@ static int decode_rar_for_rnti(srsran_ue_dl_t*     q,
                                uint8_t*            data[SRSRAN_MAX_CODEWORDS],
                                uint16_t            ra_rnti,
                                ngscope_rar_t       out[NGSCOPE_MAX_RAR_PER_SF],
-                               int                 nof_out)
+                               int                 nof_out,
+                               int                 rf_idx,
+                               uint64_t            ts_us,
+                               uint64_t            collection_time)
 {
   srsran_dci_dl_t    dci_dl[SRSRAN_MAX_DCI_MSG] = {};
   srsran_pdsch_res_t pdsch_res[SRSRAN_MAX_CODEWORDS];
@@ -85,6 +89,28 @@ static int decode_rar_for_rnti(srsran_ue_dl_t*     q,
       continue;
     }
 
+    /* Msg2 is a real downlink MAC PDU and it is the moment a UE gets its identity, so it is
+     * worth having in the capture. Emitted before the parse below, which consumes nothing. */
+    ngscope_mac_tb_t cap;
+    memset(&cap, 0, sizeof(cap));
+    cap.rf_idx          = rf_idx;
+    cap.tti             = sf->tti;
+    cap.ts_us           = ts_us;
+    cap.collection_time = collection_time;
+    cap.rnti            = ra_rnti;
+    cap.src             = NGSCOPE_MAC_SRC_RAR;
+    cap.rv              = pdsch_cfg->grant.tb[0].rv;
+    cap.mcs             = pdsch_cfg->grant.tb[0].mcs_idx;
+    cap.tbs             = tbs;
+    cap.prb             = pdsch_cfg->grant.nof_prb;
+    cap.format          = dci_dl[d].format;
+    cap.tx_scheme       = pdsch_cfg->grant.tx_scheme;
+    cap.rach_ok         = true; /* RA-RNTI is exempt from the RACH filter by definition */
+    cap.evm             = pdsch_res[0].evm;
+    cap.payload         = pdsch_res[0].payload;
+    cap.len             = (uint32_t)tbs / 8;
+    ngscope_mac_pcap_write(&cap);
+
     /* MAC RAR PDU, 36.321 6.1.5 / 6.2.2 / 6.2.3 */
     srsran::rar_pdu pdu(NGSCOPE_MAX_RAR_PER_SF);
     pdu.init_rx((uint32_t)tbs / 8);
@@ -139,7 +165,10 @@ int srsran_ue_dl_find_and_decode_rar(srsran_ue_dl_t*     q,
                                      srsran_ue_dl_cfg_t* cfg,
                                      srsran_pdsch_cfg_t* pdsch_cfg,
                                      uint8_t*            data[SRSRAN_MAX_CODEWORDS],
-                                     ngscope_rar_t       out[NGSCOPE_MAX_RAR_PER_SF])
+                                     ngscope_rar_t       out[NGSCOPE_MAX_RAR_PER_SF],
+                                     int                 rf_idx,
+                                     uint64_t            ts_us,
+                                     uint64_t            collection_time)
 {
   if (q == NULL || sf == NULL || cfg == NULL || pdsch_cfg == NULL || data == NULL || out == NULL) {
     return SRSRAN_ERROR_INVALID_INPUTS;
@@ -187,7 +216,8 @@ int srsran_ue_dl_find_and_decode_rar(srsran_ue_dl_t*     q,
     }
 
     for (uint16_t ra_rnti = NGSCOPE_RARNTI_START; ra_rnti <= NGSCOPE_RARNTI_END; ra_rnti++) {
-      nof_out += decode_rar_for_rnti(q, sf, cfg, pdsch_cfg, data, ra_rnti, out, nof_out);
+      nof_out += decode_rar_for_rnti(q, sf, cfg, pdsch_cfg, data, ra_rnti, out, nof_out,
+                                     rf_idx, ts_us, collection_time);
       if (nof_out >= NGSCOPE_MAX_RAR_PER_SF) {
         break;
       }
