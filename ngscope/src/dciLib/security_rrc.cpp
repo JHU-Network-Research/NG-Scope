@@ -7,6 +7,7 @@ extern "C" {
 
 #include "srsran/asn1/rrc/dl_ccch_msg.h"
 #include "srsran/asn1/rrc/dl_dcch_msg.h"
+#include "ngscope/hdr/dciLib/mac_pcap.h"
 #include "srsran/mac/pdu.h"
 #include "srsran/srslog/srslog.h"
 
@@ -238,6 +239,31 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         const int tbs = pdsch_cfg->grant.tb[0].tbs;
         if (pdsch_res[0].crc && tbs > 0) {
           pdsch_ok = true;
+
+          /* This is the interesting traffic -- Msg4 and the SecurityModeCommand live here,
+           * and the search was targeted, so the PDCCH CRC was checked against a known RNTI
+           * and the identity is trustworthy. Emitted before the RRC scan below, which
+           * consumes nothing. A no-op unless pcap_mac is set. */
+          ngscope_mac_tb_t cap;
+          memset(&cap, 0, sizeof(cap));
+          cap.rf_idx    = rf_idx;
+          cap.tti       = tti;
+          cap.ts_us     = ts_us;
+          cap.rnti      = rnti;
+          cap.src       = NGSCOPE_MAC_SRC_TARGETED;
+          cap.rv        = pdsch_cfg->grant.tb[0].rv;
+          cap.mcs       = pdsch_cfg->grant.tb[0].mcs_idx;
+          cap.tbs       = tbs;
+          cap.prb       = pdsch_cfg->grant.nof_prb;
+          cap.harq_pid  = dci_dl[d].pid;
+          cap.format    = dci_dl[d].format;
+          cap.tx_scheme = pdsch_cfg->grant.tx_scheme;
+          cap.rach_ok   = true; /* tracked RNTIs are RAR-anchored by construction */
+          cap.evm       = pdsch_res[0].evm;
+          cap.payload   = pdsch_res[0].payload;
+          cap.len       = (uint32_t)tbs / 8;
+          ngscope_mac_pcap_write(&cap);
+
           rrc_ok   = scan_mac_pdu(pdsch_res[0].payload, (uint32_t)tbs / 8, rnti, tti, &is_smc);
         }
       }

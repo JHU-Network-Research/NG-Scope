@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "ngscope/hdr/dciLib/security_ctx.h"
+#include "ngscope/hdr/dciLib/mac_pcap.h"
 #include "ngscope/hdr/dciLib/ngscope_def.h"
 #include "srsran/srsran.h"
 #include <inttypes.h>
@@ -225,6 +226,16 @@ void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
     if (log_it) {
         sec_log_write(out_path, rf_idx, rnti, log_rar_tti, log_rar_us, tti, ts_us);
     }
+}
+
+/* Strong override of the weak default in mac_pcap.c, so a capture written while the tracker
+ * is running carries the real phase instead of a permanent "unknown". Deliberately still
+ * answers "unknown" for anything unplaced: the boundary is only ever set by an observed
+ * SecurityModeCommand, and most packets are written before theirs arrives. The authoritative
+ * labelling comes from joining security_log-<rf_idx>.csv afterwards. */
+const char* ngscope_mac_pcap_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us)
+{
+    return ngscope_sec_phase_str(ngscope_sec_phase(rf_idx, rnti, ts_us));
 }
 
 ngscope_sec_phase_t ngscope_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us)
