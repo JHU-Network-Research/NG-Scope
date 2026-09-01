@@ -2,6 +2,9 @@ file(GLOB_RECURSE SOURCES "*.cpp" "*.c")
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/ngscope_rx.c)
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/record_ring_buffer.c)
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/rach_filter.c)
+# Called from srsran_phy (ngscope_dci.c), so it cannot live in ngscope_dci, which links
+# against srsran_phy. Same arrangement as rach_filter above.
+list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tbs_table_probe.c)
 
 #file(GLOB_RECURSE SOURCES "*.c")
 
@@ -39,6 +42,12 @@ target_include_directories(ngscope_rx PUBLIC
 
 add_library(rach_filter STATIC rach_filter.c)
 target_include_directories(rach_filter PUBLIC 
+  ${CMAKE_SOURCE_DIR}/ngscope/hdr
+  ${CMAKE_SOURCE_DIR}/lib/include
+)
+
+add_library(tbs_table_probe STATIC tbs_table_probe.c)
+target_include_directories(tbs_table_probe PUBLIC
   ${CMAKE_SOURCE_DIR}/ngscope/hdr
   ${CMAKE_SOURCE_DIR}/lib/include
 )

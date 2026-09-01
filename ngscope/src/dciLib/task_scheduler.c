@@ -25,6 +25,8 @@
 #include "ngscope/hdr/dciLib/decode_sib.h"
 #include "ngscope/hdr/dciLib/decode_rar.h"
 #include "ngscope/hdr/dciLib/rach_filter.h"
+#include "ngscope/hdr/dciLib/tbs_table_probe.h"
+#include "ngscope/hdr/dciLib/mac_pcap.h"
 
 #include "ngscope/hdr/dciLib/ngscope_rx.h"
 #include "ngscope/hdr/dciLib/load_config.h"
@@ -579,7 +581,14 @@ void* task_scheduler_thread(void* p){
     cellcfgfile = fopen(cellcfgpath, "w");
     fprintf(cellcfgfile,"{\n");
     fprintf(cellcfgfile,"\"frame_type\": \"%s\",\n", duplymode);
-    fprintf(cellcfgfile,"\"bandwidth\": \"%d\"\n", bw);
+    fprintf(cellcfgfile,"\"bandwidth\": \"%d\",\n", bw);
+    /* nof_ports decides what is decodable at all: srsRAN has no spatial-multiplexing
+     * predecoder for 4 Tx ports, and the 2-port case needs two RX antennas. Both are
+     * detected here and were previously recorded nowhere. */
+    fprintf(cellcfgfile,"\"nof_prb\": \"%d\",\n", task_scheduler->cell.nof_prb);
+    fprintf(cellcfgfile,"\"nof_ports\": \"%d\",\n", task_scheduler->cell.nof_ports);
+    fprintf(cellcfgfile,"\"cell_id\": \"%d\",\n", task_scheduler->cell.id);
+    fprintf(cellcfgfile,"\"nof_rx_ant\": \"%d\"\n", task_scheduler->prog_args.rf_nof_rx_ant);
     fprintf(cellcfgfile,"}");
     fclose(cellcfgfile);
 
@@ -600,6 +609,28 @@ void* task_scheduler_thread(void* p){
     if(task_scheduler->prog_args.decode_RAR){
         ngscope_rar_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
     }
+
+    // Cell-config files from the SIB decoder land in the run's output directory rather than
+    // the working directory. Set before any decoder thread starts.
+    ngscope_sib_set_out_path(task_scheduler->prog_args.out_path);
+
+    // Downlink MAC PDU capture. Opened here because it runs once per RF device and strictly
+    // before the decoder threads below, so they never see a half-initialised handle.
+    if(task_scheduler->prog_args.pcap_mac){
+        ngscope_mac_pcap_init(task_scheduler->prog_args.out_path,
+                              task_scheduler->prog_args.rf_index,
+                              &task_scheduler->cell,
+                              task_scheduler->prog_args.pcap_max_mb);
+    }
+
+    /* Tell the blind search whether this device wants RNTIs restricted to the RACH-observed
+     * set. Set before any decoder thread for this device is created, below, so the threads
+     * never observe it half-configured. */
+    ngscope_rach_filter_set_active(rf_idx, task_scheduler->prog_args.rach_filter_only);
+
+    /* The scheduler thread itself drives the SIB and RAR searches, which go through the same
+     * PDCCH candidate loop. Bind it too. */
+    ngscope_rach_filter_bind_thread(rf_idx);
 
 
     for(int i = 0; i < nof_decoder; i++){
@@ -800,6 +831,10 @@ void* task_scheduler_thread(void* p){
 		ngscope_rach_filter_report(rf_idx);
 	}
 
+	/* Whether the enable_256qam guess matches what the cell is actually doing. Costs nothing
+	 * during the run and is the only way to check without decoding transport blocks. */
+	ngscope_tbs_probe_report();
+
 	// wait until its our turn to close
 	printf("wait for scheduler to be ready!\n");
 
@@ -817,6 +852,12 @@ void* task_scheduler_thread(void* p){
 
     for(int i=0;i<nof_decoder;i++){
         pthread_join(dci_thd[i], NULL);
+    }
+
+    // Only now that every decoder thread has exited: closing earlier would leave them writing
+    // into a closed FILE*.
+    if(task_scheduler->prog_args.pcap_mac){
+        ngscope_mac_pcap_close(rf_idx);
     }
 
 	// free the ue dl and the related buffer
