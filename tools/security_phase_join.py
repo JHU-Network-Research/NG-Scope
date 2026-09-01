@@ -21,7 +21,12 @@ Output
     -f dcilog  dci_output_joined/: the .dciLog files rewritten with only security_phase
                replaced -- same keys, same order, same layout, same pre|post|unknown value
                domain -- so anything that already reads a .dciLog reads these unchanged
-    -f both
+    -f pcapng  pcap_joined/: mac-<rf_idx>.pcapng rewritten with only the sec= field of each
+               packet comment replaced. ngscope pads that field to a fixed width, so this
+               is a byte-for-byte in-place patch: no block length, option length or padding
+               changes, and everything else in the file is copied verbatim
+    -f both     csv + dcilog
+    -f all      csv + dcilog + pcapng
 
 Usage
 -----
@@ -37,6 +42,7 @@ or, for a sweep, .../earfcn-5035/2026_08_17_15_27_10/
 
 import argparse
 import bisect
+import struct
 import csv
 import glob
 import json
@@ -46,8 +52,17 @@ import shutil
 import sys
 from collections import Counter, defaultdict
 
-# Not UE identities, so they have no security context. Matches ngscope_sec_is_unicast().
+# Not UE identities, so they have no security context. Matches ngscope_sec_is_unicast():
+# RNTI 0, SI-RNTI, P-RNTI, and the RA-RNTI range, which addresses a random-access occasion
+# rather than a UE. Reporting those as "n/a" rather than "unknown" keeps the two apart --
+# "unknown" means a UE this join could not place, which is the number that bounds how much
+# of the capture is unaccounted for.
 BROADCAST_RNTIS = {0, 0xFFFF, 0xFFFE}
+RARNTI_RANGE = range(1, 0x000B)   # SRSRAN_RARNTI_START .. SRSRAN_RARNTI_END
+
+
+def is_unicast(rnti):
+    return rnti not in BROADCAST_RNTIS and rnti not in RARNTI_RANGE
 
 
 def load_dcilog(path):
@@ -108,7 +123,7 @@ def phase_for(rnti, ts_us, boundaries):
     """(phase, session). 'pre' up to and including the boundary: the SecurityModeCommand is
     itself the last unciphered downlink message, and security only activates once the UE
     answers with SecurityModeComplete."""
-    if rnti in BROADCAST_RNTIS:
+    if not is_unicast(rnti):
         return "n/a", None
     sessions = boundaries.get(rnti)
     if not sessions:
@@ -117,6 +132,128 @@ def phase_for(rnti, ts_us, boundaries):
     if session is None:
         return "unknown", None
     return ("pre" if ts_us <= session[1] else "post"), session
+
+
+# pcapng block and option codes, PCAP Next Generation Dump File Format section 4.
+PCAPNG_SHB = 0x0A0D0D0A
+PCAPNG_EPB = 0x00000006
+PCAPNG_BYTE_ORDER_MAGIC = 0x1A2B3C4D
+OPT_ENDOFOPT = 0
+OPT_COMMENT = 1
+
+# "sec=" plus a field ngscope pads to exactly this width. That padding is what makes this an
+# in-place byte patch: the replacement is the same length as the original, so no option
+# length, no block length and no padding has to be recomputed, and a bug here cannot
+# corrupt the block structure.
+SEC_FIELD_WIDTH = 7
+
+_SEC_RE = re.compile(rb"sec=([a-z/ ]{%d})" % SEC_FIELD_WIDTH)
+_RNTI_RE = re.compile(rb"rnti=0x([0-9a-fA-F]{1,4})")
+
+
+def _patch_comment(comment, boundaries, ts_us, stats):
+    """Rewrite the sec= field of one packet comment. Returns the new bytes, same length.
+
+    The RNTI is read from the comment rather than by dissecting the MAC PDU, which keeps
+    this script free of any LTE knowledge -- it stays a join on (rnti, timestamp), exactly
+    as the .dciLog path is.
+    """
+    m_sec = _SEC_RE.search(comment)
+    if not m_sec:
+        stats["no_sec_field"] += 1
+        return comment
+    m_rnti = _RNTI_RE.search(comment)
+    if not m_rnti:
+        stats["no_rnti_field"] += 1
+        return comment
+
+    rnti = int(m_rnti.group(1), 16)
+    phase, _ = phase_for(rnti, ts_us, boundaries)
+    stats[phase] += 1
+    if b"src=blind" in comment:
+        stats["blind"] += 1
+
+    was = m_sec.group(1).strip().decode()
+    if was in ("pre", "post") and phase in ("pre", "post") and was != phase:
+        stats["disagree"] += 1
+
+    new = phase.encode().ljust(SEC_FIELD_WIDTH)
+    if len(new) != SEC_FIELD_WIDTH:
+        stats["too_long"] += 1
+        return comment
+    return comment[:m_sec.start(1)] + new + comment[m_sec.end(1):]
+
+
+def _patch_epb(body, endian, boundaries, stats):
+    """Patch the comment option of one Enhanced Packet Block body, in place.
+
+    body excludes the 8-byte block header but includes the trailing block-total-length.
+    Layout: interface id, timestamp high, timestamp low, captured length, original length,
+    packet data padded to 4, then options.
+    """
+    if len(body) < 24:
+        return body
+    _if_id, ts_hi, ts_lo, caplen, _origlen = struct.unpack(endian + "IIIII", body[:20])
+    ts_us = (ts_hi << 32) | ts_lo
+
+    off = 20 + ((caplen + 3) & ~3)
+    end = len(body) - 4          # trailing block total length
+    out = bytearray(body)
+    while off + 4 <= end:
+        code, length = struct.unpack(endian + "HH", body[off:off + 4])
+        if code == OPT_ENDOFOPT:
+            break
+        val_start = off + 4
+        val_end = val_start + length
+        if val_end > end:
+            break
+        if code == OPT_COMMENT:
+            patched = _patch_comment(bytes(body[val_start:val_end]), boundaries, ts_us, stats)
+            if len(patched) == length:
+                out[val_start:val_end] = patched
+        off = val_start + ((length + 3) & ~3)
+    return bytes(out)
+
+
+def rewrite_pcapng(src, dst, boundaries, stats):
+    """Copy src to dst, rewriting the sec= field of every packet comment.
+
+    Streamed a block at a time rather than loading the file, since a busy cell can produce
+    a capture far larger than memory. Endianness is taken from the section header's
+    byte-order magic and applied to every block after it, as the format requires.
+    """
+    with open(src, "rb") as fh, open(dst, "wb") as out:
+        head = fh.read(12)
+        if len(head) < 12 or struct.unpack("<I", head[:4])[0] != PCAPNG_SHB:
+            raise ValueError(f"{src}: not a pcapng file (no section header block)")
+        if struct.unpack("<I", head[8:12])[0] == PCAPNG_BYTE_ORDER_MAGIC:
+            endian = "<"
+        elif struct.unpack(">I", head[8:12])[0] == PCAPNG_BYTE_ORDER_MAGIC:
+            endian = ">"
+        else:
+            raise ValueError(f"{src}: bad byte-order magic in section header")
+
+        total = struct.unpack(endian + "I", head[4:8])[0]
+        if total < 12:
+            raise ValueError(f"{src}: implausible section header length {total}")
+        out.write(head)
+        out.write(fh.read(total - 12))
+
+        while True:
+            hdr = fh.read(8)
+            if len(hdr) < 8:
+                break            # clean end, or a truncated trailing block
+            btype, total = struct.unpack(endian + "II", hdr)
+            if total < 12:
+                raise ValueError(f"{src}: implausible block length {total} for type {btype:#x}")
+            body = fh.read(total - 8)
+            if len(body) < total - 8:
+                break            # truncated final block: stop rather than emit a bad one
+            if btype == PCAPNG_EPB:
+                body = _patch_epb(body, endian, boundaries, stats)
+                stats["packets"] += 1
+            out.write(hdr)
+            out.write(body)
 
 
 def write_dcilog(path, records):
@@ -150,12 +287,17 @@ def main():
                          "current directory)")
     ap.add_argument("-o", "--out",
                     help="csv: output file (default <run-dir>/security_phase.csv). "
-                         "dcilog: output directory (default <run-dir>/dci_output_joined)")
-    ap.add_argument("-f", "--format", choices=("csv", "dcilog", "both"), default="dcilog",
+                         "dcilog: output directory (default <run-dir>/dci_output_joined). "
+                         "pcapng: output directory (default <run-dir>/pcap_joined)")
+    ap.add_argument("-f", "--format",
+                    choices=("csv", "dcilog", "pcapng", "both", "all"), default="dcilog",
                     help="dcilog (default) rewrites the DL and UL .dciLog files in "
                          "place-compatible form -- same keys, order and layout, only "
                          "security_phase replaced -- so existing readers work unchanged. "
-                         "csv writes a flat table with extra derived columns instead.")
+                         "csv writes a flat table with extra derived columns instead. "
+                         "pcapng rewrites the sec= field of every packet comment in "
+                         "mac-<rf_idx>.pcapng. both = csv+dcilog (unchanged meaning); "
+                         "all = csv+dcilog+pcapng.")
     ap.add_argument("--summary-only", action="store_true", help="print the summary, write nothing")
     args = ap.parse_args()
 
@@ -202,7 +344,7 @@ def main():
     disagree = 0
     per_rnti = defaultdict(Counter)
     rewritten = {}
-    want_dcilog = args.format in ("dcilog", "both") and not args.summary_only
+    want_dcilog = args.format in ("dcilog", "both", "all") and not args.summary_only
 
     for path in dci_files:
         name = os.path.basename(path)
@@ -283,7 +425,7 @@ def main():
     if args.summary_only:
         return
 
-    if args.format in ("csv", "both"):
+    if args.format in ("csv", "both", "all"):
         out = (args.out if args.format == "csv" and args.out
                else os.path.join(run_dir, "security_phase.csv"))
         with open(out, "w", newline="") as fh:
@@ -292,7 +434,7 @@ def main():
             w.writerows(rows)
         print(f"\nwrote {len(rows):,} rows to {out}")
 
-    if args.format in ("dcilog", "both"):
+    if args.format in ("dcilog", "both", "all"):
         out_dir = (args.out if args.format == "dcilog" and args.out
                    else os.path.join(run_dir, "dci_output_joined"))
         os.makedirs(out_dir, exist_ok=True)
@@ -312,6 +454,49 @@ def main():
             dst = os.path.join(out_dir, os.path.basename(src))
             shutil.copyfile(src, dst)
             print(f"copied {os.path.basename(src)} unchanged (no security_phase field)")
+
+    if args.format in ("pcapng", "all"):
+        caps = sorted(glob.glob(os.path.join(run_dir, "mac-*.pcapng")))
+        if not caps:
+            print("\nno mac-*.pcapng in this run (was it made with pcap_mac = true?)")
+        else:
+            out_dir = (args.out if args.format == "pcapng" and args.out
+                       else os.path.join(run_dir, "pcap_joined"))
+            os.makedirs(out_dir, exist_ok=True)
+            pstats = Counter()
+            print()
+            for src in caps:
+                dst = os.path.join(out_dir, os.path.basename(src))
+                try:
+                    rewrite_pcapng(src, dst, boundaries, pstats)
+                except (ValueError, struct.error) as exc:
+                    print(f"error: {exc}", file=sys.stderr)
+                    continue
+                print(f"wrote {os.path.basename(dst)} to {out_dir}")
+
+            placed = pstats["pre"] + pstats["post"]
+            print(f"\npcapng packets : {pstats['packets']:,}")
+            for phase in ("pre", "post", "unknown", "n/a"):
+                n = pstats.get(phase, 0)
+                pct = 100 * n / pstats["packets"] if pstats["packets"] else 0
+                print(f"  {phase:<8} {n:>10,}  {pct:5.1f}%")
+            if pstats["blind"]:
+                # These carry an RNTI recovered from a descrambled PDCCH CRC rather than
+                # checked against a known one, so the identity may be fictional -- and any
+                # phase joined onto it inherits that. Counted separately so a reader does
+                # not treat them as equally attributed.
+                print(f"  {'blind':<8} {pstats['blind']:>10,}         "
+                      f"(rnti unverified; joined phase inherits that)")
+            if placed:
+                print(f"\n  {placed:,} packets placed by the join")
+            for key, note in (("no_sec_field", "no sec= field"),
+                              ("no_rnti_field", "no rnti= field"),
+                              ("too_long", "phase longer than the padded field")):
+                if pstats[key]:
+                    print(f"  WARNING: {pstats[key]:,} comments skipped -- {note}")
+            if pstats["disagree"]:
+                print(f"  WARNING: {pstats['disagree']:,} packets where the in-stream label "
+                      "contradicts this join. That should not happen -- please report it.")
 
 
 if __name__ == "__main__":
