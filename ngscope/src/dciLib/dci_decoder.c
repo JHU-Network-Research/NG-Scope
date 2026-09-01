@@ -341,7 +341,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 	if (decode_RAR) {
 		ngscope_rar_t rars[NGSCOPE_MAX_RAR_PER_SF];
 		int nof_rar = srsran_ue_dl_find_and_decode_rar(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars);
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars, \
+									rf_idx, dci_per_sub->timestamp, dci_per_sub->collection_time);
 		for (int i = 0; i < nof_rar; i++) {
 			ngscope_rar_log_write(dci_decoder->prog_args.out_path, rf_idx, tti, \
 									dci_per_sub->timestamp, dci_per_sub->collection_time, &rars[i]);
@@ -386,23 +387,45 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
  
     int n = 0;
 
-	// JH CLEAN_ALLOCATIONS
-	// Reset pending UL grants on each call
-	// dci_decoder->ue_dl.pending_ul_dci_count = 0;
-
-	// // Reset allocated DCI locations
-	// dci_decoder->ue_dl.nof_allocated_locations = 0;
+	/* Clear the per-subframe PDCCH bookkeeping before the blind search.
+	 *
+	 * dci_location_is_allocated() (ue_dl.c) makes the blind search skip any candidate
+	 * overlapping a location already claimed this subframe. nof_allocated_locations is reset
+	 * only inside srsran_ue_dl_find_dl_dci() and srsran_ue_dl_find_dl_dci_sirnti(), i.e. on
+	 * the SIB and RAR paths -- so with decode_RAR on, the RA-RNTI sweep above leaves up to
+	 * SRSRAN_MAX_DCI_MSG locations marked claimed and the blind search below silently skips
+	 * every candidate that overlaps them, for the rest of this subframe. Since
+	 * rach_filter_only forces decode_RAR on, that is the common configuration.
+	 *
+	 * Both fields are subframe-scoped, so clearing them here is the correct lifetime. */
+	dci_decoder->ue_dl.pending_ul_dci_count    = 0;
+	dci_decoder->ue_dl.nof_allocated_locations = 0;
 
         // Now decode the PDSCH
     // if(decode_pdsch && !decoded_sib){ // JH SKIP_SIBS
 	if(decode_pdsch) {
 
-        uint32_t tm = 3;
+        /* SRSRAN_TM1 == 0, so the historical `tm = 3` here is TM4, not TM3.
+         *
+         * It has no effect on the blind search's own grants -- those go through
+         * srsran_ra_dl_dci_to_grant_wo_mimo_yx(), whose config_mimo() call is commented out,
+         * so tx_scheme/pmi/nof_layers are left zero. But it is the value still in
+         * ue_dl_cfg when the targeted PDSCH paths run later in this function, and there it
+         * decides both the format set of srsran_ue_dl_find_dl_dci() and the transmission
+         * scheme config_mimo_type() picks.
+         *
+         * On a single-port cell TM4 with one transport block and pinfo == 0 resolves to
+         * DIVERSITY with nof_layers = nof_ports = 1, which srsran_predecoding_diversity_multi()
+         * cannot do -- so every single-TB decode on a 1-port cell failed. TM1 gives PORT0
+         * there, which is correct. On a multi-port cell TM4 stays the right choice: Format
+         * 1/1A/1C leave pinfo at zero, so they resolve to DIVERSITY exactly as before, and
+         * Format2 keeps access to SPATIALMUX. */
+        srsran_tm_t tm = (dci_decoder->cell.nof_ports == 1) ? SRSRAN_TM1 : SRSRAN_TM4;
 
         dci_decoder->dl_sf.tti                             = tti;
         dci_decoder->dl_sf.sf_type                         = SRSRAN_SF_NORM; //Ingore the MBSFN
-        dci_decoder->ue_dl_cfg.cfg.tm                      = (srsran_tm_t)tm;
-        dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = true;
+        dci_decoder->ue_dl_cfg.cfg.tm                      = tm;
+dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = true;
 
 		if(decode_single_ue){
 			n = srsran_ngscope_decode_dci_singleUE_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
@@ -658,6 +681,12 @@ void* dci_decoder_thread(void* p){
 	
 
 	printf("decoder idx :%d \n", decoder_idx);
+
+	/* This thread decodes for one RF device for its whole life. Bind it so the RACH filter
+	 * inside the PDCCH candidate loop (srsran_ngscope_search_in_space_yx) knows which
+	 * device's RNTI set to consult -- it has no rf_idx of its own. */
+	ngscope_rach_filter_bind_thread(rf_idx);
+
     ngscope_dci_per_sub_t   dci_per_sub; 
     ngscope_status_buffer_t dci_ret;
 //
