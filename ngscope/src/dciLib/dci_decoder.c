@@ -27,6 +27,7 @@
 #include "ngscope/hdr/dciLib/ue_tracker.h"
 #include "ngscope/hdr/dciLib/ngscope_util.h"
 #include "ngscope/hdr/dciLib/sib1_helper.h"
+#include "ngscope/hdr/dciLib/load_config.h"
 #include "ngscope/hdr/dciLib/security_ctx.h"
 #include "ngscope/hdr/dciLib/security_rrc.h"
 
@@ -594,10 +595,16 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 		// mid-setup, which is what puts a real boundary under the pre/post labelling. Runs
 		// before the filter below so it is unaffected by what that drops.
 		if (dci_decoder->prog_args.mark_security_phase) {
+			/* Replay blocks on a busy decoder rather than discarding the subframe, so it
+			 * stays lossless however slow it runs -- which makes it the right place to
+			 * spend CPU on coverage. Live capture drops instead, so it keeps the lower cap. */
+			const int sec_scan_cap = (dci_decoder->prog_args.mode == REPLAY)
+			                             ? NGSCOPE_SEC_SCAN_CAP_REPLAY
+			                             : NGSCOPE_SEC_SCAN_CAP_LIVE;
 			ngscope_sec_scan_subframe(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
 									rf_idx, tti, dci_per_sub->timestamp,
-									dci_decoder->prog_args.out_path);
+									dci_decoder->prog_args.out_path, sec_scan_cap);
 		}
 
 		// Stamp every message with where it sits relative to its UE's security context.

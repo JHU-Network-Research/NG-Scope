@@ -17,15 +17,22 @@ extern bool debug;
 
 /* How many tracked UEs are scanned per subframe.
  *
- * ngscope_sec_tracked() fills its output in array order and stops here, so anything past
- * this cap is not scanned at all -- and it is the same UEs every subframe, not a rotating
- * sample. Anything missed is a UE that looks like it never reached security.
+ * ngscope_sec_tracked() fills its output in array order and stops at this cap, so anything
+ * past it is not scanned at all -- and it is the same UEs every subframe, not a rotating
+ * sample. Anything missed is a UE that ends up looking like it never reached security.
  *
- * 32 was below real concurrency: measured on a band 12 cell the tracked set peaks around 70,
- * so more than half were never scanned. Sized above that with headroom; the counter in
- * ngscope_sec_report() says when a cell outgrows it. Cost is one targeted PDCCH search per
- * tracked UE per subframe, and only UEs still inside their setup window are tracked. */
-#define SEC_MAX_SCAN_RNTI 128
+ * The right cap differs by mode, because the consequence of being too slow differs. In live
+ * capture the scheduler discards a subframe when every decoder is busy
+ * (task_scheduler.c, find_idle_decoder), so overspending here costs whole subframes and the
+ * loss is invisible in the output. In replay it blocks instead, so the run is lossless
+ * however slow it gets and the only cost is wall time -- which makes a replay the right
+ * place to spend CPU for coverage.
+ *
+ * 32 was below real concurrency: the tracked set peaks around 57-70 on the band 12 cell
+ * measured here, so more than half were never scanned. The live cap is sized above that with
+ * headroom; the replay cap matches SEC_MAX_ACTIVE, so in replay nothing tracked goes
+ * unscanned. ngscope_sec_report() prints the tracked-but-unscanned count either way. */
+#define SEC_MAX_SCAN_RNTI NGSCOPE_SEC_SCAN_CAP_REPLAY
 
 /* SRB logical channels on DL-SCH. LCID 0 is CCCH (SRB0), which carries Msg4. */
 #define SEC_LCID_CCCH 0
@@ -156,10 +163,12 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               int                 rf_idx,
                               uint32_t            tti,
                               uint64_t            ts_us,
-                              const char*         out_path)
+                              const char*         out_path,
+                              int                 scan_cap)
 {
-  uint16_t rntis[SEC_MAX_SCAN_RNTI];
-  int      nof_rnti = ngscope_sec_tracked(rf_idx, ts_us, rntis, SEC_MAX_SCAN_RNTI);
+  uint16_t  rntis[SEC_MAX_SCAN_RNTI];
+  const int cap = (scan_cap > 0 && scan_cap < SEC_MAX_SCAN_RNTI) ? scan_cap : SEC_MAX_SCAN_RNTI;
+  int       nof_rnti = ngscope_sec_tracked(rf_idx, ts_us, rntis, cap);
   if (nof_rnti <= 0) {
     return 0;
   }
