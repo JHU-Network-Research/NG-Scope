@@ -40,6 +40,7 @@ typedef struct{
 	int 				decode_RAR;
 	int 				rar_seed_tracker;
 	int 				rach_filter_only;
+	int 				mark_security_phase;
 	int 				enable_256qam;
 	int 				pcap_mac;
 	int 				pcap_max_mb;
@@ -83,6 +84,7 @@ typedef struct{
     X(BOOL,   "decode_RAR",        decode_RAR,         false,  false)                      \
     X(BOOL,   "rar_seed_tracker",  rar_seed_tracker,   false,  false)                      \
     X(BOOL,   "rach_filter_only",  rach_filter_only,   false,  false)                      \
+    X(BOOL,   "mark_security_phase", mark_security_phase, false, false)                    \
     X(BOOL,   "enable_256qam",     enable_256qam,      true,   false)                      \
     X(BOOL,   "pcap_mac",          pcap_mac,           false,  false)                      \
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)

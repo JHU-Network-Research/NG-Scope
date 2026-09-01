@@ -225,6 +225,13 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
         config->decode_RAR = true;
     }
 
+    if (config->mark_security_phase && !config->decode_RAR) {
+        printf("config: WARNING: mark_security_phase anchors each UE's security boundary on the "
+               "RAR that assigned its RNTI; with decode_RAR off there are no anchors and every "
+               "DCI would be labelled unknown. Forcing decode_RAR on.\n");
+        config->decode_RAR = true;
+    }
+
     for (int i = 0; i < config->nof_rf_dev; i++) {
         /* srsran_ue_dl_init() and the sync buffers are sized from this, and
          * srsran_rf_open_devname() asks the driver for exactly this many channels. */

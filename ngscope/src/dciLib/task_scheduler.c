@@ -27,6 +27,7 @@
 #include "ngscope/hdr/dciLib/rach_filter.h"
 #include "ngscope/hdr/dciLib/tbs_table_probe.h"
 #include "ngscope/hdr/dciLib/mac_pcap.h"
+#include "ngscope/hdr/dciLib/security_ctx.h"
 
 #include "ngscope/hdr/dciLib/ngscope_rx.h"
 #include "ngscope/hdr/dciLib/load_config.h"
@@ -829,6 +830,9 @@ void* task_scheduler_thread(void* p){
 
 	if(prog_args->decode_RAR){
 		ngscope_rach_filter_report(rf_idx);
+	}
+	if(prog_args->mark_security_phase){
+		ngscope_sec_report(rf_idx);
 	}
 
 	/* Whether the enable_256qam guess matches what the cell is actually doing. Costs nothing

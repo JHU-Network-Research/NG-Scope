@@ -77,6 +77,13 @@ TOP_LEVEL = [
         "yield: none.",
     ),
     _f(
+        "mark_security_phase", "bool", False, "Mark security phase",
+        "Label each unicast DCI pre, post or unknown relative to the UE establishing an AS "
+        "security context. The boundary is observed, not inferred: NG-Scope decodes the "
+        "UE's still-unciphered RRC looking for securityModeCommand, and a DCI it cannot "
+        "place stays unknown.",
+    ),
+    _f(
         "rach_filter_only", "bool", False, "RACH filter only",
         "Record only DCIs whose RNTI was observed being assigned to a UE that successfully "
         "completed RACH, plus SI-RNTI/P-RNTI/RA-RNTI which never RACH. Implies decode_RAR, "

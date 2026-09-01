@@ -35,6 +35,13 @@ typedef struct{
     float    corr; 
 
     srsran_dci_format_t format;
+
+    /* Where this DCI sits relative to the UE establishing an AS security context:
+     * 0 unknown, 1 pre, 2 post -- the values of ngscope_sec_phase_t. Kept as a plain
+     * integer so this header, which lives under lib/, needs no ngscope/hdr include.
+     * Always 0 unless mark_security_phase is on. */
+    uint8_t             sec_phase;
+
     // information of the transport block
     ngscope_dci_tb_t    tb[2];
 

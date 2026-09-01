@@ -27,6 +27,8 @@
 #include "ngscope/hdr/dciLib/ue_tracker.h"
 #include "ngscope/hdr/dciLib/ngscope_util.h"
 #include "ngscope/hdr/dciLib/sib1_helper.h"
+#include "ngscope/hdr/dciLib/security_ctx.h"
+#include "ngscope/hdr/dciLib/security_rrc.h"
 
 #include "ngscope/hdr/dciLib/decode_sib.h"
 #include "ngscope/hdr/dciLib/decode_rar.h"
@@ -350,6 +352,13 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			// Remember the RNTI regardless of whether the filter is on, so that turning it
 			// on costs nothing extra and the set is always available.
 			ngscope_rach_filter_add(rf_idx, rars[i].temp_crnti, tti);
+
+			// Anchor the security-phase tracker on the same RAR. Unlike the filter above
+			// this re-arms on every sighting, because an RNTI handed out again later is a
+			// different UE with a different boundary.
+			if (dci_decoder->prog_args.mark_security_phase) {
+				ngscope_sec_note_rar(rf_idx, rars[i].temp_crnti, tti, dci_per_sub->timestamp);
+			}
 		}
 
 		// Feed the RACH-assigned RNTIs back into the UE tracker, so the next genuine
@@ -579,6 +588,32 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			if (!silent)
 				printf("\n");
 
+		}
+
+		// Look for the SecurityModeCommand in the still-unciphered RRC of UEs that are
+		// mid-setup, which is what puts a real boundary under the pre/post labelling. Runs
+		// before the filter below so it is unaffected by what that drops.
+		if (dci_decoder->prog_args.mark_security_phase) {
+			ngscope_sec_scan_subframe(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
+									rf_idx, tti, dci_per_sub->timestamp,
+									dci_decoder->prog_args.out_path);
+		}
+
+		// Stamp every message with where it sits relative to its UE's security context.
+		// Broadcast RNTIs and any UE we could not place both come out UNKNOWN -- the
+		// boundary is only ever set by an observed SecurityModeCommand.
+		if (dci_decoder->prog_args.mark_security_phase) {
+			for (int i = 0; i < dci_per_sub->nof_dl_dci; i++) {
+				dci_per_sub->dl_msg[i].sec_phase =
+					(uint8_t)ngscope_sec_phase(rf_idx, dci_per_sub->dl_msg[i].rnti,
+												dci_per_sub->timestamp);
+			}
+			for (int i = 0; i < dci_per_sub->nof_ul_dci; i++) {
+				dci_per_sub->ul_msg[i].sec_phase =
+					(uint8_t)ngscope_sec_phase(rf_idx, dci_per_sub->ul_msg[i].rnti,
+												dci_per_sub->timestamp);
+			}
 		}
 
 		// Restrict the reported DCIs to RNTIs that were seen completing RACH. Applied after
