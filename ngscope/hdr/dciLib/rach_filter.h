@@ -23,6 +23,20 @@ extern "C" {
 /* Record an RNTI seen in a RAR. Idempotent. */
 void ngscope_rach_filter_add(int rf_idx, uint16_t rnti, uint32_t tti);
 
+/* Bind the calling thread to an RF device, so the filter can be consulted from inside
+ * libsrsran_phy where no rf_idx is in scope. Call once per decoder thread. -1 unbinds.
+ * An unbound thread never filters. */
+void ngscope_rach_filter_bind_thread(int rf_idx);
+
+/* Whether this device wants the filter applied during the blind search, i.e. rach_filter_only.
+ * Call once per RF device before its decoder threads start. Defaults to false. */
+void ngscope_rach_filter_set_active(int rf_idx, bool active);
+
+/* ngscope_rach_filter_pass() for the calling thread's bound device, returning true when the
+ * thread is unbound or the device did not enable filtering. This is what the PDCCH candidate
+ * loop calls. */
+bool ngscope_rach_filter_pass_bound(uint16_t rnti);
+
 /* true if this RNTI may be reported. Broadcast RNTIs (SI-RNTI, P-RNTI, RA-RNTI) always pass:
  * they never RACH by definition, and dropping them would silently discard all system
  * information and paging DCIs. RNTI 0 never passes. */

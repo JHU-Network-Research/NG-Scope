@@ -686,9 +686,12 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         // }
 
 
-        // if (mode == 2){
         // JH RNTI FILTERING
-        if (!ngscope_rach_filter_pass(0, dci_msg[nof_dci].rnti)){
+        /* Thread-bound: uses the calling decoder thread's RF device, and only filters when
+         * that device set rach_filter_only. Previously this hardcoded rf_idx 0 and ran
+         * unconditionally, so cells 1..3 were filtered against cell 0's RNTI set and the
+         * blind search dropped unicast DCIs even with rach_filter_only off. */
+        if (!ngscope_rach_filter_pass_bound(dci_msg[nof_dci].rnti)){
           // printf("Filtering invalid dci: %d\n", dci_msg[nof_dci].rnti);
           continue;
         }

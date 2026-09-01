@@ -30,6 +30,46 @@ static inline bool rf_idx_valid(int rf_idx)
     return rf_idx >= 0 && rf_idx < MAX_NOF_RF_DEV;
 }
 
+/* Which device the calling thread decodes for, and whether that device asked for filtering.
+ *
+ * srsran_ngscope_search_in_space_yx() consults the filter per PDCCH candidate, deep inside
+ * libsrsran_phy, where there is no rf_idx and no config in scope -- so the call site used to
+ * hardcode rf_idx 0 and apply the filter unconditionally. That was wrong twice over: cells
+ * 1..3 were filtered against cell 0's RNTI set, and with rach_filter_only off the search
+ * still dropped every unicast DCI whose RNTI had not been seen in a RAR (with decode_RAR off
+ * the set is empty, so that meant essentially all of them).
+ *
+ * A decoder thread serves exactly one RF device for its whole life, so binding the device to
+ * the thread carries the missing context at the cost of one TLS load per candidate. Unbound
+ * (-1) means "do not filter", which is what cellscanner, cellinspector and the tests want --
+ * srsran_phy links this object unconditionally, so they resolve the symbol too. */
+static __thread int  bound_rf_idx = -1;
+static bool          filter_active[MAX_NOF_RF_DEV];
+
+void ngscope_rach_filter_bind_thread(int rf_idx)
+{
+    bound_rf_idx = rf_idx_valid(rf_idx) ? rf_idx : -1;
+}
+
+void ngscope_rach_filter_set_active(int rf_idx, bool active)
+{
+    if (rf_idx_valid(rf_idx)) {
+        filter_active[rf_idx] = active;
+    }
+}
+
+bool ngscope_rach_filter_pass_bound(uint16_t rnti)
+{
+    const int rf = bound_rf_idx;
+    if (rf < 0) {
+        return true; /* unbound thread: no filtering */
+    }
+    if (!filter_active[rf]) {
+        return true; /* this device did not ask for it */
+    }
+    return ngscope_rach_filter_pass(rf, rnti);
+}
+
 /* SI-RNTI, P-RNTI and RA-RNTI are not UE identities and never appear in a RAR body, so they
  * are exempt rather than dropped. */
 static inline bool is_broadcast_rnti(uint16_t rnti)
