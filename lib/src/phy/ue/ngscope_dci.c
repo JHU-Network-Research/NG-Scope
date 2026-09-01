@@ -1,6 +1,7 @@
 #include <string.h>
 #include "srsran/srsran.h"
 #include "srsran/phy/ue/ngscope_dci.h"
+#include "dciLib/tbs_table_probe.h"
 
 bool __attribute__((weak)) debug = false;
 
@@ -26,6 +27,15 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
         //ERROR("Translate DL DCI to grant");
         return SRSRAN_ERROR;
     }
+
+    /* Which MCS->TBS table this cell uses is a guess (see enable_256qam), and it sets the tbs
+     * we report. Evaluate every grant under both tables so the guess can be checked against
+     * physics at teardown: an effective code rate above 1 rules a table out. Counting only.
+     *
+     * These are candidates that passed the PDCCH CRC but have not yet been pruned, so a few
+     * are false positives. That is fine for a population statistic and the verdict says so
+     * when both tables look impossible. */
+    ngscope_tbs_probe_add(dci_dl_grant, dci_dl, cfg->cfg.pdsch.use_tbs_index_alt, dci_msg->corr);
     // fprintf(stderr, "BEFORE: l_crb=%u, rb_start=%u, AFTER: l_crb=%u, rb_start=%u\n", before_crb, before_rb, dci_msg->l_crb, dci_msg->rb_start);
     
     return SRSRAN_SUCCESS;
@@ -82,6 +92,16 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
     dci_array[i][j].harq    = dci_dl->pid;
     dci_array[i][j].nof_tb  = dci_dl_grant->nof_tb;
     dci_array[i][j].dl      = true;
+
+    /* Stamp the format here, at the point the candidate is created.
+     *
+     * srsran_ngscope_tree_copy_dci_fromArray2PerSub() also sets it, but that is not the only
+     * route into dci_per_sub: prune_based_on_topN() and prune_based_on_activeUE() reach it
+     * through ngscope_push_dci_to_per_sub(), which is a plain memcpy of the tree node. Those
+     * DCIs used to arrive with format == 0 == SRSRAN_DCI_FORMAT0, which is why the format
+     * column of dci-decode-debug-<n>.csv read Format0 for a downlink message. i is the tree's
+     * format index, the same one ngscope_index_to_format() decodes. */
+    dci_array[i][j].format  = ngscope_index_to_format(i);
  
     dci_array[i][j].decode_prob      = decode_prob;
     dci_array[i][j].corr             = corr;
@@ -163,6 +183,10 @@ void srsran_ngscope_dci_into_array_ul(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
     dci_array[i][j].harq    = 0;
     dci_array[i][j].nof_tb  = 1;
     dci_array[i][j].dl      = false;
+
+    /* See the note in srsran_ngscope_dci_into_array_dl(). An uplink candidate is always
+     * Format0, which is also tree format index 0. */
+    dci_array[i][j].format  = SRSRAN_DCI_FORMAT0;
 
     // transport block 1
     dci_array[i][j].tb[0].mcs      = dci_ul_grant->tb.mcs_idx;
