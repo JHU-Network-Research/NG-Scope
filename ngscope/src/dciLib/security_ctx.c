@@ -31,10 +31,16 @@ typedef struct {
     uint64_t last_clear_us;
 } sec_rnti_t;
 
-/* Cap on UEs tracked concurrently. RACH arrivals are a few per second and setup lasts
- * well under a second, so a handful are in flight at once; this only stops a pathological
- * cell from growing the per-subframe work without bound. */
-#define SEC_MAX_ACTIVE 64
+/* Cap on UEs tracked concurrently. Only a backstop against a pathological cell, so it must
+ * sit well above real load: at 64 it was not a backstop but a binding limit. Measured on a
+ * 300 s band 12 capture, RACH arrivals averaged 3.9/s, which over the 10 s tracking window
+ * is ~39 concurrent -- but the busiest 10 s window held 107, so bursts were evicting UEs
+ * mid-setup and they could never yield a SecurityModeCommand.
+ *
+ * Costs 2 bytes per slot per device and nothing per subframe: ngscope_sec_tracked() already
+ * walks the whole list to prune it, and how many are actually scanned is capped separately
+ * by the caller. Evictions are counted, so a cell that outgrows even this says so. */
+#define SEC_MAX_ACTIVE 512
 
 typedef struct {
     sec_rnti_t rnti[65536];
@@ -51,6 +57,21 @@ typedef struct {
     uint64_t   nof_attempt;
     uint64_t   nof_pdsch_ok;
     uint64_t   nof_rrc_ok;
+
+    /* Silent losses. Both drop a UE that was mid-setup, which is indistinguishable in the
+     * output from a UE that genuinely never reached security -- so they have to be counted,
+     * or the detection rate cannot be read as a property of the cell. */
+    uint64_t   nof_evicted;      /* dropped from active[] because it was full */
+    uint64_t   nof_not_scanned;  /* tracked, but past the caller's per-subframe scan cap */
+    uint64_t   nof_tracked_calls;
+    int        max_active_seen;  /* high-water mark of concurrent tracked UEs */
+
+    /* Why entries left active[]. have_smc is the successful exit; window is the honest
+     * timeout. backwards is neither: it means a decoder thread working on an older subframe
+     * than the one that anchored the RAR dropped a UE that had only just arrived. */
+    uint64_t   nof_exp_smc;
+    uint64_t   nof_exp_window;
+    uint64_t   nof_exp_backwards;
 } sec_ctx_t;
 
 static sec_ctx_t       sec_ctx[MAX_NOF_RF_DEV];
@@ -115,7 +136,8 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
             q->active[q->nof_active++] = rnti;
         } else {
             /* Full: drop whoever has been in setup longest, since they are the least
-             * likely to still yield a SecurityModeCommand. */
+             * likely to still yield a SecurityModeCommand. Counted, because the dropped UE
+             * then looks exactly like one that never reached security. */
             int oldest = 0;
             for (int i = 1; i < SEC_MAX_ACTIVE; i++) {
                 if (q->rnti[q->active[i]].rar_us < q->rnti[q->active[oldest]].rar_us) {
@@ -123,6 +145,7 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
                 }
             }
             q->active[oldest] = rnti;
+            q->nof_evicted++;
         }
     }
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
@@ -289,17 +312,41 @@ int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out)
 
         /* Expiry stops the decode attempts only. It never converts an UNKNOWN into a
          * label -- the phase still comes from what was actually observed. */
-        bool expired = !r->anchored || r->have_smc || now_us < r->rar_us ||
-                       (now_us - r->rar_us) > SEC_TRACK_WINDOW_US;
+        /* now_us is the timestamp of the subframe the calling decoder thread happens to be
+         * working on, and threads run subframes out of order -- so it can sit behind a RAR
+         * anchored moments ago by a thread that was ahead. That must not expire anything: an
+         * entry newer than the current subframe cannot have exceeded the window. It used to,
+         * because the guard against unsigned underflow in the subtraction below was written
+         * as an expiry condition, and removal from active[] is permanent until the next RAR.
+         * Measured over 60 s: 117 of 221 tracking exits were this, against 104 real timeouts. */
+        const bool exp_smc      = r->have_smc;
+        const bool behind       = now_us < r->rar_us;
+        const bool exp_window   = !exp_smc && !behind && r->anchored &&
+                                  (now_us - r->rar_us) > SEC_TRACK_WINDOW_US;
+        bool expired = !r->anchored || exp_smc || exp_window;
+        if (behind && !expired) {
+            q->nof_exp_backwards++;   /* counted as an averted drop, not an exit */
+        }
         if (expired) {
+            if (exp_smc)         q->nof_exp_smc++;
+            else if (exp_window) q->nof_exp_window++;
             q->active[i] = q->active[--q->nof_active];
             continue;
         }
         if (n < max_out) {
             out[n++] = rnti;
+        } else {
+            /* Tracked but not scanned this subframe. ngscope_sec_tracked() emits in array
+             * order, so with more tracked UEs than the caller's cap it is the same ones
+             * that miss out every subframe, not a rotating sample. */
+            q->nof_not_scanned++;
         }
         i++;
     }
+    if (q->nof_active > q->max_active_seen) {
+        q->max_active_seen = q->nof_active;
+    }
+    q->nof_tracked_calls++;
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
     return n;
 }
@@ -349,5 +396,32 @@ void ngscope_sec_report(int rf_idx)
            q->nof_attempt ? 100.0 * q->nof_pdsch_ok / q->nof_attempt : 0.0,
            (unsigned long long)q->nof_rrc_ok,
            q->nof_attempt ? 100.0 * q->nof_rrc_ok / q->nof_attempt : 0.0);
+
+    /* Coverage. A UE dropped by either of these is indistinguishable in the output from one
+     * that genuinely never reached security, so the detection rate above can only be read as
+     * a property of the cell to the extent that both are zero. */
+    printf("SECURITY (cell %d): tracking high-water %d of %d slots", rf_idx, q->max_active_seen,
+           SEC_MAX_ACTIVE);
+    if (q->nof_evicted > 0) {
+        printf(", %llu EVICTED mid-setup (raise SEC_MAX_ACTIVE)", (unsigned long long)q->nof_evicted);
+    }
+    if (q->nof_not_scanned > 0 && q->nof_tracked_calls > 0) {
+        printf(", %llu tracked-but-unscanned over %llu subframes (%.1f per subframe -- raise the "
+               "caller's scan cap)",
+               (unsigned long long)q->nof_not_scanned,
+               (unsigned long long)q->nof_tracked_calls,
+               (double)q->nof_not_scanned / (double)q->nof_tracked_calls);
+    }
+    if (q->nof_evicted == 0 && q->nof_not_scanned == 0) {
+        printf(", no UE dropped for want of a slot");
+    }
+    printf("\n");
+    printf("SECURITY (cell %d): tracking exits -- %llu on SecurityModeCommand, %llu on the %d s "
+           "window; %llu drops averted where a decoder thread was behind the RAR\n",
+           rf_idx,
+           (unsigned long long)q->nof_exp_smc,
+           (unsigned long long)q->nof_exp_window,
+           (int)(SEC_TRACK_WINDOW_US / 1000000ULL),
+           (unsigned long long)q->nof_exp_backwards);
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }

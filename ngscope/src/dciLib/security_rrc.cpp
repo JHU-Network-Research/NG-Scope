@@ -15,10 +15,17 @@ extern "C" {
 
 extern bool debug;
 
-/* Most RNTIs are in setup for well under a second, and RACH arrivals are a few per second,
- * so the set worth scanning is small. The cap only stops a pathological cell from turning
- * this into a full sweep of the RNTI space. */
-#define SEC_MAX_SCAN_RNTI 32
+/* How many tracked UEs are scanned per subframe.
+ *
+ * ngscope_sec_tracked() fills its output in array order and stops here, so anything past
+ * this cap is not scanned at all -- and it is the same UEs every subframe, not a rotating
+ * sample. Anything missed is a UE that looks like it never reached security.
+ *
+ * 32 was below real concurrency: measured on a band 12 cell the tracked set peaks around 70,
+ * so more than half were never scanned. Sized above that with headroom; the counter in
+ * ngscope_sec_report() says when a cell outgrows it. Cost is one targeted PDCCH search per
+ * tracked UE per subframe, and only UEs still inside their setup window are tracked. */
+#define SEC_MAX_SCAN_RNTI 128
 
 /* SRB logical channels on DL-SCH. LCID 0 is CCCH (SRB0), which carries Msg4. */
 #define SEC_LCID_CCCH 0
