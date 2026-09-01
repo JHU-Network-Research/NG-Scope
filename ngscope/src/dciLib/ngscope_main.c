@@ -98,9 +98,13 @@ int ngscope_main(ngscope_config_t* config)
 		prog_args[i].decode_RAR 	  = config->decode_RAR;
 		prog_args[i].rar_seed_tracker = config->rar_seed_tracker;
 		prog_args[i].rach_filter_only = config->rach_filter_only;
+		prog_args[i].enable_256qam    = config->enable_256qam;
+		prog_args[i].pcap_mac         = config->pcap_mac;
+		prog_args[i].pcap_max_mb      = config->pcap_max_mb;
 
         prog_args[i].rf_index      = i;
         prog_args[i].rf_freq       = config->rf_config[i].rf_freq;
+        prog_args[i].rf_nof_rx_ant = config->rf_config[i].nof_rx_ant;
         prog_args[i].rf_freq_vec[i]= config->rf_config[i].rf_freq;
 
         prog_args[i].force_N_id_2  = config->rf_config[i].N_id_2;

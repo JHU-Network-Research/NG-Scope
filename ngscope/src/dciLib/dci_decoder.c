@@ -425,7 +425,19 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
         dci_decoder->dl_sf.tti                             = tti;
         dci_decoder->dl_sf.sf_type                         = SRSRAN_SF_NORM; //Ingore the MBSFN
         dci_decoder->ue_dl_cfg.cfg.tm                      = tm;
-dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = true;
+        /* 256QAM table selection. 36.213 only permits it when the cell configures
+         * altCQI-Table-r12, which is per-UE RRC state a downlink sniffer cannot see, so this
+         * is a guess either way and it is now an explicit one.
+         *
+         * It is not only a decode parameter: dl_dci_compute_tb() uses it to pick the MCS->TBS
+         * mapping, so it sets the tbs values reported in the .dciLog files. Guessing wrong
+         * gives wrong throughput figures AND, once DL-SCH decoding is on, a transport block
+         * CRC that can never pass. srsRAN forces it off for Format1A and non-user RNTIs
+         * (ra_dl.c), which is why SIB, RAR and paging are unaffected either way.
+         *
+         * Default stays true, matching the previous hardcoded value, so existing DCI output
+         * does not change silently. */
+        dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = dci_decoder->prog_args.enable_256qam;
 
 		if(decode_single_ue){
 			n = srsran_ngscope_decode_dci_singleUE_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \

@@ -71,7 +71,7 @@ void usage(prog_args_t* args, char* prog)
   printf("\t-a RF args [Default %s]\n", args->rf_args);
   printf("\t-a RF index [Default %d]\n", args->rf_index);
   printf("\t-A Number of RX antennas [Default %d]\n", args->rf_nof_rx_ant);
-  printf("\t-A Number of DCI decoders [Default %d]\n", args->nof_decoder);
+  printf("\t-n Number of DCI decoders [Default %d]\n", args->nof_decoder);
 #ifdef ENABLE_AGC_DEFAULT
   printf("\t-g RF fix RX gain [Default AGC]\n");
 #else

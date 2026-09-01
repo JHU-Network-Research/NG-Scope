@@ -10,6 +10,7 @@ typedef struct{
     int         N_id_2;
     char        rf_args[100];
     int         nof_thread;
+    int         nof_rx_ant;
     int         disable_plot;
 	int 		log_dl;
 	int			log_ul;
@@ -39,6 +40,9 @@ typedef struct{
 	int 				decode_RAR;
 	int 				rar_seed_tracker;
 	int 				rach_filter_only;
+	int 				enable_256qam;
+	int 				pcap_mac;
+	int 				pcap_max_mb;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
     const char *        out_path;
@@ -78,13 +82,17 @@ typedef struct{
     X(BOOL,   "decode_SIB",        decode_SIB,         false,  false)                      \
     X(BOOL,   "decode_RAR",        decode_RAR,         false,  false)                      \
     X(BOOL,   "rar_seed_tracker",  rar_seed_tracker,   false,  false)                      \
-    X(BOOL,   "rach_filter_only",  rach_filter_only,   false,  false)
+    X(BOOL,   "rach_filter_only",  rach_filter_only,   false,  false)                      \
+    X(BOOL,   "enable_256qam",     enable_256qam,      true,   false)                      \
+    X(BOOL,   "pcap_mac",          pcap_mac,           false,  false)                      \
+    X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \
     X(INT64,  "rf_freq",           rf_freq,            0,      true)                       \
     X(INT,    "N_id_2",            N_id_2,             -1,     false)                      \
     X(INT,    "nof_thread",        nof_thread,         4,      false)                      \
+    X(INT,    "nof_rx_ant",        nof_rx_ant,         1,      false)                      \
     X(STRBUF, "rf_args",           rf_args,            "",     false)                      \
     X(BOOL,   "disable_plot",      disable_plot,       true,   false)                      \
     X(BOOL,   "log_dl",            log_dl,             true,   false)                      \

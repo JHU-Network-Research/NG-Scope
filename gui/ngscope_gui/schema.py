@@ -82,6 +82,24 @@ TOP_LEVEL = [
         "completed RACH, plus SI-RNTI/P-RNTI/RA-RNTI which never RACH. Implies decode_RAR, "
         "since the RNTI set is built from decoded RARs.",
     ),
+    _f(
+        "pcap_mac", "bool", False, "MAC pcap",
+        "Write every decoded downlink MAC PDU to mac-<rf_idx>.pcapng, readable in Wireshark "
+        "once DLT_USER0 (147) is mapped to mac-lte-framed. See docs/pcap.md.",
+    ),
+    _f(
+        "pcap_max_mb", "int", 0, "pcap cap (MB)",
+        "Per-file size cap in MB; 0 is unlimited. A busy 20 MHz cell can produce around a "
+        "gigabyte a minute.",
+        min=0,
+    ),
+    _f(
+        "enable_256qam", "bool", True, "256QAM table",
+        "Use the 256QAM MCS->TBS table for C-RNTI Format1/2 grants. Only correct when the "
+        "cell configures altCQI-Table-r12, which a downlink sniffer cannot observe, so this "
+        "is a guess. It sets the tbs values in the .dciLog files, so getting it wrong gives "
+        "wrong throughput figures. SIB, RAR and paging are unaffected either way.",
+    ),
 ]
 
 # --------------------------------------------------------------------------- per RF device
@@ -107,6 +125,15 @@ RF_DEV = [
         "DCI decoder threads for this cell. Too few and subframes are dropped in live "
         "capture, or replay falls behind real time.",
         min=1, max=MAX_NOF_DCI_DECODER,
+    ),
+    _f(
+        "nof_rx_ant", "int", 1, "RX antennas",
+        "Receive channels to open on this SDR. Two are required to decode transmission modes "
+        "3 and 4 with two spatial layers -- with one antenna those grants cannot be separated "
+        "and always fail. Needs an SDR with two coherent RX channels (B210, or an X310 with "
+        "two daughterboards). No help on a 4-port cell, where srsRAN cannot predecode spatial "
+        "multiplexing at all.",
+        min=1, max=4,
     ),
     _f(
         "mode", "mode", MODE_NORMAL, "Mode",

@@ -37,6 +37,33 @@ rar_seed_tracker = false
 # so a single run shows the effect whether or not this is set.
 rach_filter_only = false
 
+# Use the 256QAM MCS->TBS table for C-RNTI Format1/2 grants.
+#
+# 36.213 only permits it when the cell configures altCQI-Table-r12, which is per-UE RRC state
+# a downlink sniffer cannot observe -- so this is a guess whichever way it is set. It picks
+# the MCS->TBS mapping, which means it sets the tbs values written to the .dciLog files: guess
+# wrong and the throughput figures are wrong. srsRAN forces it off for Format1A and non-user
+# RNTIs, so SIB, RAR and paging are unaffected either way.
+#
+# If you enable DL-SCH decoding and C-RNTI transport blocks never pass CRC while broadcast
+# ones do, try setting this to false.
+enable_256qam = true
+
+# Write every decoded downlink MAC PDU to <out_dir>/<timestamp>/mac-<rf_idx>.pcapng, in the
+# MAC-LTE encapsulation Wireshark understands, with a per-packet comment giving the security
+# phase, the logical channel and how far the RNTI can be trusted.
+#
+# DLT 147 is DLT_USER0 and has no registered link type, so Wireshark shows nothing until it is
+# told to dissect it as mac-lte-framed. See docs/pcap.md.
+#
+# Records are written in decode-completion order, which is not TTI order; run `reordercap`
+# before any RLC/PDCP-level analysis.
+pcap_mac = false
+
+# Per-file cap in MB, 0 for unlimited. A busy 20 MHz cell can produce on the order of a
+# gigabyte a minute once transport blocks are being decoded.
+pcap_max_mb = 0
+
 # ----------------------------- RF devices --------------------------------
 # One [[rf_config]] table per cell, max 4. Unlike the .cfg format there is no nof_rf_dev to
 # keep in sync -- it is the number of tables below. Two devices may not share rf_freq.
@@ -54,6 +81,12 @@ rf_args = "type=b200"
 # DCI decoder threads for this cell. Max 8. Too few and subframes are dropped in live
 # capture, or replay falls behind real time.
 nof_thread = 5
+
+# Receive channels to open on this SDR. Two are needed to decode transmission modes 3 and 4
+# with two spatial layers; with one antenna those grants can never be separated and always
+# fail. Requires two coherent RX channels (B210, or an X310 with two daughterboards), and
+# does nothing on a 4-port cell, where srsRAN cannot predecode spatial multiplexing at all.
+nof_rx_ant = 1
 
 # Disable the GUI for this cell. Only meaningful in builds with ENABLE_GUI.
 disable_plot = true
