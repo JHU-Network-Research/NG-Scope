@@ -1,0 +1,30 @@
+# Measurement config: replay of recordings/tmobile_5035_poconos.bin
+# EARFCN 5035 -> band 12, DL 729 + 0.1*(5035-5010) = 731.5 MHz
+rnti = 9185
+remote_enable = false
+decode_single_ue = false
+decode_SIB = true
+decode_RAR = true
+rar_seed_tracker = false
+rach_filter_only = true
+enable_256qam = true
+pcap_mac = true
+pcap_max_mb = 0
+
+[[rf_config]]
+rf_freq = 731500000
+N_id_2 = -1
+nof_thread = 8
+rf_args = ""
+disable_plot = true
+log_dl = true
+log_ul = true
+log_phich = false
+mode = 2
+replay_fname = "/src/recordings/tmobile_5035_poconos.bin"
+debug = false
+silent = true
+decode_pdcch = true
+
+[dci_log_config]
+log_interval = -1
