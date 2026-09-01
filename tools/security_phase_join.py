@@ -81,7 +81,13 @@ def load_dcilog(path):
 
 
 def load_boundaries(run_dir):
-    """rnti -> sorted list of (rar_us, smc_us, rar_tti, smc_tti, rf_idx).
+    """rnti -> sorted list of (rar_us, smc_us, rar_tti, smc_tti, rf_idx, rar_ct, smc_ct).
+
+    rar_ct/smc_ct are the radio-domain collection times of the same two instants. The
+    matching still uses the wall-clock values, because those are what the .dciLog and pcapng
+    records carry, but every elapsed time reported below is computed from the collection
+    times: wall clock advances at decode speed, so in a replay it stretches or compresses
+    real intervals and any rate plotted against it is wrong.
 
     A list rather than a single value because an RNTI can be handed out again later in a
     long capture; ngscope re-arms on each RAR, so the same identity can carry several
@@ -97,12 +103,16 @@ def load_boundaries(run_dir):
         rf_idx = int(m.group(1)) if m else 0
         with open(path) as fh:
             for row in csv.DictReader(fh):
+                # Older runs have no collection_time columns; fall back to the wall clock so
+                # the tool still works on them, at the cost of the distortion above.
                 by_rnti[int(row["rnti"])].append((
                     int(row["rar_timestamp"]),
                     int(row["smc_timestamp"]),
                     int(row["rar_tti"]),
                     int(row["smc_tti"]),
                     rf_idx,
+                    int(row.get("rar_collection_time") or row["rar_timestamp"]),
+                    int(row.get("smc_collection_time") or row["smc_timestamp"]),
                 ))
     for sessions in by_rnti.values():
         sessions.sort()
@@ -256,6 +266,24 @@ def rewrite_pcapng(src, dst, boundaries, stats):
             out.write(body)
 
 
+def _ms_since(rec, ts_us, session, ct_idx, us_idx):
+    """Milliseconds from a boundary to this record, in capture time when both ends have it.
+
+    Falls back to the wall clock only when the record or the boundary predates the
+    collection_time columns, so a mixed or older run still produces a number rather than a
+    blank -- but a run made with current ngscope is measured in the radio domain throughout.
+    """
+    if session is None:
+        return ""
+    ct = rec.get("collection_time")
+    if ct not in (None, ""):
+        try:
+            return round((int(ct) - session[ct_idx]) / 1000.0, 3)
+        except (TypeError, ValueError):
+            pass
+    return round((ts_us - session[us_idx]) / 1000.0, 3)
+
+
 def write_dcilog(path, records):
     """Reproduce dci_log.c's layout byte-for-byte: "[\n", one record per "{...}" with a
     field per line, records separated by "},{", closed with "}]".
@@ -396,12 +424,17 @@ def main():
                     "tti": tti,
                     "rnti": rnti,
                     "timestamp_us": ts,
+                    "collection_time": rec.get("collection_time", ""),
                     "security_phase": phase,
                     "security_phase_in_stream": streamed,
                     "rar_tti": session[2] if session else "",
                     "smc_tti": session[3] if session else "",
-                    "ms_since_rar": round((ts - session[0]) / 1000.0, 3) if session else "",
-                    "ms_to_boundary": round((ts - session[1]) / 1000.0, 3) if session else "",
+                    "rar_collection_time": session[5] if session else "",
+                    "smc_collection_time": session[6] if session else "",
+                    # Capture time where the record carries it, so these are real elapsed
+                    # milliseconds over the air rather than decode-clock milliseconds.
+                    "ms_since_rar": _ms_since(rec, ts, session, 5, 0),
+                    "ms_to_boundary": _ms_since(rec, ts, session, 6, 1),
                     "prb": rec.get("prb", ""),
                     "harq": rec.get("harq", ""),
                     "tbs": rec.get("TB1_tbs", ""),

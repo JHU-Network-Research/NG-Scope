@@ -31,7 +31,8 @@ bool ngscope_sec_is_unicast(uint16_t rnti);
 
 /* A RAR handed this RNTI out: the anchor. Re-arms the RNTI, so an identity reused later in
  * a long capture is tracked as the new session rather than the old one. */
-void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us);
+void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
+                          uint64_t collection_time);
 
 /* A successfully decoded, still-unciphered RRC message. Proves everything up to this point
  * preceded security activation, even if the SecurityModeCommand itself is never seen. */
@@ -39,7 +40,7 @@ void ngscope_sec_note_unciphered_rrc(int rf_idx, uint16_t rnti, uint32_t tti, ui
 
 /* The SecurityModeCommand: the boundary itself. */
 void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
-                          const char* out_path);
+                          uint64_t collection_time, const char* out_path);
 
 ngscope_sec_phase_t ngscope_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us);
 

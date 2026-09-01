@@ -358,7 +358,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			// this re-arms on every sighting, because an RNTI handed out again later is a
 			// different UE with a different boundary.
 			if (dci_decoder->prog_args.mark_security_phase) {
-				ngscope_sec_note_rar(rf_idx, rars[i].temp_crnti, tti, dci_per_sub->timestamp);
+				ngscope_sec_note_rar(rf_idx, rars[i].temp_crnti, tti, dci_per_sub->timestamp,
+									 dci_per_sub->collection_time);
 			}
 		}
 
@@ -604,6 +605,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			ngscope_sec_scan_subframe(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
 									rf_idx, tti, dci_per_sub->timestamp,
+									dci_per_sub->collection_time,
 									dci_decoder->prog_args.out_path, sec_scan_cap);
 		}
 

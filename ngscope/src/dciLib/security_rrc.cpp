@@ -163,6 +163,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               int                 rf_idx,
                               uint32_t            tti,
                               uint64_t            ts_us,
+                              uint64_t            collection_time,
                               const char*         out_path,
                               int                 scan_cap)
 {
@@ -265,6 +266,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
           cap.rf_idx    = rf_idx;
           cap.tti       = tti;
           cap.ts_us     = ts_us;
+          cap.collection_time = collection_time;
           cap.rnti      = rnti;
           cap.src       = NGSCOPE_MAC_SRC_TARGETED;
           cap.rv        = pdsch_cfg->grant.tb[0].rv;
@@ -291,7 +293,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         /* Decoding it in the clear is itself the proof that security was not yet up. */
         ngscope_sec_note_unciphered_rrc(rf_idx, rnti, tti, ts_us);
         if (is_smc) {
-          ngscope_sec_note_smc(rf_idx, rnti, tti, ts_us, out_path);
+          ngscope_sec_note_smc(rf_idx, rnti, tti, ts_us, collection_time, out_path);
         }
       }
     }

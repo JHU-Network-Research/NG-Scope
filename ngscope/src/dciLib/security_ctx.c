@@ -21,10 +21,15 @@ typedef struct {
     bool     anchored;      /* a RAR was seen for this RNTI */
     uint64_t rar_us;
     uint32_t rar_tti;
+    /* Radio-domain time of the same instant. ts_us is host wall-clock taken when a decoder
+     * thread picked the subframe up, so in replay it advances at decode speed, not capture
+     * speed -- bucketing a run by it silently distorts any rate over time. */
+    uint64_t rar_ct;
 
     bool     have_smc;      /* SecurityModeCommand seen: the boundary */
     uint64_t smc_us;
     uint32_t smc_tti;
+    uint64_t smc_ct;
 
     /* Latest successfully decoded unciphered RRC message. Anything up to here is provably
      * pre-security even when the SMC itself is never decoded. */
@@ -107,7 +112,8 @@ bool ngscope_sec_is_unicast(uint16_t rnti)
     return !SRSRAN_RNTI_ISRAR(rnti);
 }
 
-void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us)
+void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
+                          uint64_t collection_time)
 {
     if (!rf_idx_valid(rf_idx) || !ngscope_sec_is_unicast(rnti)) {
         return;
@@ -122,6 +128,7 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
     q->rnti[rnti].anchored = true;
     q->rnti[rnti].rar_us   = ts_us;
     q->rnti[rnti].rar_tti  = tti;
+    q->rnti[rnti].rar_ct   = collection_time;
     q->nof_rar++;
 
     bool listed = false;
@@ -181,8 +188,10 @@ static void sec_log_write(const char* out_path,
                           uint16_t    rnti,
                           uint32_t    rar_tti,
                           uint64_t    rar_us,
+                          uint64_t    rar_ct,
                           uint32_t    smc_tti,
-                          uint64_t    smc_us)
+                          uint64_t    smc_us,
+                          uint64_t    smc_ct)
 {
     if (out_path == NULL) {
         return;
@@ -197,21 +206,27 @@ static void sec_log_write(const char* out_path,
         return;
     }
     if (fresh) {
-        fprintf(f, "rnti,rar_tti,rar_timestamp,smc_tti,smc_timestamp,rar_to_smc_ms\n");
+        fprintf(f, "rnti,rar_tti,rar_timestamp,rar_collection_time,smc_tti,smc_timestamp,smc_collection_time,rar_to_smc_ms\n");
     }
+    /* rar_to_smc_ms comes from the collection times, not the wall clock: they are the radio
+     * domain, so the figure is the real over-the-air delay whether the run was live or a
+     * replay decoding at some other speed. */
     fprintf(f,
-            "%u,%u,%" PRIu64 ",%u,%" PRIu64 ",%.1f\n",
+            "%u,%u,%" PRIu64 ",%" PRIu64 ",%u,%" PRIu64 ",%" PRIu64 ",%.1f\n",
             rnti,
             rar_tti,
             rar_us,
+            rar_ct,
             smc_tti,
             smc_us,
-            (double)(smc_us - rar_us) / 1000.0);
+            smc_ct,
+            (smc_ct > rar_ct) ? (double)(smc_ct - rar_ct) / 1000.0
+                              : (double)(smc_us - rar_us) / 1000.0);
     fclose(f);
 }
 
 void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
-                          const char* out_path)
+                          uint64_t collection_time, const char* out_path)
 {
     if (!rf_idx_valid(rf_idx) || !ngscope_sec_is_unicast(rnti)) {
         return;
@@ -221,12 +236,14 @@ void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
     bool     log_it      = false;
     uint32_t log_rar_tti = 0;
     uint64_t log_rar_us  = 0;
+    uint64_t log_rar_ct  = 0;
 
     pthread_mutex_lock(&sec_mutex[rf_idx]);
     if (q->rnti[rnti].anchored && !q->rnti[rnti].have_smc) {
         q->rnti[rnti].have_smc = true;
         q->rnti[rnti].smc_us   = ts_us;
         q->rnti[rnti].smc_tti  = tti;
+        q->rnti[rnti].smc_ct   = collection_time;
         q->nof_smc++;
         for (int i = 0; i < q->nof_active; i++) {
             if (q->active[i] == rnti) {
@@ -241,13 +258,15 @@ void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
                (double)(ts_us - q->rnti[rnti].rar_us) / 1000.0);
         log_rar_tti = q->rnti[rnti].rar_tti;
         log_rar_us  = q->rnti[rnti].rar_us;
+        log_rar_ct  = q->rnti[rnti].rar_ct;
         log_it      = true;
     }
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 
     /* Outside the lock: this opens a file. */
     if (log_it) {
-        sec_log_write(out_path, rf_idx, rnti, log_rar_tti, log_rar_us, tti, ts_us);
+        sec_log_write(out_path, rf_idx, rnti, log_rar_tti, log_rar_us, log_rar_ct, tti, ts_us,
+                      collection_time);
     }
 }
 

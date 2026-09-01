@@ -195,6 +195,14 @@ timestamp,collection_time,tti,rf_idx,ra_rnti,rapid,temp_crnti,ta_cmd,grant_rba,g
 1786685439584262,3893822,1755,0,8,56,15098,25,293,1,0x24a2c,56,1
 ```
 
+`security_log-<rf_idx>.csv` carries both clocks for each boundary: `rar_timestamp` /
+`smc_timestamp` are host wall-clock at decode, while `rar_collection_time` /
+`smc_collection_time` are the radio domain. `rar_to_smc_ms` is derived from the latter, so
+it is the real over-the-air delay whether the run was live or a replay decoding at some
+other speed. Prefer the collection times for anything plotted against time: on a replay the
+wall clock advances at decode speed, which inflated the same delay by 26 ms at the median
+and up to a second at the tail on the capture measured here.
+
 `temp_crnti` is the RNTI the network just assigned to a UE, and `tti` joins against the `tti`
 column in `dci-decode-debug-<n>.csv` and the `"tti"` field in the `.dciLog` files. This is
 how you tell when an RNTI came into existence, rather than inferring it from traffic.

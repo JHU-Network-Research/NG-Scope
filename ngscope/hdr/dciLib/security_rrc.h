@@ -39,6 +39,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               int                 rf_idx,
                               uint32_t            tti,
                               uint64_t            ts_us,
+                              uint64_t            collection_time,
                               const char*         out_path,
                               int                 scan_cap);
 
