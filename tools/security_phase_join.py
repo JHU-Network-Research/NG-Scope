@@ -24,7 +24,12 @@ Output
     -f pcapng  pcap_joined/: mac-<rf_idx>.pcapng rewritten with only the sec= field of each
                packet comment replaced. ngscope pads that field to a fixed width, so this
                is a byte-for-byte in-place patch: no block length, option length or padding
-               changes, and everything else in the file is copied verbatim
+               changes, and everything else in the file is copied verbatim.
+
+               The result is then passed through reordercap, because ngscope writes records
+               in decode-completion order and Wireshark reassembles RLC order-dependently --
+               an unsorted file loses RRC silently. --no-reorder skips that and leaves the
+               byte-identical patch, which is how the patch's inertness is regression-tested
     -f both     csv + dcilog
     -f all      csv + dcilog + pcapng
 
@@ -49,6 +54,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from collections import Counter, defaultdict
 
@@ -307,6 +313,45 @@ def write_dcilog(path, records):
         fh.write("]")
 
 
+def reorder_pcapng(path):
+    """Sort a rewritten pcapng into timestamp order, in place, via reordercap.
+
+    ngscope decodes subframes across several threads and writes each record as it
+    completes, so the file is in decode-completion order, not TTI order. Wireshark's
+    rlc-lte and pdcp-lte dissectors reassemble statefully and order-dependently, so an
+    unsorted file yields spurious reassembly failures and silently missing RRC -- which is
+    the same class of quiet undercount this whole tool exists to avoid.
+
+    Not reimplemented here on purpose: reordercap ships with Wireshark and already handles
+    the pcapng block bookkeeping correctly. If it is missing, say so and leave the file
+    alone rather than half-doing it.
+
+    Returns a short status string for the caller to print.
+    """
+    exe = shutil.which("reordercap")
+    if exe is None:
+        return ("reordercap not found (install wireshark-common); left in decode order -- "
+                "sort it before any RLC/PDCP analysis")
+
+    tmp = path + ".reorder.tmp"
+    try:
+        proc = subprocess.run([exe, path, tmp], capture_output=True, text=True)
+    except OSError as exc:
+        return f"reordercap could not run ({exc}); left in decode order"
+
+    if proc.returncode != 0 or not os.path.exists(tmp):
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return f"reordercap failed ({detail[-1] if detail else proc.returncode}); left in decode order"
+
+    # reordercap reports "N frames, M out of order" on stdout; worth surfacing, because a
+    # large M is exactly why the unsorted file would have dissected badly.
+    note = (proc.stdout or "").strip().splitlines()
+    os.replace(tmp, path)
+    return "reordered" + (f" ({note[-1]})" if note else "")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -326,6 +371,13 @@ def main():
                          "pcapng rewrites the sec= field of every packet comment in "
                          "mac-<rf_idx>.pcapng. both = csv+dcilog (unchanged meaning); "
                          "all = csv+dcilog+pcapng.")
+    ap.add_argument("--no-reorder", action="store_true",
+                    help="leave the rewritten pcapng in decode-completion order. The rewrite "
+                         "is a byte-for-byte patch of the sec= field, so with this flag the "
+                         "output is the same size as the input and dissects identically -- "
+                         "which is how that inertness is regression-tested. Without it the "
+                         "file is passed through reordercap, because Wireshark's RLC "
+                         "reassembly is order-dependent and unsorted records lose RRC.")
     ap.add_argument("--summary-only", action="store_true", help="print the summary, write nothing")
     args = ap.parse_args()
 
@@ -505,7 +557,9 @@ def main():
                 except (ValueError, struct.error) as exc:
                     print(f"error: {exc}", file=sys.stderr)
                     continue
-                print(f"wrote {os.path.basename(dst)} to {out_dir}")
+                status = ("left in decode-completion order (--no-reorder)"
+                          if args.no_reorder else reorder_pcapng(dst))
+                print(f"wrote {os.path.basename(dst)} to {out_dir} -- {status}")
 
             placed = pstats["pre"] + pstats["post"]
             print(f"\npcapng packets : {pstats['packets']:,}")

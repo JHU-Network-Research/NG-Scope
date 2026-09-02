@@ -51,20 +51,45 @@ packet list.
 
 ## Reorder before analysing
 
-**Run this first:**
+`tools/security_phase_join.py` now does this for you: the file it writes to `pcap_joined/`
+is passed through `reordercap` unless you pass `--no-reorder`. For a raw `mac-<rf>.pcapng`
+that has not been through the join, sort it yourself first:
 
 ```bash
 reordercap mac-0.pcapng mac-0-sorted.pcapng
 ```
 
 NG-Scope decodes subframes across several threads, so records are written in
-decode-completion order, not TTI order. pcapng allows that and Wireshark will open the file
-either way — but the rlc-lte and pdcp-lte dissectors do stateful, order-dependent reassembly,
-so out-of-order PDUs produce spurious reassembly failures and missed RRC messages.
+decode-completion order, not TTI order. Typically 5–10% of records are out of order. pcapng
+allows that and Wireshark will open the file either way — but the rlc-lte and pdcp-lte
+dissectors do stateful, order-dependent reassembly, so out-of-order PDUs can produce spurious
+reassembly failures and missed RRC messages.
+
+**How much this costs in practice is unmeasured.** On the five captures here, sorting changed
+nothing: an order-independent diff of all 2,891 dissected frames on a file with 267 records
+out of order came back identical. The hazard is real in principle and the sort is cheap, so it
+is on by default — but do not cite reordering as the explanation for a discrepancy without
+checking, because on this data it explains none of them. The thing that *does* silently
+undercount is reading `_ws.col.Info` instead of a field filter; see below.
 
 Sorting is not done in-process on purpose. The reordering window is unbounded: under load the
 scheduler parks subframes in a temporary buffer and replays them arbitrarily later, so no
-fixed-size sort window would be correct.
+fixed-size sort window would be correct. `reordercap` also already handles the pcapng block
+bookkeeping, which is not worth reimplementing.
+
+## Counting messages: use a field filter, not the Info column
+
+`_ws.col.Info` holds one summary per *frame*, last writer wins, so a MAC PDU carrying several
+SDUs reports only the last of them. Counting `SecurityModeCommand` that way found 7 on a
+capture that holds 12 — a real 40% undercount that looked like a decoder bug. Filter on the
+field instead, and use the outer element, not `..._r8_element`, which is absent when the
+critical-extensions body does not dissect:
+
+```bash
+tshark -r sorted.pcapng -o 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""' \
+  -Y 'lte-rrc.securityModeCommand_element' -T fields -e frame.comment \
+  | grep -o 'rnti=0x[0-9a-f]*' | sort -u | wc -l
+```
 
 ---
 

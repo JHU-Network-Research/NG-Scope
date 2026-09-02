@@ -434,7 +434,9 @@ Regression gates that caught real mistakes here:
 - **Security figures must not move** when only the pcap path changes. The tee is supposed to be
   inert; if the numbers shift, it is not.
 - **The pcapng rewrite must preserve file size exactly** and produce an identical `tshark`
-  dissection by md5. The fixed-width `sec=` field is what makes that true.
+  dissection by md5. The fixed-width `sec=` field is what makes that true. Use `--no-reorder`:
+  the join now sorts its output through `reordercap` by default, which changes the bytes for
+  a good reason and would otherwise look like a regression.
 - **`rar_to_smc_ms` must equal the TTI delta** of the same two subframes, since one TTI is one
   millisecond. This is how the two-clocks bug was confirmed.
 - **Compare per-UE, not in aggregate.** Key on `(temp C-RNTI, RAR tti)` — both come from the

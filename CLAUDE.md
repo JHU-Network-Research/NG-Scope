@@ -92,6 +92,8 @@ stashed, at the identical site. `docs/security-implementation.md` §7 has the tr
 - **Security figures must not move** when only the pcap path changes. The tee is meant to be inert.
 - **The pcapng join must preserve file size exactly** and give an identical `tshark` dissection
   by md5. The fixed-width `sec=` field is what makes that possible — don't remove the padding.
+  **Run the join with `--no-reorder` for this check**: by default it now passes the output
+  through `reordercap`, which legitimately changes the bytes.
 - **`rar_to_smc_ms` must equal the TTI delta** of the same two subframes (1 TTI = 1 ms).
 - **Compare per-UE on `(temp C-RNTI, RAR tti)`**, not on timestamps — both come from the capture
   and are stable across runs. Except the first RAR of a run, whose TTI is unstable (below).

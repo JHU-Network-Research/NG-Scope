@@ -322,5 +322,6 @@ Outputs:
 | `rar_log-<rf>.csv` | one row per RAR — the funnel's denominator |
 | `cell_type.json` | `nof_ports`, `nof_prb`, `nof_rx_ant` — what was decodable in principle |
 
-Run `reordercap` on the pcap before any RLC/PDCP-level analysis; records are written in
-decode-completion order, not TTI order.
+The join sorts `pcap_joined/` through `reordercap` by default (`--no-reorder` opts out and
+keeps the byte-identical patch, which is what the regression gate checks). A raw
+`mac-<rf>.pcapng` that has not been joined is still in decode-completion order.
