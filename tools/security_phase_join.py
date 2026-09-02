@@ -405,7 +405,15 @@ def main():
             if len(candidates) > 10:
                 msg.append(f"    ... and {len(candidates) - 10} more")
         else:
-            msg.append("Was the run made with mark_security_phase = true?")
+            # Deliberately not asserting the cause. Since ngscope creates this file up front
+            # when mark_security_phase is on, an absent one means the setting was off, the
+            # run predates that change, or this is not a run directory -- and guessing wrong
+            # sends the reader after the wrong thing. Note what it does NOT mean, because
+            # that is the reading that matters.
+            msg.append("The file is created at startup when mark_security_phase = true, so an")
+            msg.append("absent one means the run did not measure security -- it does not mean")
+            msg.append("no UE reached it. Either the setting was off, or the run predates that")
+            msg.append("behaviour, or this is not a run directory.")
         sys.exit("\n".join(msg))
 
     dci_files = sorted(glob.glob(os.path.join(run_dir, "dci_output", "*.dciLog")))
@@ -494,8 +502,19 @@ def main():
 
     total = sum(counts.values())
     print(f"run            : {run_dir}")
-    print(f"boundaries     : {sum(len(v) for v in boundaries.values())} "
+    nof_boundaries = sum(len(v) for v in boundaries.values())
+    print(f"boundaries     : {nof_boundaries} "
           f"over {len(boundaries)} RNTIs, from {len(sec_files)} security_log file(s)")
+    if nof_boundaries == 0:
+        # An empty-but-present security_log is a measurement, not a failure: the run tracked
+        # UEs and none of them reached security. For IMSI-catcher detection that is the
+        # result of interest, so it gets said out loud rather than left to be inferred from
+        # a table of zeroes. Every record below is correctly labelled "unknown" -- the
+        # boundary was never observed, which is not the same as "there was none".
+        print("                 the run measured this and found none. Every record below is "
+              "'unknown';")
+        print("                 check the RAR count and the teardown coverage lines before "
+              "reading that as a cell with no security.")
     print(f"dci records    : {total:,} from {len(dci_files)} .dciLog file(s)")
     print()
     for phase in ("pre", "post", "unknown", "n/a"):

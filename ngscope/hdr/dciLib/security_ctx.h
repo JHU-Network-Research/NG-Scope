@@ -29,6 +29,12 @@ const char* ngscope_sec_phase_str(ngscope_sec_phase_t phase);
 /* SI-RNTI, P-RNTI and RA-RNTI are not UE identities and have no security context. */
 bool ngscope_sec_is_unicast(uint16_t rnti);
 
+/* Create security_log-<rf_idx>.csv with its header, before any UE is tracked. Call once per
+ * device at startup, as with the RAR log: an empty file then means "measured, nobody reached
+ * security" -- which for IMSI-catcher detection is the result of interest -- and a missing
+ * file means the run never measured it. */
+void ngscope_sec_log_init(const char* out_path, int rf_idx);
+
 /* A RAR handed this RNTI out: the anchor. Re-arms the RNTI, so an identity reused later in
  * a long capture is tracked as the new session rather than the old one. */
 void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,

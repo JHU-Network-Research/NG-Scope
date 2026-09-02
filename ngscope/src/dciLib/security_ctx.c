@@ -194,6 +194,40 @@ void ngscope_sec_note_unciphered_rrc(int rf_idx, uint16_t rnti, uint32_t tti, ui
  * later, so a DCI that precedes it cannot be recognised at the time it is written. This
  * file closes that gap -- join it on rnti and compare timestamps to place every DCI
  * exactly, including the ones written before their boundary was known. */
+#define SEC_LOG_HEADER \
+    "rnti,rar_tti,rar_timestamp,rar_collection_time,smc_tti,smc_timestamp,smc_collection_time,rar_to_smc_ms\n"
+
+static void sec_log_path(char* dst, size_t dst_len, const char* out_path, int rf_idx)
+{
+    snprintf(dst, dst_len, "%ssecurity_log-%d.csv", out_path, rf_idx);
+}
+
+/* Create the file with its header before any UE is tracked, the way the RAR log does.
+ *
+ * It used to be created lazily by the first boundary, which made a capture where nobody
+ * reached security indistinguishable from one where the feature was off or the directory was
+ * wrong -- and for IMSI-catcher detection zero boundaries is the *positive* result, so that
+ * is the one case that must not be reported as a missing file. An empty file now means
+ * "measured, none found"; an absent one means "not measured". */
+void ngscope_sec_log_init(const char* out_path, int rf_idx)
+{
+    if (out_path == NULL || !rf_idx_valid(rf_idx)) {
+        return;
+    }
+    char path[1024];
+    sec_log_path(path, sizeof(path), out_path, rf_idx);
+
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    FILE* f = fopen(path, "w");
+    if (f != NULL) {
+        fprintf(f, SEC_LOG_HEADER);
+        fclose(f);
+    } else {
+        printf("ERROR: cannot create security log %s\n", path);
+    }
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 static void sec_log_write(const char* out_path,
                           int         rf_idx,
                           uint16_t    rnti,
@@ -208,16 +242,18 @@ static void sec_log_write(const char* out_path,
         return;
     }
     char path[1024];
-    snprintf(path, sizeof(path), "%ssecurity_log-%d.csv", out_path, rf_idx);
+    sec_log_path(path, sizeof(path), out_path, rf_idx);
 
-    /* Header on creation only, so appending across a rotation stays valid CSV. */
+    /* Header on creation only, so appending across a rotation stays valid CSV. Normally
+     * ngscope_sec_log_init() has already written it; this covers a rotation, and a run where
+     * the init was somehow skipped. */
     bool  fresh = access(path, F_OK) != 0;
     FILE* f     = fopen(path, "a");
     if (f == NULL) {
         return;
     }
     if (fresh) {
-        fprintf(f, "rnti,rar_tti,rar_timestamp,rar_collection_time,smc_tti,smc_timestamp,smc_collection_time,rar_to_smc_ms\n");
+        fprintf(f, SEC_LOG_HEADER);
     }
     /* rar_to_smc_ms comes from the collection times, not the wall clock: they are the radio
      * domain, so the figure is the real over-the-air delay whether the run was live or a

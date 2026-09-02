@@ -123,6 +123,15 @@ The pcap and the `.dciLog` files label each record `pre`, `post`, `unknown` or `
 | `unknown` | a UE whose boundary was never observed — **not** evidence of anything |
 | `n/a` | not a UE identity (SI-RNTI, P-RNTI, RA-RNTI), so no security context exists |
 
+**Zero boundaries is a result, not a missing file.** `security_log-<rf>.csv` is written with
+its header before any UE is tracked, as `rar_log-<rf>.csv` always was, so "nobody on this cell
+reached security" is an empty table rather than an absence. That distinction is the whole point
+for IMSI-catcher detection: absence of the file used to be indistinguishable from
+`mark_security_phase` being off or the wrong directory being given, and the join said so — it
+guessed at the configuration when the honest reading was a cell where no UE got that far. Read
+it alongside the RAR count and the coverage lines before concluding anything: zero boundaries
+with zero RARs means nothing was seen at all.
+
 `unknown` and `n/a` are deliberately distinct. `unknown` is the number that bounds how much of
 the capture is unaccounted for; folding broadcast traffic into it overstates that by more than
 half.
@@ -314,7 +323,7 @@ Outputs:
 
 | file | contents |
 |---|---|
-| `security_log-<rf>.csv` | one row per observed boundary, both clocks, `rar_to_smc_ms` |
+| `security_log-<rf>.csv` | one row per observed boundary, both clocks, `rar_to_smc_ms`. **Created at startup**, so a header-only file means the run measured security and found none — which is the result of interest here — while an absent file means it never measured at all |
 | `security_phase.csv` | every DCI with its joined phase and derived deltas |
 | `dci_output_joined/` | the `.dciLog` files with corrected phases |
 | `mac-<rf>.pcapng` | decoded MAC PDUs — see [pcap.md](pcap.md) |

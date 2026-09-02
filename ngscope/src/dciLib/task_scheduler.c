@@ -618,6 +618,12 @@ void* task_scheduler_thread(void* p){
         ngscope_rar_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
     }
 
+    /* Same reasoning as the RAR log: the file has to exist before the first boundary, so that
+     * "nobody reached security" is an empty file rather than a missing one. */
+    if(task_scheduler->prog_args.mark_security_phase){
+        ngscope_sec_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
+    }
+
     // Cell-config files from the SIB decoder land in the run's output directory rather than
     // the working directory. Set before any decoder thread starts.
     ngscope_sib_set_out_path(task_scheduler->prog_args.out_path);

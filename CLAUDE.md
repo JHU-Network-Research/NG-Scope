@@ -116,6 +116,12 @@ indistinguishable in the output from a UE that never reached security — which 
 the detector is trying to measure. Every such path is counted and reported at teardown. **If you
 add a path that can drop a tracked UE, add a counter with it.**
 
+**Zero boundaries must look like a measurement, not a missing file.** `security_log-<rf>.csv`
+is created with its header at startup (`ngscope_sec_log_init`), so empty means "measured, none
+found" — the positive result for catcher detection — and absent means "never measured". It used
+to be written lazily by the first boundary, which conflated the two and made the join blame the
+config.
+
 **Never guess a phase.** `unknown` means "not observed" and must stay distinct from `post`. Both
 weak-symbol defaults in `mac_pcap.c` answer `unknown`/`dlsch` deliberately.
 
