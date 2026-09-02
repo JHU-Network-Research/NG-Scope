@@ -44,6 +44,11 @@ typedef struct{
 	int 				enable_256qam;
 	int 				pcap_mac;
 	int 				pcap_max_mb;
+	/* Replay-only decode aids. Both are inert in live capture -- see security_rrc.h for why
+	 * holding partial RLC state, or spending a second PDSCH decode, is only sound where the
+	 * scheduler blocks on a busy decoder instead of discarding the subframe. */
+	int 				rlc_reassembly;
+	int 				qam_retry;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
     const char *        out_path;
@@ -87,11 +92,15 @@ typedef struct{
     X(BOOL,   "mark_security_phase", mark_security_phase, false, false)                    \
     X(BOOL,   "enable_256qam",     enable_256qam,      true,   false)                      \
     X(BOOL,   "pcap_mac",          pcap_mac,           false,  false)                      \
-    X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)
+    X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
+    X(BOOL,   "rlc_reassembly",    rlc_reassembly,     true,   false)                      \
+    X(BOOL,   "qam_retry",         qam_retry,          true,   false)
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \
-    X(INT64,  "rf_freq",           rf_freq,            0,      true)                       \
+    /* Not marked required: replay learns it from the recording, and
+     * ngscope_config_finalize() enforces it for the modes that actually tune. */          \
+    X(INT64,  "rf_freq",           rf_freq,            0,      false)                      \
     X(INT,    "N_id_2",            N_id_2,             -1,     false)                      \
     X(INT,    "nof_thread",        nof_thread,         4,      false)                      \
     X(INT,    "nof_rx_ant",        nof_rx_ant,         1,      false)                      \

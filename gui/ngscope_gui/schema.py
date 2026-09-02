@@ -14,6 +14,11 @@ load_config.h -- no widget code to touch.
 `nof_rf_dev` is deliberately absent: in TOML the device count is the length of the
 [[rf_config]] array (load_config_toml.c:174-183), and emitting the key would be ignored at
 best and misleading at worst.
+
+A field may carry `replay_only`: the C side ANDs that setting with `mode == REPLAY`
+(task_scheduler.c), so it does nothing for a live run. The frontend disables such fields
+unless some cell is replaying, which makes the constraint visible instead of leaving the
+user to wonder why the setting had no effect.
 """
 
 # Compile-time limits from ngscope/hdr/dciLib/ngscope_def.h
@@ -62,7 +67,9 @@ TOP_LEVEL = [
     _f(
         "decode_SIB", "bool", False, "Decode SIB",
         "Decode SIB1/SIB2 and write cell identity and reference signal power to "
-        "cellcfg.json.",
+        "cellcfg.json. Known hazard: this path can segfault on a weak cell, seemingly on a "
+        "false-positive SI-RNTI grant. If a run dies inside srsran_ue_dl_find_and_decode_sib1, "
+        "turn this off -- nothing else depends on it.",
     ),
     _f(
         "decode_RAR", "bool", False, "Decode RAR",
@@ -81,7 +88,11 @@ TOP_LEVEL = [
         "Label each unicast DCI pre, post or unknown relative to the UE establishing an AS "
         "security context. The boundary is observed, not inferred: NG-Scope decodes the "
         "UE's still-unciphered RRC looking for securityModeCommand, and a DCI it cannot "
-        "place stays unknown.",
+        "place stays unknown. Also turns on the coverage reporting at teardown -- how many "
+        "UEs were tracked, why each left the tracked set, and what became of every DL-DCCH "
+        "SDU -- which is what makes the detection rate readable as a property of the cell "
+        "rather than of the receiver. In Replay mode it also unlocks the two decode aids below; "
+        "neither is safe live, where the scheduler discards subframes.",
     ),
     _f(
         "rach_filter_only", "bool", False, "RACH filter only",
@@ -101,11 +112,38 @@ TOP_LEVEL = [
         min=0,
     ),
     _f(
+        "rlc_reassembly", "bool", True, "Rejoin split RRC",
+        "Rejoin an RRC message the eNB split across several grants, so a SecurityModeCommand "
+        "that did not fit one transport block is still read. Replay only: it holds a partial "
+        "SDU until the rest arrives, which is sound only where no subframe goes missing. Live "
+        "capture discards subframes when every decoder is busy, and a discarded middle segment "
+        "would leave a partial that never completes -- indistinguishable from a UE that never "
+        "reached security. How much it matters is very cell-dependent: 8 of 41 DL-DCCH SDUs "
+        "needed rejoining on one AT&T capture, 2 of 325 on another.",
+        replay_only=True,
+    ),
+    _f(
+        "qam_retry", "bool", True, "Test the MCS→TBS table",
+        "When a transport block fails its CRC, rebuild the grant on the other MCS->TBS table "
+        "and decode again, keeping whichever passes. The CRC is ground truth, so this measures "
+        "the table instead of trusting the 256QAM setting -- and it does so per grant, which is "
+        "the only way to be right, since altCQI-Table-r12 is per-UE state. Replay only: it "
+        "costs a second PDSCH decode per failure, affordable exactly where the scheduler blocks "
+        "instead of dropping subframes. On one capture it recovered 37 SecurityModeCommands "
+        "(33.8% to 39.2%) for 1 second in 65.",
+        replay_only=True,
+    ),
+    _f(
         "enable_256qam", "bool", True, "256QAM table",
         "Use the 256QAM MCS->TBS table for C-RNTI Format1/2 grants. Only correct when the "
-        "cell configures altCQI-Table-r12, which a downlink sniffer cannot observe, so this "
-        "is a guess. It sets the tbs values in the .dciLog files, so getting it wrong gives "
-        "wrong throughput figures. SIB, RAR and paging are unaffected either way.",
+        "cell configures altCQI-Table-r12, which is per-UE RRC state a downlink sniffer "
+        "cannot observe -- so this is a guess, and on a cell with a mix of UEs no single "
+        "value is right for all of them. It sets the transport block size, so a wrong value "
+        "gives wrong throughput figures in the .dciLog files AND a transport block CRC that "
+        "can never pass, which costs real RRC decodes. SIB, RAR and paging are unaffected "
+        "either way. Each run prints a verdict at teardown from an impossible-code-rate "
+        "test, and with Test the MCS→TBS table on, a replay retries a failed transport block on "
+        "the other table -- which makes this setting matter much less there.",
     ),
 ]
 

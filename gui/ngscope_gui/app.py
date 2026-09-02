@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,7 @@ import webview
 
 from . import config_io, earfcn, schema, state as state_mod
 from .plotfeed import PlotFeed
-from .runner import Runner, describe_exit, find_binary
+from .runner import REPO_ROOT, Runner, describe_exit, find_binary
 from .sweep import Sweep
 
 UI_DIR = Path(__file__).parent / "ui"
@@ -70,6 +71,8 @@ class Api:
         self.state = state_mod.load()
         self._runner = Runner(self._push_lines, self._push_exit)
         self.run_dir = None
+        # One console note per sweep, not per channel; see _push_exit.
+        self._join_sweep_noted = False
         # Receives the two series srsGUI would have drawn; see plotfeed.py.
         self._plots = PlotFeed(lambda frame: self._js("onPlotFrame", frame))
         self._sweep = Sweep(
@@ -113,9 +116,92 @@ class Api:
             # Mid-sweep an exit is the end of one channel, not the end of the run: report
             # it in the console but let the sweep decide what happens next.
             self._push_lines([f"[gui] channel finished ({message})"])
+            # Deliberately not joining here. The sweep launches the next channel straight
+            # away, and the join is CPU-hungry enough to make that channel drop subframes --
+            # a silent loss, which is the one cost this tooling must not introduce. Say so
+            # once rather than leaving the option looking broken.
+            if self.state.get("join_after_run") and not self._join_sweep_noted:
+                self._join_sweep_noted = True
+                self._push_lines(
+                    ["[gui] security phase join skipped for the sweep: running it between "
+                     "channels would compete for CPU with the next channel's capture. Run "
+                     "tools/security_phase_join.py over each earfcn-*/<timestamp>/ afterwards."]
+                )
             self._sweep.on_exit(code)
             return
         self._js("onExit", {"code": code, "message": message, "kind": kind})
+        self._start_join()
+
+    # ------------------------------------------------------------- post-run join
+
+    def _start_join(self):
+        """Run tools/security_phase_join.py over the run that just finished, if asked.
+
+        Worth automating rather than leaving to the user: ngscope's in-stream
+        security_phase can only ever mark a fraction of the pre-security DCIs, because the
+        boundary arrives after the DCIs it bounds -- 52 of 1,089 on the band 12 capture. So
+        a forgotten join does not fail loudly, it just quietly under-reports, which is the
+        failure mode this whole feature set exists to avoid.
+
+        Off by default, and skipped with a reason in the console rather than silently
+        whenever it cannot run.
+        """
+        if not self.state.get("join_after_run"):
+            return
+
+        top = (self.state.get("config") or {}).get("top") or {}
+        if not top.get("mark_security_phase"):
+            self._push_lines(
+                ["[gui] security phase join skipped: mark_security_phase was off, so there "
+                 "is no security_log to join"]
+            )
+            return
+
+        run_dir = self.run_dir
+        if not run_dir:
+            self._push_lines(
+                ["[gui] security phase join skipped: no run directory was reported (the run "
+                 "may have died before it opened its logs)"]
+            )
+            return
+
+        script = REPO_ROOT / "tools" / "security_phase_join.py"
+        if not script.is_file():
+            self._push_lines([f"[gui] security phase join skipped: {script} is missing"])
+            return
+
+        threading.Thread(
+            target=self._join_worker, args=(str(script), run_dir), daemon=True
+        ).start()
+
+    def _join_worker(self, script, run_dir):
+        """Stream the join into the same console as the run. Its own thread so the exit
+        notification the frontend is waiting on is not held up behind it."""
+        argv = [sys.executable, script, run_dir, "-f", "all"]
+        self._push_lines(["[gui] " + " ".join(argv)])
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                cwd=run_dir,
+            )
+        except OSError as exc:
+            self._push_lines([f"[gui] security phase join could not start: {exc}"])
+            self._js("onJoinDone", {"ok": False, "error": str(exc)})
+            return
+
+        for line in proc.stdout:
+            self._push_lines([line.rstrip("\n")])
+        code = proc.wait()
+
+        if code == 0:
+            self._push_lines(["[gui] security phase join finished"])
+        else:
+            self._push_lines([f"[gui] security phase join exited {code}"])
+        self._js("onJoinDone", {"ok": code == 0, "code": code, "run_dir": run_dir})
 
     # ------------------------------------------------------------------ startup
 
@@ -365,6 +451,8 @@ class Api:
     def sweep_start(self, config, out_dir, earfcn_text, dwell, acquire, repeat, binary_override=""):
         if self._runner.running or self._sweep.active:
             return {"ok": False, "error": "Already running."}
+
+        self._join_sweep_noted = False
 
         values, parse_errors = earfcn.parse_list(earfcn_text or "")
         if parse_errors:

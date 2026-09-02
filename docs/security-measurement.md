@@ -51,11 +51,19 @@ raw 32.2% would also fall if the receiver were merely having a bad day.
 
 Report both, and never quote either without the coverage counters below.
 
+### A second cell, for scale
+
+An 80 s AT&T capture (PCI 405, 100 PRB, 2 ports) gives **234 / 692 = 33.8%** — close to the band
+12 figure from a different network, bandwidth and antenna configuration. Its PDSCH decode rate
+is higher (61.7% against 58.9%), which is the 2-port/4-port difference rather than a better
+receiver. Two cells is not a baseline, but it is a second point: `docs/security-implementation.md`
+§9 has the full breakdown.
+
 ---
 
 ## Reading the numbers
 
-A run prints three lines at teardown. All three matter.
+A run prints four lines at teardown. All four matter.
 
 ```
 SECURITY (cell 0): 1318 RNTIs anchored by a RAR, 424 with a SecurityModeCommand (32.2%).
@@ -63,7 +71,13 @@ SECURITY (cell 0): 1318 RNTIs anchored by a RAR, 424 with a SecurityModeCommand 
 SECURITY (cell 0): tracking high-water 57 of 512 slots, no UE dropped for want of a slot
 SECURITY (cell 0): tracking exits -- 0 on SecurityModeCommand, 872 on the 10 s window;
                    948 drops averted where a decoder thread was behind the RAR
+SECURITY (cell 0): DCCH SDUs -- 467 unpacked (2 of them reassembled), 556 RLC control;
+                   unread: 0 segmented, 2 unsupported, 0 short, 26 ciphered/unparseable;
+                   1 partial SDU(s) LOST before completing
 ```
+
+Lines 1-3 are the 300 s band 12 reference capture; line 4 is from the 80 s AT&T capture, since
+the DCCH accounting postdates the reference run.
 
 - **Line 1** is the result. `PDSCH decoded` is the receiver's hit rate; `RRC unpacked` is how
   often a decoded transport block actually contained readable RRC.
@@ -74,6 +88,29 @@ SECURITY (cell 0): tracking exits -- 0 on SecurityModeCommand, 872 on the 10 s w
   size.
 - **Line 3** breaks down why UEs left the tracked set. `on the 10 s window` is the honest
   timeout. `drops averted` counts a bug class that used to discard UEs silently.
+- **Line 4 is the other validity condition.** It accounts for every DL-DCCH SDU the decoder saw.
+  `RLC control` is a STATUS PDU, which carries no SDU and is not a loss;
+  `ciphered/unparseable` is overwhelmingly post-security traffic and is expected. Everything
+  else after `unread:` is an RRC message that existed and was not read, and **any of them could
+  have been a SecurityModeCommand** — so they bound how much boundary evidence went missing.
+  `segmented` should be 0 on a replay, where reassembly is on; `unsupported` is now only
+  re-segmented PDUs and should be near zero. A `partial SDU(s) LOST` clause means reassembly
+  held pieces whose partners were never decoded — you cannot rejoin what you never received.
+
+The cheapest external check on all of this: run `reordercap` on the pcap and count distinct
+RNTIs carrying a SecurityModeCommand. It should equal the SMC count on line 1.
+
+```bash
+reordercap mac-0.pcapng sorted.pcapng
+tshark -r sorted.pcapng -o 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""' \
+  -Y 'lte-rrc.securityModeCommand_element' -T fields -e frame.comment \
+  | grep -o 'rnti=0x[0-9a-f]*' | sort -u | wc -l
+```
+
+Two traps in that one command. Reorder first, because Wireshark cannot reassemble RLC from
+records written in decode-completion order. And filter on the field, never on the Info column:
+`_ws.col.Info` carries one summary per frame and the last SDU in a MAC PDU overwrites the
+others, which is enough to hide half the SecurityModeCommands in a capture.
 
 ### Per-packet phases
 
@@ -173,7 +210,9 @@ is early by construction.
 a UE that never received an SMC produce identical output. Under live capture the scheduler
 discards subframes when every decoder is busy, leaving holes with no marker. **Replay blocks
 instead of dropping, so only replay yields a coverage figure that means anything.** Cross-check
-`task_scheduler.txt` on live runs.
+`task_scheduler.txt` on live runs. This is also why RLC reassembly is enabled for replay only:
+holding a partial SDU is sound where nothing goes missing, but a discarded middle segment leaves
+a partial that never completes, which looks exactly like a UE that never reached security.
 
 **Cell antenna configuration sets a hard ceiling.** srsRAN cannot predecode spatial
 multiplexing on a 4-port cell at any receive-antenna count — the same gap exists in LTESniffer,
@@ -186,12 +225,56 @@ cell it only improves SNR on grants already being attempted.
 **No HARQ soft combining.** Retransmissions with `rv != 0` are decoded standalone or not at
 all.
 
-**The 256QAM table is a guess.** 36.213 permits it only when the cell configures
-`altCQI-Table-r12`, which is per-UE RRC state a sniffer cannot see. It sets the `tbs` values in
-the `.dciLog` files, so a wrong guess corrupts throughput figures *and* guarantees transport
-block CRC failure. NG-Scope now checks the guess against physics — an effective code rate above
-1 is impossible — and reports a verdict at teardown. On the cell measured here the 64QAM table
-is **7.8× cleaner**, meaning `enable_256qam = true` is wrong for it.
+**The 256QAM table is a guess — but replay no longer has to guess.** 36.213 permits it only
+when the cell configures `altCQI-Table-r12`, which is **per-UE** RRC state a sniffer cannot see,
+so no single `enable_256qam` value can be right for every UE on a cell. It sets the `tbs` values
+in the `.dciLog` files, so a wrong guess corrupts throughput figures *and* guarantees transport
+block CRC failure.
+
+Two mechanisms address this, and they answer different questions:
+
+- **The TBS probe** checks the guess against physics — an effective code rate above 1 is
+  impossible — and prints a verdict at teardown. It works off DCI alone, so it runs live too,
+  but it is an inference about the cell as a whole.
+- **In replay, the decoder tests the table per grant.** When a transport block fails its CRC the
+  grant is rebuilt on the other table and decoded again, keeping whichever passes. The CRC is
+  ground truth, so this measures rather than infers, and it is per grant, which is the only way
+  to be right when the setting is per-UE. Replay-only: it costs a second PDSCH decode per
+  failure, affordable exactly where the scheduler blocks instead of dropping subframes.
+
+The teardown line reports what the traffic actually needed:
+
+```
+SECURITY (cell 0): MCS->TBS table -- 2199 transport blocks decoded, 101 of them (4.6%)
+                   only after falling back to the other table
+```
+
+Measured with `enable_256qam = true` (the default) against the same captures decoded with each
+table pinned:
+
+| capture | pinned 256QAM | pinned 64QAM | 256QAM + retry | blocks retried |
+|---|---|---|---|---|
+| `att_trolley` | 234 / 692 = 33.8% | 271 / 692 = 39.2% | **271 / 692 = 39.2%** | 4.6% |
+| `mt_airy02/5110` | 12 / 26 = 46.2% | 13 / 26 = 50.0% | **13 / 26 = 50.0%** | 45.2% |
+| `verizon_66636` | 52 / 96 = 54.2% | 52 / 96 = 54.2% | **52 / 96 = 54.2%** | 0.0% |
+
+The retry matches the better pinned setting on every capture without being told which it is, and
+`verizon_66636` is the control: the probe called it inconclusive there, and the retry confirms
+that by rescuing nothing at all. Note how little the retried *fraction* predicts the effect —
+4.6% of blocks on the trolley capture is worth 37 extra SecurityModeCommands, because the
+affected grants are where the boundary evidence lives.
+
+**Not every DL-DCCH SDU can be read, and the ones that cannot are counted.** An SDU split
+across grants is rejoined on replay only; behind a length-indicator list it is not read at all;
+re-segmented PDUs are not handled. Line 4 of the teardown report is the size of that blind spot.
+What remains unread is `unsupported` (re-segmented PDUs, whose segment-offset header is not
+parsed) and fragments whose other pieces were never decoded. Both are counted.
+
+How much this matters is entirely cell-dependent, so read the line rather than carrying a figure
+over from another capture. Segmentation and concatenation were rare on one AT&T capture — 9 of
+428 AM data PDUs were segments — and constant on another, 48 of 100. Reading the
+length-indicator chain changed nothing at all on the first cell and doubled the measured rate on
+the second, from 23.1% to 46.2%.
 
 **Null ciphering (EEA0).** Post-security traffic stays readable, so a `sec=post` packet that
 still parses is not a contradiction.
@@ -218,6 +301,14 @@ ngscope -c config.toml -o out/
 cd out/<timestamp>/
 tools/security_phase_join.py . -f all
 ```
+
+The join is not optional bookkeeping — it is the authoritative labelling, because the
+in-stream `security_phase` can only mark a fraction of the pre-security DCIs. Forgetting it
+does not fail loudly, it just under-reports. In the GUI, **Security context → Join after the
+run** does it automatically when ngscope exits, streaming the output into the same console.
+It is skipped, with a reason in the console, if `mark_security_phase` was off or no run
+directory was seen, and it does not run between sweep channels, where it would compete for
+CPU with the next channel's capture.
 
 Outputs:
 

@@ -14,19 +14,33 @@ Run outputs are gitignored — they run to hundreds of megabytes each.
 | `run.sh <config> <label>` | one replay, then extracts DCI counts, distinct RNTIs, the `rach_ok` split, the DCI format distribution and every teardown report into `results/<label>.metrics` |
 | `analyse_pcap.sh <file.pcapng>` | cross-tabulates RRC/NAS message type against joined security phase |
 
-Both are meant to be run **inside the build container**, which is where the paths below
-resolve:
+`run.sh` is written for the **build container**, which is where its paths resolve — it
+hard-codes `/src/measurements/results` and `/src/build-docker/ngscope/src/ngscope`:
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src amarder89/ng-scope:gui \
   bash -lc 'measurements/run.sh /src/measurements/sec_60s.toml mylabel'
 ```
 
+On a host that can build natively there is no container and those paths do not exist. Until the
+script is parameterised, either edit the two paths or run the binary directly:
+
+```bash
+build/ngscope/src/ngscope -c measurements/sec_60s.toml -o out/
+```
+
+`analyse_pcap.sh` takes a file argument and has no container assumptions, so it runs either way
+— it needs `tshark` and `capinfos`, which are on the host rather than in the image.
+
 ## Configs
 
 These are templates, not portable configs: `replay_fname` is an absolute `/src/...` path as
 seen from inside the container, and `rf_freq` is set for the reference capture (EARFCN 5035,
 band 12, 731.5 MHz). Edit both for your own recording.
+
+`rf_freq` is required but **unused in replay** — `radio.c` only tunes when `mode != REPLAY`, so
+it just labels the `.dciLog` filenames. Set it to 0 for a capture whose frequency you do not
+know rather than inventing a plausible-looking number. `nof_thread` must be 1–8.
 
 | config | for |
 |---|---|

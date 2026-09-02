@@ -28,6 +28,7 @@
 #include "ngscope/hdr/dciLib/tbs_table_probe.h"
 #include "ngscope/hdr/dciLib/mac_pcap.h"
 #include "ngscope/hdr/dciLib/security_ctx.h"
+#include "ngscope/hdr/dciLib/security_rrc.h"
 
 #include "ngscope/hdr/dciLib/ngscope_rx.h"
 #include "ngscope/hdr/dciLib/load_config.h"
@@ -589,7 +590,13 @@ void* task_scheduler_thread(void* p){
     fprintf(cellcfgfile,"\"nof_prb\": \"%d\",\n", task_scheduler->cell.nof_prb);
     fprintf(cellcfgfile,"\"nof_ports\": \"%d\",\n", task_scheduler->cell.nof_ports);
     fprintf(cellcfgfile,"\"cell_id\": \"%d\",\n", task_scheduler->cell.id);
-    fprintf(cellcfgfile,"\"nof_rx_ant\": \"%d\"\n", task_scheduler->prog_args.rf_nof_rx_ant);
+    fprintf(cellcfgfile,"\"nof_rx_ant\": \"%d\",\n", task_scheduler->prog_args.rf_nof_rx_ant);
+    /* The one thing a recording cannot describe about itself from its samples: the carrier.
+     * Downconversion removed it and rx_frame_header_t has no field for it. A record run
+     * writes this file beside recorded-samples.bin, so putting rf_freq here is what lets a
+     * later replay recover it instead of asking the user to retype a number they already
+     * have on disk. See ngscope_config_finalize(). */
+    fprintf(cellcfgfile,"\"rf_freq\": \"%lld\"\n", (long long)task_scheduler->prog_args.rf_freq);
     fprintf(cellcfgfile,"}");
     fclose(cellcfgfile);
 
@@ -632,6 +639,19 @@ void* task_scheduler_thread(void* p){
     /* The scheduler thread itself drives the SIB and RAR searches, which go through the same
      * PDCCH candidate loop. Bind it too. */
     ngscope_rach_filter_bind_thread(rf_idx);
+
+    /* Two replay-only decode aids, both requested by config and both gated on this device
+     * actually replaying. Rejoining RRC split across grants means holding a partial SDU until
+     * the rest arrives, and letting the CRC choose the MCS->TBS table costs a second PDSCH
+     * decode per failure; each is sound exactly where no subframe goes missing, and live
+     * capture drops them when every decoder is busy. The AND is what makes the settings
+     * unselectable outside replay rather than merely inadvisable. Set before any decoder
+     * thread for this device. */
+    {
+        const bool replaying = (task_scheduler->prog_args.mode == REPLAY);
+        ngscope_sec_rrc_set_reassembly(rf_idx, replaying && task_scheduler->prog_args.rlc_reassembly);
+        ngscope_sec_rrc_set_qam_retry(rf_idx, replaying && task_scheduler->prog_args.qam_retry);
+    }
 
 
     for(int i = 0; i < nof_decoder; i++){
@@ -832,6 +852,9 @@ void* task_scheduler_thread(void* p){
 		ngscope_rach_filter_report(rf_idx);
 	}
 	if(prog_args->mark_security_phase){
+		/* Partial SDUs still held are RRC messages that were seen and never read; count
+		 * them before the report rather than letting them vanish. */
+		ngscope_sec_rrc_reasm_flush();
 		ngscope_sec_report(rf_idx);
 	}
 

@@ -25,6 +25,9 @@ const FIELD_GROUPS = {
   /* Its own card: it is the only setting that decodes UE payload rather than just
      filtering or logging what the DCI search already found. */
   securityPrimary: ['mark_security_phase'],
+  /* Sub-options of the security scan that the C side ANDs with mode == REPLAY, so they are
+     shown only when a cell is actually replaying. */
+  securityReplay: ['rlc_reassembly', 'qam_retry'],
   topToggles: ['decode_single_ue', 'decode_SIB', 'remote_enable'],
 };
 
@@ -428,6 +431,7 @@ function renderCells() {
   body.appendChild(segmentedField(modeField, cell.mode, (value) => {
     cell.mode = value;
     renderCells();
+    renderSecurity();   /* the replay-only sub-options turn on and off with this */
     scheduleSave();
   }, SCHEMA.modes));
 
@@ -594,6 +598,48 @@ function renderSecurity() {
     + 'milliseconds earlier. While this is on, srsRAN PHY errors are routed to srslog: '
     + 'probing UE transport blocks provokes thousands of them.';
   body.appendChild(caveat);
+
+  /* Replay-only sub-options. Disabled rather than hidden, following the RACH card: a setting
+     that vanishes looks like it was never there, whereas a disabled one with a reason tells
+     the user what to change. The C side enforces this independently -- task_scheduler.c ANDs
+     each with mode == REPLAY -- so the gate here is guidance, not the guarantee. */
+  const replaying = (S.config.cells || []).some((c) => c.mode === MODE_REPLAY);
+  const replayOpts = el('div', 'sub-options');
+  FIELD_GROUPS.securityReplay.forEach((key) => {
+    const f = fieldByKey(SCHEMA.top_level, key);
+    if (!f) return;
+    replayOpts.appendChild(toggleRow(f, top[key], (value) => {
+      top[key] = value;
+      scheduleSave();
+    }, {
+      disabled: !replaying,
+      help: replaying ? f.help
+                      : 'Replay only \u2014 set a cell to Replay mode to use this. Holding '
+                        + 'partial RLC state, or spending a second decode, is sound only '
+                        + 'where the scheduler blocks instead of dropping subframes.',
+    }));
+  });
+  body.appendChild(replayOpts);
+
+  /* A post-run action, not a decode setting, so it is GUI-side state rather than a config
+     key. It lives on this card because it is only meaningful with the security scan on, and
+     because forgetting it is the quiet way to under-report: the label ngscope stamps during
+     the run marks only a fraction of the pre-security DCIs. */
+  const joinField = {
+    key: 'join_after_run',
+    label: 'Join after the run',
+    help: 'When ngscope exits, run tools/security_phase_join.py over the run directory, '
+      + 'writing security_phase.csv, dci_output_joined/ and pcap_joined/. Progress appears '
+      + 'in the console. These joined files are the authoritative labelling: the per-DCI '
+      + 'security_phase written during the run can only mark a fraction of the pre-security '
+      + 'DCIs, because a UE\u2019s boundary arrives after the DCIs it bounds.',
+  };
+  const joinBox = el('div', 'sub-options');
+  joinBox.appendChild(toggleRow(joinField, !!S.join_after_run, (value) => {
+    S.join_after_run = value;
+    scheduleSave();
+  }));
+  body.appendChild(joinBox);
 }
 
 function renderTopLevel() {
@@ -622,7 +668,7 @@ function renderTopLevel() {
   const { rest } = orderedFields(SCHEMA.top_level, [
     ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topToggles,
     ...FIELD_GROUPS.rachPrimary, ...FIELD_GROUPS.rachDependent,
-    ...FIELD_GROUPS.securityPrimary,
+    ...FIELD_GROUPS.securityPrimary, ...FIELD_GROUPS.securityReplay,
   ]);
   appendLeftovers(body, rest, top, set, 'top');
 }
@@ -1086,6 +1132,14 @@ window.onExit = function onExit(info) {
             `ngscope ${info.message}`);
   window.appendLines([`[gui] ngscope ${info.message}`]);
   toast(`ngscope ${info.message}`, info.kind === 'ok' ? 'ok' : info.kind);
+};
+
+window.onJoinDone = function onJoinDone(info) {
+  if (info && info.ok) {
+    toast('Security phase join finished', 'ok');
+  } else {
+    toast('Security phase join failed \u2014 see the console', 'error');
+  }
 };
 
 /* ------------------------------------------------------------------ actions */

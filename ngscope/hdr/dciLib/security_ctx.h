@@ -48,6 +48,35 @@ ngscope_sec_phase_t ngscope_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us)
  * boundary. Returns how many were written to out[]. */
 int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out);
 
+/* What became of a DL-DCCH SDU handed to the RRC unpacker.
+ *
+ * Counted rather than dropped quietly. A SecurityModeCommand lost anywhere in here is
+ * indistinguishable in the output from a UE that never reached security, which is the one
+ * confusion this measurement cannot afford -- so every path that discards an SDU lands in
+ * exactly one of these buckets and is reported at teardown. */
+typedef enum {
+    NGSCOPE_DCCH_OK = 0,       /* unpacked from a single PDU */
+    NGSCOPE_DCCH_REASSEMBLED,  /* unpacked after rejoining segments */
+    NGSCOPE_DCCH_CTRL,         /* RLC control PDU (STATUS): carries no SDU, not a loss */
+    NGSCOPE_DCCH_SEGMENTED,    /* part of a split SDU, and reassembly was off */
+    NGSCOPE_DCCH_UNSUPPORTED,  /* re-segmented, or carries a length-indicator list */
+    NGSCOPE_DCCH_SHORT,        /* too short to hold RLC + PDCP + MAC-I */
+    NGSCOPE_DCCH_ASN1,         /* headers stripped, ASN.1 refused it -- normally ciphered */
+    NGSCOPE_DCCH_REASM_LOST,   /* a partial SDU dropped before its last segment arrived */
+    NGSCOPE_DCCH_NOF_RESULTS
+} ngscope_dcch_result_t;
+
+void ngscope_sec_count_dcch(int rf_idx, ngscope_dcch_result_t result);
+
+/* One transport block decoded. `retried` means it only passed CRC after falling back to the
+ * other MCS->TBS table, i.e. the configured enable_256qam is wrong for that grant. */
+void ngscope_sec_count_tb_table(int rf_idx, bool retried);
+
+/* A retry was actually attempted. Counted separately so the report can tell "tested, and the
+ * configured table fits" from "never tested" -- with qam_retry off the two are otherwise
+ * indistinguishable, and claiming the former would be a fabricated result. */
+void ngscope_sec_count_tb_retry(int rf_idx);
+
 /* Counters, for measuring how often the decode actually lands. */
 void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok, bool rrc_ok);
 void ngscope_sec_report(int rf_idx);

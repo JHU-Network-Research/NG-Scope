@@ -49,6 +49,15 @@ cannot open a window. If you hit that, delete `gui/.venv` and re-run the launche
   `<output directory>/<timestamp>/recorded-samples.bin`; that path is fixed by
   `ngscope_main.c:113`, so the GUI lets you choose the *directory* rather than pretending
   the filename is settable. Replay takes an explicit file, chosen with a native dialog.
+* **Security context** — the settings that decode a UE's own transport blocks to find
+  `SecurityModeCommand`, plus the two replay-only decode aids (`rlc_reassembly`,
+  `qam_retry`), which are disabled unless a cell is in Replay mode. **Join after the run**
+  is GUI-side rather than an ngscope key: when the run exits it runs
+  `tools/security_phase_join.py` over the run directory and streams the output into the
+  console. That join is the authoritative labelling — the per-DCI phase written during the
+  run marks only a fraction of the pre-security DCIs — so automating it removes a step whose
+  absence is silent. Not run between sweep channels, where it would take CPU from the next
+  channel's capture.
 * **EARFCN sweep** — cycle cell 1 through a list of channels. ngscope has no scanning mode,
   so each channel is a separate run with its own `<timestamp>/` folder and its own
   `ngscope-gui-sweep-<earfcn>.toml`. The list takes EARFCNs separated by commas or spaces,
@@ -106,3 +115,10 @@ ngscope flush its logs; it escalates to SIGTERM after 10s and SIGKILL after a fu
 Adding a setting means one line in each — the form, the TOML writer, and the reader are all
 driven from the schema, so no widget code has to change. A key that no group in `app.js`
 names still appears, under "More options".
+
+Two things sit outside that mirror. A schema field may carry `replay_only`, which the
+frontend uses to disable it unless a cell is replaying; the C side enforces the same rule
+independently by ANDing the setting with `mode == REPLAY`, so the UI gate is guidance rather
+than the guarantee. And purely GUI-side choices — output directory, binary override, **Join
+after the run** — live in `state.py` instead, because they are not ngscope settings and must
+never be emitted into the generated config.

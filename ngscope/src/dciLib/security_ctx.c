@@ -77,6 +77,17 @@ typedef struct {
     uint64_t   nof_exp_smc;
     uint64_t   nof_exp_window;
     uint64_t   nof_exp_backwards;
+
+    /* What became of each DL-DCCH SDU, by ngscope_dcch_result_t. Anything but OK,
+     * REASSEMBLED and CTRL is an RRC message we could not read, and any of those could have
+     * been a SecurityModeCommand. */
+    uint64_t   nof_dcch[NGSCOPE_DCCH_NOF_RESULTS];
+
+    /* Which MCS->TBS table the cell's transport blocks actually needed. nof_tb_retried is the
+     * measurement: blocks that only passed CRC on the table enable_256qam did not select. */
+    uint64_t   nof_tb_decoded;
+    uint64_t   nof_tb_retried;
+    uint64_t   nof_tb_retry_tried;
 } sec_ctx_t;
 
 static sec_ctx_t       sec_ctx[MAX_NOF_RF_DEV];
@@ -387,6 +398,39 @@ void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok, bool rrc_ok)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+void ngscope_sec_count_dcch(int rf_idx, ngscope_dcch_result_t result)
+{
+    if (!rf_idx_valid(rf_idx) || result < 0 || result >= NGSCOPE_DCCH_NOF_RESULTS) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_dcch[result]++;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_tb_table(int rf_idx, bool retried)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_tb_decoded++;
+    if (retried) {
+        sec_ctx[rf_idx].nof_tb_retried++;
+    }
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_tb_retry(int rf_idx)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_tb_retry_tried++;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 void ngscope_sec_report(int rf_idx)
 {
     if (!rf_idx_valid(rf_idx)) {
@@ -442,5 +486,47 @@ void ngscope_sec_report(int rf_idx)
            (unsigned long long)q->nof_exp_window,
            (int)(SEC_TRACK_WINDOW_US / 1000000ULL),
            (unsigned long long)q->nof_exp_backwards);
+
+    /* The RRC read rate, broken out. CTRL is an RLC STATUS PDU, which carries no SDU and is
+     * therefore not a loss; ASN1 is overwhelmingly post-security ciphertext, which is
+     * expected. The rest are messages that existed and were not read, so they bound how
+     * much of the boundary evidence went missing. */
+    const uint64_t* d = q->nof_dcch;
+    printf("SECURITY (cell %d): DCCH SDUs -- %llu unpacked (%llu of them reassembled), "
+           "%llu RLC control; unread: %llu segmented, %llu unsupported, %llu short, "
+           "%llu ciphered/unparseable",
+           rf_idx,
+           (unsigned long long)(d[NGSCOPE_DCCH_OK] + d[NGSCOPE_DCCH_REASSEMBLED]),
+           (unsigned long long)d[NGSCOPE_DCCH_REASSEMBLED],
+           (unsigned long long)d[NGSCOPE_DCCH_CTRL],
+           (unsigned long long)d[NGSCOPE_DCCH_SEGMENTED],
+           (unsigned long long)d[NGSCOPE_DCCH_UNSUPPORTED],
+           (unsigned long long)d[NGSCOPE_DCCH_SHORT],
+           (unsigned long long)d[NGSCOPE_DCCH_ASN1]);
+    if (d[NGSCOPE_DCCH_REASM_LOST] > 0) {
+        printf("; %llu partial SDU(s) LOST before completing",
+               (unsigned long long)d[NGSCOPE_DCCH_REASM_LOST]);
+    }
+    printf("\n");
+
+    /* Which MCS->TBS table the traffic actually used. Only populated when the retry is on
+     * (replay), and it is a measurement rather than the probe's inference: a transport block
+     * either passes its CRC on a table or it does not. */
+    if (q->nof_tb_decoded > 0) {
+        printf("SECURITY (cell %d): MCS->TBS table -- %llu transport blocks decoded, %llu of them "
+               "(%.1f%%) only after falling back to the other table",
+               rf_idx,
+               (unsigned long long)q->nof_tb_decoded,
+               (unsigned long long)q->nof_tb_retried,
+               100.0 * (double)q->nof_tb_retried / (double)q->nof_tb_decoded);
+        if (q->nof_tb_retried == 0 && q->nof_tb_retry_tried > 0) {
+            printf(" -- %llu failures were retried and none were rescued, so the configured "
+                   "enable_256qam fits this cell",
+                   (unsigned long long)q->nof_tb_retry_tried);
+        } else if (q->nof_tb_retry_tried == 0) {
+            printf(" -- no retry ran (qam_retry off, or live capture), so the table is untested");
+        }
+        printf("\n");
+    }
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }

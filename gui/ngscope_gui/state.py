@@ -26,6 +26,9 @@ def default_state():
         # GUI-side EARFCN sweep; ngscope has no scanning mode of its own.
         "sweep": {"enabled": False, "earfcns": "", "dwell": 30, "acquire": 20,
                   "repeat": False},
+        # Run tools/security_phase_join.py over the run directory once ngscope exits.
+        # GUI-side only: it is a post-processing step, not an ngscope setting.
+        "join_after_run": False,
         "console": {"autoscroll": True, "wrap": False},
         "window": {"width": 1440, "height": 920},
     }

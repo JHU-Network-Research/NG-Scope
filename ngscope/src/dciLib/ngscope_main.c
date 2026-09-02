@@ -102,6 +102,8 @@ int ngscope_main(ngscope_config_t* config)
 		prog_args[i].enable_256qam    = config->enable_256qam;
 		prog_args[i].pcap_mac         = config->pcap_mac;
 		prog_args[i].pcap_max_mb      = config->pcap_max_mb;
+		prog_args[i].rlc_reassembly   = config->rlc_reassembly;
+		prog_args[i].qam_retry        = config->qam_retry;
 
         prog_args[i].rf_index      = i;
         prog_args[i].rf_freq       = config->rf_config[i].rf_freq;
