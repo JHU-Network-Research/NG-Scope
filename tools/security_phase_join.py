@@ -123,6 +123,41 @@ def load_sessions(run_dir):
     return by_rnti, files
 
 
+def load_identity_events(run_dir):
+    """(rnti, ct) -> exposure label, from security_events-<rf>.csv.
+
+    Marks the individual DCI that carried an identity-revealing message, which is a
+    different question from the per-UE column in security_sessions: this says "this grant
+    is the one", so a reader can go from a rate straight to the subframe.
+
+    Only the strongest exposure is kept per (rnti, ct) -- one transport block can hold
+    several messages, and a summary field must not depend on emission order.
+    """
+    rank = {"imsi_in_clear": 4, "imsi_requested": 3, "imeisv_requested": 2,
+            "imei_requested": 1, "tmsi_requested": 0}
+    signal_to_label = {
+        "identity_imsi_clear": "imsi_in_clear",
+        "identity_imsi":       "imsi_requested",
+        "identity_imei":       "imei_requested",
+        "identity_tmsi":       "tmsi_requested",
+    }
+    by_key = {}
+    for path in sorted(glob.glob(os.path.join(run_dir, "security_events-*.csv"))):
+        with open(path) as fh:
+            for row in csv.DictReader(fh):
+                label = signal_to_label.get(row.get("signal", ""))
+                if label is None:
+                    continue
+                try:
+                    key = (int(row["rnti"]), int(row["ct"]))
+                except (KeyError, ValueError, TypeError):
+                    continue
+                cur = by_key.get(key)
+                if cur is None or rank[label] > rank[cur]:
+                    by_key[key] = label
+    return by_key
+
+
 # The seven values a record can carry. `none` and `unknown` are different claims: `none`
 # means the UE was watched, with decoded traffic, and showed no security evidence -- the
 # signal an IMSI-catcher produces -- while `unknown` means it could not be watched.
@@ -342,6 +377,8 @@ def main():
               "An RNTI reused by two cells in one run could be mis-joined.", file=sys.stderr)
 
     rows = []
+    identity_by_key = load_identity_events(run_dir)
+    identity_counts = Counter()
     counts = Counter()
     disagree = 0
     per_rnti = defaultdict(Counter)
@@ -378,6 +415,13 @@ def main():
             if phase in ("pre", "post"):
                 per_rnti[rnti][phase] += 1
 
+            # Identity exposure is per-DCI, not per-UE: the value marks the grant that
+            # actually carried the message. `none` is watched-and-clean, matching the
+            # convention everywhere else here.
+            identity = identity_by_key.get((rnti, ct), "none") if ct is not None else "unknown"
+            if identity != "none":
+                identity_counts[identity] += 1
+
             streamed = rec.get("security_phase", "")
             if want_dcilog and direction in ("dl", "ul"):
                 # The full seven-value domain goes in. ngscope now writes one constant
@@ -389,6 +433,9 @@ def main():
                 # the field lands exactly where ngscope put it rather than appended.
                 if "security_phase" in rec:
                     rec["security_phase"] = dcilog_phase
+                    # A new key, appended rather than replacing anything: the joined
+                    # .dciLog is a derived artefact, and ngscope writes no such field.
+                    rec["identity_exposure"] = identity
                 else:
                     rec = {"tti": rec.get("tti"), "rnti": rec.get("rnti"),
                            "security_phase": dcilog_phase,
@@ -408,6 +455,7 @@ def main():
                     "collection_time": rec.get("collection_time", ""),
                     "security_phase": phase,
                     "security_phase_in_stream": streamed,
+                    "identity_exposure": identity,
                     "rar_tti": session["rar_tti"] if session else "",
                     "outcome": session["outcome"] if session else "",
                     "rar_collection_time": session["rar_ct"] if session else "",
@@ -440,6 +488,13 @@ def main():
         print("                 check the RAR count and the teardown coverage lines before "
               "reading that as a cell with no security.")
     print(f"dci records    : {total:,} from {len(dci_files)} .dciLog file(s)")
+    if identity_by_key:
+        print(f"identity       : {sum(identity_counts.values()):,} DCI record(s) carried an "
+              f"identity-revealing message -- " +
+              ", ".join(f"{k}={v}" for k, v in sorted(identity_counts.items())))
+        print("                 marked per record as identity_exposure; the per-UE view is "
+              "the identity_exposure")
+        print("                 column of security_sessions.")
     print()
     # All seven, in the order they tell a story: placed relative to a boundary, then the
     # outcomes that mean no boundary was ever going to exist, then the two absences.

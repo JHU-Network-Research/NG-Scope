@@ -184,6 +184,64 @@ capture above.
 
 ---
 
+## Identity exposure: who was asked for an IMSI
+
+A separate signal from the security rate, and a more direct one. A network that cannot
+resolve a UE's temporary identity — because it was never party to assigning one — has to ask
+for the permanent identity. That request goes out **before** security is established, so it
+is in the clear and a downlink sniffer sees it.
+
+`security_scan.py` reports it in three places:
+
+| where | granularity |
+|---|---|
+| `security_events-<rf>.csv` | one row per occurrence, with `detail` carrying `id_type2=<n>` |
+| `security_sessions-<rf>.csv` | `identity_exposure` / `identity_event` / `identity_ct` per UE |
+| joined `.dciLog` + `security_phase.csv` | `identity_exposure` on the **individual DCI** that carried it |
+
+### What counts, and what deliberately does not
+
+`IdentityRequest` (EMM `0x55`) is resolved by what it *asked for*, via
+`nas-eps.emm.id_type2`, rather than being counted as one event:
+
+| `id_type2` | event | exposure |
+|---|---|---|
+| 1 | `identityRequestIMSI` | `imsi_requested` |
+| 2 / 3 | `identityRequestIMEI` / `IMEISV` | `imei_requested` |
+| 4 | `identityRequestTMSI` | `tmsi_requested` |
+
+Only type 1 is the IMSI-catcher signature. An IMEI request is a different and legitimate
+procedure, and counting it as an IMSI request would manufacture detections. `e212.imsi` is
+queried separately and independently of the EMM-type list, so IMSI digits appearing on any
+path — not just the ones enumerated here — register as `imsi_in_clear`, which outranks a
+request: a request may go unanswered, digits on the air have already leaked.
+
+**Reject causes are recorded but not counted as exposure.** `AttachReject`, `TauReject` and
+`ServiceReject` carry `nas-eps.emm.cause` into the event's `detail` — cause 9 is "UE identity
+cannot be derived by the network", which pushes a UE toward re-identifying. That is a
+provocation, not a disclosure, and treating it as one would inflate the count.
+
+### It is orthogonal to the security rate, and must stay that way
+
+`identity_exposure` is never folded into `outcome`. The two answer different questions and a
+single UE can answer them differently: on `mt_airy02/5035`, RNTI 30241 was asked for its IMSI
+at `security_phase = pre` and then went on to `outcome = established`. A cell can ask for the
+IMSI and still complete AS security; a cell can fail to complete security without ever asking.
+Collapsing them would make both unreadable.
+
+### The blind spot, stated plainly
+
+**Paging by IMSI is not observed.** Paging goes to P-RNTI, and ngscope decodes SI-RNTI,
+RA-RNTI and RAR-anchored C-RNTIs only — there is no paging decode path at all, so no PCCH PDU
+reaches the pcap. `lte-rrc.imsi` is nevertheless queried on every scan, so the day paging is
+decoded the detection works with no further change; and every scan prints
+`paging not decoded` next to the identity line so a clean result is never mistaken for
+coverage. `security_summary.json` records it as
+`identity_exposure.paging_channel_decoded: false`.
+
+Measured on the captures here: one `identityRequestIMSI` across 1,318 RACHing UEs on
+`mt_airy02/5035`, and none on `att_850_office`.
+
 ## Two clocks, and which to trust
 
 Every artefact carries both:

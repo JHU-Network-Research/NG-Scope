@@ -86,7 +86,39 @@ NAS_TYPES = {
     0x4E: ("nasServiceReject",        "nas_refused"),
     0x52: ("nasAuthenticationRequest","nas_progress"),
     0x54: ("nasAuthReject",           "nas_refused"),
+    0x55: ("nasIdentityRequest",      "identity"),
+    0x50: ("nasGutiReallocation",     "nas_progress"),
     0x5D: ("nasSecurityModeCommand",  "nas_established"),
+}
+
+# --------------------------------------------------------------- identity exposure
+#
+# The IMSI-catcher signature proper. A network that cannot resolve a UE's temporary
+# identity -- because it was never party to assigning one -- has to ask for the permanent
+# one, and that request goes out BEFORE security is established, so it is in the clear and
+# a downlink sniffer sees it.
+#
+# nas-eps.emm.id_type2 is the requested type inside an IdentityRequest (24.301 9.9.3.3).
+# Only type 1 is the IMSI; the others are recorded separately rather than folded in,
+# because an IMEI request is a different (and legitimate) procedure and calling it an IMSI
+# request would manufacture detections.
+ID_TYPE2 = {
+    1: ("identityRequestIMSI",   "identity_imsi"),
+    2: ("identityRequestIMEI",   "identity_imei"),
+    3: ("identityRequestIMEISV", "identity_imei"),
+    4: ("identityRequestTMSI",   "identity_tmsi"),
+}
+
+# Strongest exposure wins for the per-session column. Seeing the digits outranks a request
+# for them: a request may go unanswered, an IMSI on the air has already leaked.
+IDENTITY_PRIORITY = ["imsi_in_clear", "imsi_requested", "imeisv_requested",
+                     "imei_requested", "tmsi_requested"]
+
+IDENTITY_FROM_SIGNAL = {
+    "identity_imsi_clear": "imsi_in_clear",
+    "identity_imsi":       "imsi_requested",
+    "identity_imei":       "imei_requested",
+    "identity_tmsi":       "tmsi_requested",
 }
 
 # nas-eps.security_header_type: 2 and 4 are "integrity protected AND ciphered". Unlike the
@@ -101,17 +133,24 @@ TSHARK_FIELDS = [
     "mac-lte.rnti", "mac-lte.dlsch.lcid",
     "mac-lte.rar.rapid", "mac-lte.rar.temporary-crnti", "mac-lte.rar.ta",
     "nas-eps.nas_msg_emm_type", "nas-eps.security_header_type",
+    # Identity exposure. id_type2 says what an IdentityRequest asked for; e212.imsi is
+    # Wireshark's generic IMSI field and fires wherever the digits actually appear, which
+    # catches paths an EMM-type list would miss. lte-rrc.imsi is paging by permanent
+    # identity -- queried so it is covered the day the paging channel is decoded, since
+    # ngscope does not decode P-RNTI today and it would otherwise be a silent blind spot.
+    "nas-eps.emm.id_type2", "nas-eps.emm.cause", "e212.imsi", "lte-rrc.imsi",
     "rlc-lte.reassembly-info.number-of-segments",
     "rlc-lte.sequence-analysis.skipped-frames",
 ] + [f for f, _, _ in RRC_FIELDS]
 
 EVENT_HEADER = ["frame", "rf_idx", "rnti", "src", "tti", "ct", "ts_us",
                 "layer", "event", "field", "signal", "lcid",
-                "rlc_segments", "rlc_skipped"]
+                "rlc_segments", "rlc_skipped", "detail"]
 
 SESSION_HEADER = ["rnti", "rar_tti", "rar_ct", "session_end_ct", "window_end_ct",
                   "outcome", "outcome_event", "outcome_ct", "ms_rar_to_outcome",
                   "nas_outcome", "nas_outcome_event",
+                  "identity_exposure", "identity_event", "identity_ct",
                   "n_pdus", "n_srb_pdus", "n_events", "evidence"]
 
 # Resolved highest-priority-first. `no_traffic` (nothing decoded at all) is kept apart from
@@ -371,7 +410,7 @@ def build_events(rows):
         segs = _ints(r["rlc-lte.reassembly-info.number-of-segments"])
         skipped = _ints(r["rlc-lte.sequence-analysis.skipped-frames"])
 
-        def emit(layer, name, field, signal):
+        def emit(layer, name, field, signal, detail=""):
             events.append({
                 "frame": info["frame"], "rf_idx": info["rf_idx"], "rnti": info["rnti"],
                 "src": info["src"], "tti": info["tti"], "ct": info["ct"], "ts_us": "",
@@ -379,15 +418,45 @@ def build_events(rows):
                 "lcid": info["lcid"],
                 "rlc_segments": segs[0] if segs else "",
                 "rlc_skipped": skipped[0] if skipped else "",
+                "detail": detail,
             })
 
         for field, name, signal in RRC_FIELDS:
             for _ in range(len((r[field] or "").split(",")) if (r[field] or "").strip() else 0):
                 emit("rrc", name, field, signal)
 
+        id_types = _ints(r["nas-eps.emm.id_type2"])
+        causes   = _ints(r["nas-eps.emm.cause"])
         for code in _ints(r["nas-eps.nas_msg_emm_type"]):
             name, signal = NAS_TYPES.get(code, (f"nasType0x{code:02x}", "nas_other"))
-            emit("nas", name, f"nas-eps.nas_msg_emm_type=0x{code:02x}", signal)
+            detail = ""
+            if code == 0x55:
+                # An IdentityRequest is only the catcher signature when it asks for the
+                # IMSI. Resolve it rather than reporting the generic message, so an IMEI
+                # request -- a different and legitimate procedure -- is not counted as one.
+                if id_types:
+                    name, signal = ID_TYPE2.get(id_types[0],
+                                                (f"identityRequestType{id_types[0]}",
+                                                 "identity_other"))
+                    detail = f"id_type2={id_types[0]}"
+                else:
+                    signal = "identity_other"
+                    detail = "id_type2=absent"
+            elif code in (0x44, 0x4B, 0x4E) and causes:
+                # Not identity exposure itself, but the cause says whether the UE is being
+                # pushed toward re-identifying: #9 is "UE identity cannot be derived by the
+                # network". Recorded as context, deliberately NOT counted as an exposure.
+                detail = f"cause={causes[0]}"
+            emit("nas", name, f"nas-eps.nas_msg_emm_type=0x{code:02x}", signal, detail)
+
+        # The digits themselves, wherever they appear. Independent of the EMM-type list
+        # above, so a path that list does not enumerate still registers.
+        for field in ("e212.imsi", "lte-rrc.imsi"):
+            for digits in (r[field] or "").split(","):
+                digits = digits.strip()
+                if digits:
+                    emit("nas" if field.startswith("e212") else "rrc",
+                         "imsiInClear", field, "identity_imsi_clear", digits)
 
         for hdr in _ints(r["nas-eps.security_header_type"]):
             if hdr in NAS_PROTECTED_HEADERS:
@@ -492,6 +561,28 @@ def resolve_outcome(s):
         nas_outcome = "auth_requested"
 
     return outcome, ev, nas_outcome, nas_ev
+
+
+def resolve_identity(s):
+    """Strongest identity exposure seen in this session, and the event that carried it.
+
+    Independent of `outcome`, and deliberately never folded into it: a cell can ask for the
+    IMSI and still complete AS security, and a cell can fail to complete security without
+    ever asking. Collapsing the two would make each unreadable.
+
+    Returns (exposure, event) with exposure "none" when nothing was seen. As everywhere
+    else here, "none" means watched-and-found-nothing; a session with no decoded traffic is
+    already marked no_traffic by resolve_outcome().
+    """
+    by_kind = {}
+    for e in s["events"]:
+        kind = IDENTITY_FROM_SIGNAL.get(e["signal"])
+        if kind is not None:
+            by_kind.setdefault(kind, e)
+    for cand in IDENTITY_PRIORITY:
+        if cand in by_kind:
+            return cand, by_kind[cand]
+    return "none", None
 
 
 # --------------------------------------------------------------------------- sec= patch
@@ -680,8 +771,11 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
     ev_counts = Counter(e["event"] for e in events)
     out_counts = Counter()
     session_rows = []
+    id_counts = Counter()
     for s in sessions:
         outcome, ev, nas_outcome, nas_ev = resolve_outcome(s)
+        identity, id_ev = resolve_identity(s)
+        id_counts[identity] += 1
         out_counts[outcome] += 1
         ms = ""
         if ev is not None and ev["ct"] is not None:
@@ -692,6 +786,8 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
             s["window_end_ct"], outcome,
             ev["event"] if ev else "", ev["ct"] if ev else "", ms,
             nas_outcome, nas_ev["event"] if nas_ev else "",
+            identity, id_ev["event"] if id_ev else "",
+            id_ev["ct"] if id_ev and id_ev["ct"] is not None else "",
             s["n_pdus"], s["n_srb_pdus"], len(s["events"]),
             ";".join(e["event"] for e in s["events"]),
         ])
@@ -770,6 +866,15 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
             "with_traffic_pct": round(100.0 * established / with_traffic, 1) if with_traffic else 0.0,
         },
         "events": dict(ev_counts),
+        # Identity exposure is reported beside the security rate, never inside it. An IMSI
+        # request is evidence about the network's knowledge of the UE, not about whether
+        # that UE reached security, and the two questions have different answers.
+        "identity_exposure": {
+            "sessions": {k: v for k, v in id_counts.items() if k != "none"},
+            "sessions_clean": id_counts.get("none", 0),
+            "imsi_affected": id_counts.get("imsi_requested", 0) + id_counts.get("imsi_in_clear", 0),
+            "paging_channel_decoded": False,  # ngscope does not decode P-RNTI; see docs
+        },
         "coverage": {
             "srb_pdus": sum(1 for f in frames
                             if any(t.strip() in ("0x01", "0x02") for t in f["lcid"].split(","))),
@@ -879,6 +984,21 @@ def main():
               f"{r['raw_pct']}% of all RACHing UEs")
         print(f"                      {r['established']}/{r['with_traffic_denominator']} = "
               f"{r['with_traffic_pct']}% of those we decoded any traffic for")
+        ident = cell["identity_exposure"]
+        if ident["sessions"]:
+            print(f"  IDENTITY EXPOSURE : " +
+                  ", ".join(f"{k}={v}" for k, v in sorted(ident["sessions"].items())))
+            if ident["imsi_affected"]:
+                print(f"                      {ident['imsi_affected']} UE(s) had the "
+                      f"PERMANENT identity (IMSI) requested or sent in clear.")
+        else:
+            print("  identity exposure : none seen in this capture's downlink")
+        if not ident["paging_channel_decoded"]:
+            print("                      (paging not decoded -- ngscope does not decode "
+                  "P-RNTI, so paging")
+            print("                      by IMSI would not be seen. Blind spot, not a "
+                  "clean result.)")
+
         if cell["events"]:
             print(f"  events            : " +
                   ", ".join(f"{k}={v}" for k, v in sorted(cell["events"].items())))

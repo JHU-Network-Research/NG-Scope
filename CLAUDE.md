@@ -179,6 +179,18 @@ before the capture began. They are positive evidence, not unobservable: the publ
 32.4% omits 15 UEs with proven security. Cost +5% replay. `docs/configuration.md` §*Is a blind
 DCI real?* has the tables.
 
+**Identity exposure is a separate signal from the rate**, and more direct: a network that
+cannot resolve a UE's temporary identity must ask for the permanent one, in the clear, before
+security. `security_scan.py` resolves `IdentityRequest` by `nas-eps.emm.id_type2` so only
+type 1 counts as `imsi_requested` — an IMEI request is legitimate and counting it would
+manufacture detections — and queries `e212.imsi` independently so digits on any path register
+as `imsi_in_clear`. Marked per UE in `security_sessions` and **per DCI** in the joined
+`.dciLog` (`identity_exposure`). Never folded into `outcome`: on mt_airy02/5035 RNTI 30241 was
+asked for its IMSI at `pre` and still reached `established`. Measured: 1 in 1,318 UEs there,
+0 on att_850_office. **Paging by IMSI is a blind spot** — nothing decodes P-RNTI, so no PCCH
+reaches the pcap; `lte-rrc.imsi` is queried anyway and every scan prints `paging not decoded`
+so a clean result is not mistaken for coverage.
+
 **Known defect this exposes, not yet fixed.** `security_scan.py` computes
 `established / sum(all outcomes)`, so `reused` sits in the denominator and never the
 numerator — UEs that reached `RRCConnectionReestablishment`/`Resume` are counted as failures,
