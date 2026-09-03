@@ -142,7 +142,8 @@ def load_identity_events(run_dir):
         "identity_tmsi":       "tmsi_requested",
     }
     by_key = {}
-    for path in sorted(glob.glob(os.path.join(run_dir, "security_events-*.csv"))):
+    files = sorted(glob.glob(os.path.join(run_dir, "security_events-*.csv")))
+    for path in files:
         with open(path) as fh:
             for row in csv.DictReader(fh):
                 label = signal_to_label.get(row.get("signal", ""))
@@ -155,7 +156,9 @@ def load_identity_events(run_dir):
                 cur = by_key.get(key)
                 if cur is None or rank[label] > rank[cur]:
                     by_key[key] = label
-    return by_key
+    # The file list comes back too: no events and no file are different claims, and the
+    # summary has to be able to tell them apart.
+    return by_key, files
 
 
 # The seven values a record can carry. `none` and `unknown` are different claims: `none`
@@ -377,7 +380,7 @@ def main():
               "An RNTI reused by two cells in one run could be mis-joined.", file=sys.stderr)
 
     rows = []
-    identity_by_key = load_identity_events(run_dir)
+    identity_by_key, identity_files = load_identity_events(run_dir)
     identity_counts = Counter()
     counts = Counter()
     disagree = 0
@@ -488,13 +491,25 @@ def main():
         print("                 check the RAR count and the teardown coverage lines before "
               "reading that as a cell with no security.")
     print(f"dci records    : {total:,} from {len(dci_files)} .dciLog file(s)")
-    if identity_by_key:
+    # Always reported, including when clean. A silent line would make "checked, found no
+    # identity exposure" -- the good result -- indistinguishable from a join that does not
+    # look for it at all, which is the same mistake the zero-boundary rule exists to prevent.
+    if not identity_files:
+        print("identity       : NOT CHECKED -- no security_events-*.csv. Run "
+              "tools/security_scan.py.")
+    elif identity_by_key:
         print(f"identity       : {sum(identity_counts.values()):,} DCI record(s) carried an "
               f"identity-revealing message -- " +
               ", ".join(f"{k}={v}" for k, v in sorted(identity_counts.items())))
         print("                 marked per record as identity_exposure; the per-UE view is "
               "the identity_exposure")
         print("                 column of security_sessions.")
+    else:
+        print(f"identity       : none. Checked {len(identity_files)} security_events file(s); "
+              f"no UE was asked")
+        print("                 for a permanent identity and none appeared in clear. Paging "
+              "is not decoded,")
+        print("                 so paging by IMSI would not have been seen.")
     print()
     # All seven, in the order they tell a story: placed relative to a boundary, then the
     # outcomes that mean no boundary was ever going to exist, then the two absences.
