@@ -22,7 +22,6 @@ extern "C" {
 #endif
 
 typedef struct{
-    uint16_t    targetRNTI;
     int         nof_cell;
     int         remote_sock;
 	bool 		remote_enable;

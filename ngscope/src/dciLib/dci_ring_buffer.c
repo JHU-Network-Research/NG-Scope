@@ -39,9 +39,8 @@ bool a_larger_than_b(int a, int b, int buf_size)
 
 /* Carrier Aggregation Related Functions */
 /* init the ca status */
-int CA_status_init(CA_status_t* q, int buf_size, uint16_t targetRNTI, int nof_cell, int cell_prb[MAX_NOF_RF_DEV])
+int CA_status_init(CA_status_t* q, int buf_size, int nof_cell, int cell_prb[MAX_NOF_RF_DEV])
 {
-  q->targetRNTI     = targetRNTI;
   q->buf_size       = buf_size;
   q->nof_cell       = nof_cell;
   q->header         = 0;
@@ -306,13 +305,11 @@ void update_most_recent_sf(ngscope_cell_dci_ring_buffer_t* q, int index)
 
 /* Init the cell status */
 int dci_ring_buffer_init(ngscope_cell_dci_ring_buffer_t* q,
-                         uint16_t                        targetRNTI,
                          int                             cell_prb,
                          int                             cell_idx,
                          int                             buf_size,
                          const char*                     out_path)
 {
-  q->targetRNTI  = targetRNTI;
   q->cell_prb    = cell_prb;
   q->cell_ready  = false;
   q->cell_header = 0;

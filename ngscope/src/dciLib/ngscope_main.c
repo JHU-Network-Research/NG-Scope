@@ -41,7 +41,7 @@ dci_ready_t          	log_stat_ready = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_
 //CA_status_t   						ca_status;
 //pthread_mutex_t     cell_status_mutex = PTHREAD_MUTEX_INITIALIZER;
 //
-//// DCI status container for DCI-Logger 
+//// DCI status container for DCI-Logger
 //ngscope_cell_dci_ring_buffer_t 		log_cell_status[MAX_NOF_RF_DEV];
 //CA_status_t   						log_ca_status;
 //
@@ -77,7 +77,7 @@ int ngscope_main(ngscope_config_t* config)
     }
 
     nof_rf_dev = config->nof_rf_dev;
-	
+
 	for(int i=0; i<MAX_NOF_RF_DEV; i++){
 		printf("RF-DEV:%d\n", task_scheduler_closed[i]);
 	}
@@ -91,7 +91,6 @@ int ngscope_main(ngscope_config_t* config)
 		task_scheduler_closed[i] 	= false;
 
 		prog_args[i].nof_rf_dev       = nof_rf_dev;
-		prog_args[i].rnti             = (uint16_t)config->rnti;
 		prog_args[i].remote_enable    = config->remote_enable;
 		prog_args[i].decode_single_ue = config->decode_single_ue;
 		prog_args[i].decode_SIB 	  = config->decode_SIB;
@@ -123,7 +122,7 @@ int ngscope_main(ngscope_config_t* config)
             prog_args[i].input_file_name      = (char*) malloc(1024);
             strcpy(prog_args[i].input_file_name, config->rf_config[i].replay_fname);
         }
-        prog_args[i].debug         = config->rf_config[i].debug;        
+        prog_args[i].debug         = config->rf_config[i].debug;
         prog_args[i].silent        = config->rf_config[i].silent;
         prog_args[i].decode_pdcch  = config->rf_config[i].decode_pdcch;
         prog_args[i].rf_args    = (char*) malloc(100 * sizeof(char));

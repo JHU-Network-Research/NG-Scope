@@ -46,7 +46,7 @@ extern bool					silent;
 
 extern ngscope_sf_buffer_t  sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
 extern bool                 sf_token[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
-extern pthread_mutex_t      token_mutex[MAX_NOF_RF_DEV]; 
+extern pthread_mutex_t      token_mutex[MAX_NOF_RF_DEV];
 extern pthread_cond_t		token_cond[MAX_NOF_RF_DEV];
 
 extern dci_ready_t         dci_ready;
@@ -62,7 +62,7 @@ extern bool task_scheduler_up[MAX_NOF_RF_DEV];
 // for ue tracking
 extern ngscope_ue_tracker_t ue_tracker[MAX_NOF_RF_DEV];
 extern pthread_mutex_t      ue_tracker_mutex[MAX_NOF_RF_DEV];
-	
+
 pthread_mutex_t dci_plot_mutex[MAX_NOF_RF_DEV] = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER,
 					 								PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER};
 pthread_cond_t 	dci_plot_cond[MAX_NOF_RF_DEV] = {PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER,
@@ -116,7 +116,7 @@ int decoder_idx
     // Set PDSCH channel estimation (we don't consider MBSFN)
     dci_decoder->ue_dl_cfg.chest_cfg = chest_pdsch_cfg;
 
-	// test: enable cif 
+	// test: enable cif
 	//dci_decoder->ue_dl_cfg.cfg.dci.cif_enabled = true;
 	//dci_decoder->ue_dl_cfg.cfg.dci.cif_present = true;
 	//dci_decoder->ue_dl_cfg.cfg.dci.multiple_csi_request_enabled = true;
@@ -130,7 +130,7 @@ int decoder_idx
         srsran_softbuffer_rx_init(dci_decoder->pdsch_cfg.softbuffers.rx[i], cell->nof_prb);
     }
 
-    dci_decoder->pdsch_cfg.rnti = prog_args.rnti;
+    // dci_decoder->pdsch_cfg.rnti = -1;
     dci_decoder->decoder_idx    = decoder_idx;
     return SRSRAN_SUCCESS;
 }
@@ -148,18 +148,18 @@ void prune_based_on_topN(ngscope_tree_t* 		tree,
                        	ngscope_dci_per_sub_t*  dci_per_sub,
 						int loc_idx)
 {
-	for(int i=0; i<MAX_NOF_FORMAT+1; i++){	
+	for(int i=0; i<MAX_NOF_FORMAT+1; i++){
 		uint16_t rnti = tree->dci_array[i][loc_idx].rnti;
 		if(rnti <= 0){
 			continue;
 		}
-		// first of all, check if rnti are top N 
+		// first of all, check if rnti are top N
 		if(loc_rnti_in_topN(tree->dci_array[i][loc_idx].rnti, ue_tracker)){
 			// push the dci message to the output
 			ngscope_push_dci_to_per_sub(dci_per_sub, &tree->dci_array[i][loc_idx]);
 
-			// clear the dci array 
-			srsran_ngscope_tree_clear_dciArray_nodes(tree, loc_idx);	
+			// clear the dci array
+			srsran_ngscope_tree_clear_dciArray_nodes(tree, loc_idx);
 			//printf("We found a top N rnti:%d loc_idx:%d format:%d\n", rnti, loc_idx, i);
 
 			break;
@@ -172,8 +172,8 @@ void prune_based_on_activeUE(ngscope_tree_t* 		tree,
                        		ngscope_dci_per_sub_t*  dci_per_sub,
 							int loc_idx)
 {
-	for(int i=0; i<MAX_NOF_FORMAT+1; i++){	
-		// first of all, check if rnti are top N 
+	for(int i=0; i<MAX_NOF_FORMAT+1; i++){
+		// first of all, check if rnti are top N
 		uint16_t rnti = tree->dci_array[i][loc_idx].rnti;
 		if(rnti <= 0){
 			continue;
@@ -182,8 +182,8 @@ void prune_based_on_activeUE(ngscope_tree_t* 		tree,
 			// push the dci message to the output
 			ngscope_push_dci_to_per_sub(dci_per_sub, &tree->dci_array[i][loc_idx]);
 
-			// clear the dci array 
-			srsran_ngscope_tree_clear_dciArray_nodes(tree, loc_idx);	
+			// clear the dci array
+			srsran_ngscope_tree_clear_dciArray_nodes(tree, loc_idx);
 
 			//printf("We found a active UE::%d loc_idx:%d format:%d\n", rnti, loc_idx, i);
 			break;
@@ -197,7 +197,7 @@ void filter_dci_from_tree(ngscope_tree_t* 	tree,
                            ngscope_dci_per_sub_t*  	dci_per_sub)
 {
 	for(int i=0; i<tree->nof_location; i++){
-		// first of all, check if rnti are top N 
+		// first of all, check if rnti are top N
 		prune_based_on_topN(tree, ue_tracker, dci_per_sub, i);
 
 		// second, if we found active ue
@@ -213,15 +213,15 @@ void update_ue_dci_per_loc(ngscope_tree_t* 			tree,
 {
 	uint16_t rnti_v[MAX_NOF_FORMAT+1] = {0};
 	int nof_ue =0;
-	for(int i=0; i<MAX_NOF_FORMAT+1; i++){	
+	for(int i=0; i<MAX_NOF_FORMAT+1; i++){
 		uint16_t rnti = tree->dci_array[i][loc_idx].rnti;
 		if(rnti <= 0){
 			continue;
 		}
-		rnti_v[i] = rnti;	
+		rnti_v[i] = rnti;
 		nof_ue ++;
 	}
-	for(int i=0; i<MAX_NOF_FORMAT+1; i++){	
+	for(int i=0; i<MAX_NOF_FORMAT+1; i++){
 		if(rnti_v[i] != 0){
 			if(nof_ue == 1){
 				bool dl = i==0 ? false:true;
@@ -237,18 +237,18 @@ void update_ue_dci_per_loc(ngscope_tree_t* 			tree,
 	}
 	return;
 }
-					
+
 void update_ue_dci_per_tti(ngscope_tree_t* 			tree,
 						   ngscope_ue_tracker_t* 	ue_tracker,
                            ngscope_dci_per_sub_t*  	dci_per_sub,
 						   uint32_t 				tti)
 {
-	//updating the decoded (dci_per_sub) dl dci  
+	//updating the decoded (dci_per_sub) dl dci
 	for(int i=0; i<dci_per_sub->nof_dl_dci; i++){
 		ngscope_ue_tracker_enqueue_ue_rnti(ue_tracker, tti, dci_per_sub->dl_msg[i].rnti, true);
 	}
 
-	//updating the decoded (dci_per_sub) ul dci  
+	//updating the decoded (dci_per_sub) ul dci
 	for(int i=0; i<dci_per_sub->nof_ul_dci; i++){
 		ngscope_ue_tracker_enqueue_ue_rnti(ue_tracker, tti, dci_per_sub->ul_msg[i].rnti, false);
 	}
@@ -264,7 +264,7 @@ void update_ue_dci_per_tti(ngscope_tree_t* 			tree,
 /*********************************************
  * Function name: dci_decoder_decode
  * Return value type: int
- * Description: dci decoding function, 
+ * Description: dci decoding function,
  *     in the dci decoder thread.
  * Author: PAWS (https://paws.princeton.edu/)
 *********************************************/
@@ -284,7 +284,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 	bool decode_single_ue 	= dci_decoder->prog_args.decode_single_ue;
 	bool decode_SIB 		= dci_decoder->prog_args.decode_SIB;
 	bool decode_RAR 		= dci_decoder->prog_args.decode_RAR;
-    uint16_t targetRNTI 	= dci_decoder->prog_args.rnti;  
+    uint16_t targetRNTI 	= dci_decoder->prog_args.rnti;
 
 	int rf_idx 				= dci_decoder->prog_args.rf_index;
 	bool acks[SRSRAN_MAX_CODEWORDS] = {false};
@@ -326,7 +326,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 					printf("CELL: Successfully decoded SIB1 with code %d!\n", ret);
 				decoded_sib=true;
 			}
-		} else { //SIB2 
+		} else { //SIB2
 				ret = 0;
 				// have_sib2 = true;
 			ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
@@ -385,7 +385,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
     // Shall we decode the PDSCH of the current subframe?
     if (dci_decoder->prog_args.rnti != SRSRAN_SIRNTI) {
-		dci_decoder->pdsch_cfg.rnti = dci_decoder->prog_args.rnti;
+		// dci_decoder->pdsch_cfg.rnti = dci_decoder->prog_args.rnti;
         decode_pdsch = true;
         if (dci_decoder->cell.frame_type == SRSRAN_TDD) {
 			if (srsran_sfidx_tdd_type(dci_decoder->dl_sf.tdd_config, sf_idx) == SRSRAN_TDD_SF_U) {
@@ -395,7 +395,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			}
 		}
 	}
- 
+
     int n = 0;
 
 	/* Clear the per-subframe PDCCH bookkeeping before the blind search.
@@ -455,21 +455,12 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, targetRNTI);
 		}else{
     		ngscope_tree_t tree;
-			// decoded_sib=false;	
-			// if (decoded_sib){
-			// 	// fprintf(stderr, "Found SIB at ncce=%d, L=%d\n", sib_loc.ncce, sib_loc.L);
-			// 	n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-			// 					&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx, &sib_loc);
-			// } else {
-			// 	n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-			// 					&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx, NULL);
-			// }				
 
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI,decoder_idx, NULL);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL);
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
-			// filter the dci 
+			// filter the dci
 			filter_dci_from_tree(&tree, &ue_tracker[rf_idx], dci_per_sub);
 
 			// update the dci per subframe--> mainly decrease the tti
@@ -490,16 +481,16 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			char fname[1024];
 			memset(fname,0,1024);
 			sprintf(fname,"%sdci-decode-debug-%d.csv",dci_decoder->prog_args.out_path,decoder_idx);
-			decodelog=fopen(fname,"a"); 
+			decodelog=fopen(fname,"a");
 
 			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
 				ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
 
 				//   int D = dl_msg.nof_bits + 16;
   				//   int R_sb = (int)(ceil(D/32.0));    // the block will be padded with dummy values until its length is a multiple of 32
-  				//   int K_w = 3 * R_sb * 32; 
+  				//   int K_w = 3 * R_sb * 32;
 
-				
+
 				ngscope_dci_tb_t tb1;
 				memset(&tb1, 0, sizeof(ngscope_dci_tb_t));
 				ngscope_dci_tb_t tb2;
@@ -511,7 +502,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 				if (dl_msg.nof_tb == 2){
 					tb2 = dl_msg.tb[1];
 				}
-				
+
 				// uint32_t cfi = dci_decoder->dl_sf.cfi;
 				// uint32_t nof_cce = ((cfi > 0 && cfi < 4) ? dci_decoder->ue_dl.pdcch.nof_cce[cfi - 1] : 0);
 				// uint32_t nof_symbols = 36*nof_cce;
@@ -553,8 +544,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 						);
 					}
 				if(debug)
-					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d\n", 
-						tti, 
+					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d\n",
+						tti,
 						dl_msg.rnti,
 						dl_msg.prb,
 						dl_msg.dl,
@@ -585,7 +576,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			int nof_node = srsran_ngscope_tree_non_empty_nodes(&tree);
 			if (debug)
 				printf("DEBUG: TTI=%d left %d non-empty nodes found:%d dl_dci %d ul_dci!\n", tti, nof_node, \
-							dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci); 
+							dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci);
 			srsran_ngscope_print_dci_per_sub(dci_per_sub);
 			if (!silent)
 				printf("\n");
@@ -652,7 +643,7 @@ int get_target_dci(ngscope_dci_msg_t* msg, int nof_msg, uint16_t targetRNTI){
 
 bool dci_decoder_phich_decode(ngscope_dci_decoder_t*      dci_decoder,
                                   uint32_t                tti,
-                                  ngscope_dci_per_sub_t*  dci_per_sub, 
+                                  ngscope_dci_per_sub_t*  dci_per_sub,
         						  srsran_phich_res_t*  	  phich_res)
 {
     uint16_t targetRNTI = dci_decoder->prog_args.rnti;
@@ -696,7 +687,7 @@ void empty_dci_array(ngscope_dci_msg_t   dci_array[][MAX_CANDIDATES_ALL],
             ZERO_OBJECT(dci_array[i][j]);
         }
     }
-   	 
+
     for(int i=0; i<MAX_CANDIDATES_ALL; i++){
 		ZERO_OBJECT(dci_location[i]);
 	}
@@ -704,8 +695,8 @@ void empty_dci_array(ngscope_dci_msg_t   dci_array[][MAX_CANDIDATES_ALL],
     dci_per_sub->nof_dl_dci = 0;
     dci_per_sub->nof_ul_dci = 0;
     for(int i=0; i<MAX_DCI_PER_SUB; i++){
-        ZERO_OBJECT(dci_per_sub->dl_msg[i]); 
-        ZERO_OBJECT(dci_per_sub->ul_msg[i]); 
+        ZERO_OBJECT(dci_per_sub->dl_msg[i]);
+        ZERO_OBJECT(dci_per_sub->ul_msg[i]);
     }
 
     return;
@@ -714,12 +705,12 @@ void empty_dci_persub(ngscope_dci_per_sub_t*  dci_per_sub){
     dci_per_sub->nof_dl_dci = 0;
     dci_per_sub->nof_ul_dci = 0;
     for(int i=0; i<MAX_DCI_PER_SUB; i++){
-        ZERO_OBJECT(dci_per_sub->dl_msg[i]); 
-        ZERO_OBJECT(dci_per_sub->ul_msg[i]); 
+        ZERO_OBJECT(dci_per_sub->dl_msg[i]);
+        ZERO_OBJECT(dci_per_sub->ul_msg[i]);
     }
     return;
 }
-    
+
 
 /*********************************************
  * Function name: dci_decoder_thread
@@ -727,14 +718,14 @@ void empty_dci_persub(ngscope_dci_per_sub_t*  dci_per_sub){
  * Description: main function for dci decoder
  *     thread.
  * Author: PAWS (https://paws.princeton.edu/)
-*********************************************/ 
+*********************************************/
 void* dci_decoder_thread(void* p){
 	ngscope_dci_decoder_t* dci_decoder 	= (ngscope_dci_decoder_t* )p;
 
 	int decoder_idx = dci_decoder->decoder_idx;
     int rf_idx     	= dci_decoder->prog_args.rf_index;
     uint16_t targetRNTI 	= dci_decoder->prog_args.rnti;
-	
+
 
 	printf("decoder idx :%d \n", decoder_idx);
 
@@ -743,7 +734,7 @@ void* dci_decoder_thread(void* p){
 	 * device's RNTI set to consult -- it has no rf_idx of its own. */
 	ngscope_rach_filter_bind_thread(rf_idx);
 
-    ngscope_dci_per_sub_t   dci_per_sub; 
+    ngscope_dci_per_sub_t   dci_per_sub;
     ngscope_status_buffer_t dci_ret;
 //
 //    pthread_mutex_lock(&sf_buffer[decoder_idx].sf_mutex);
@@ -755,7 +746,7 @@ void* dci_decoder_thread(void* p){
 	int nof_pdcch_sample = 36 * dci_decoder->ue_dl.pdcch.nof_cce[0];
 	int nof_prb = dci_decoder->cell.nof_prb;
 	int sz = srsran_symbol_sz(nof_prb);
-	bool enable_plot = !dci_decoder->prog_args.disable_plots;	
+	bool enable_plot = !dci_decoder->prog_args.disable_plots;
     pthread_t plot_thread;
 	if(enable_plot){
 		if(decoder_idx == 0){
@@ -771,7 +762,7 @@ void* dci_decoder_thread(void* p){
 		}
 	}
 #endif
-//    uint64_t t1=0, t2=0, t3=0, t4=0;  
+//    uint64_t t1=0, t2=0, t3=0, t4=0;
 	char fileName[1024];
 	snprintf(fileName,sizeof(fileName),"%sdecoder_%d.txt",dci_decoder->prog_args.out_path, decoder_idx);
 	FILE* fd = fopen(fileName,"w+");
@@ -786,16 +777,16 @@ void* dci_decoder_thread(void* p){
 			go_exit = true;
 		}
     }
-	
+
     while(!go_exit){
-                
+
 		//empty_dci_array(dci_array, dci_location, &dci_per_sub);
 		empty_dci_persub(&dci_per_sub);
 
 //--->  Lock the buffer
         pthread_mutex_lock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);
-    
-        // We release the token in the last minute just before the waiting of the condition signal 
+
+        // We release the token in the last minute just before the waiting of the condition signal
         pthread_mutex_lock(&token_mutex[rf_idx]);
         if(sf_token[rf_idx][decoder_idx] == true){
             sf_token[rf_idx][decoder_idx] = false;
@@ -804,12 +795,12 @@ void* dci_decoder_thread(void* p){
         }
         pthread_mutex_unlock(&token_mutex[rf_idx]);
 
-//--->  Wait the signal 
+//--->  Wait the signal
         //printf("%d-th decoder is waiting for conditional signal!\n", dci_decoder->decoder_idx);
-		//t1 = timestamp_us();        
-        pthread_cond_wait(&sf_buffer[rf_idx][decoder_idx].sf_cond, 
+		//t1 = timestamp_us();
+        pthread_cond_wait(&sf_buffer[rf_idx][decoder_idx].sf_cond,
                           &sf_buffer[rf_idx][decoder_idx].sf_mutex);
-    
+
         uint32_t sfn    = sf_buffer[rf_idx][decoder_idx].sfn;
         uint32_t sf_idx = sf_buffer[rf_idx][decoder_idx].sf_idx;
 		uint64_t collection_time = sf_buffer[rf_idx][decoder_idx].collection_time;
@@ -822,24 +813,24 @@ void* dci_decoder_thread(void* p){
         //printf("decoder:%d Get the signal! sfn:%d sf_idx:%d tti:%d\n", decoder_idx, sfn, sf_idx, sfn * 10 + sf_idx);
 		// We only decode when the subframe is not empty
 		if(empty_sf){
-			pthread_mutex_unlock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);	
+			pthread_mutex_unlock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);
 			fprintf(fd,"%d\t%d\t\n", tti, 0);
 		}else{
 			//usleep(1000);
     		dci_per_sub.timestamp 	= timestamp_us();
 			dci_per_sub.collection_time = collection_time;
 
-			uint64_t t1 = timestamp_us();        
-			
+			uint64_t t1 = timestamp_us();
+
 			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub, decoder_idx);
-			uint64_t t2 = timestamp_us();        
+			uint64_t t2 = timestamp_us();
 			fprintf(fd,"%d\t%ld\t\n", tti, t2-t1);
 	//--->  Unlock the buffer
-			pthread_mutex_unlock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);	
+			pthread_mutex_unlock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);
 #ifdef ENABLE_GUI
 			if(enable_plot){
 				if(decoder_idx == 0){
-					pthread_mutex_lock(&dci_plot_mutex[rf_idx]);    
+					pthread_mutex_lock(&dci_plot_mutex[rf_idx]);
 					srsran_vec_cf_copy(pdcch_buf[rf_idx], dci_decoder->ue_dl.pdcch.d, nof_pdcch_sample);
 
 					if (sz > 0) {
@@ -853,7 +844,7 @@ void* dci_decoder_thread(void* p){
 						}
 					}
 					pthread_cond_signal(&dci_plot_cond[rf_idx]);
-					pthread_mutex_unlock(&dci_plot_mutex[rf_idx]);    
+					pthread_mutex_unlock(&dci_plot_mutex[rf_idx]);
 				}
 			}
 #endif
@@ -894,7 +885,7 @@ void* dci_decoder_thread(void* p){
 			printf("DCI-buffer between decoder and status tracker is full! Considering increase its side!\n");
 		}
 
-        //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci, 
+        //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci,
         //                                        dci_per_sub.nof_dl_dci, dci_ready.nof_dci);
         pthread_cond_signal(&dci_ready.cond);
         pthread_mutex_unlock(&dci_ready.mutex);
@@ -909,7 +900,7 @@ void* dci_decoder_thread(void* p){
 	wait_for_decoder_ready_to_close(rf_idx, decoder_idx);
 	// free the ue dl and the related buffer
     //srsran_ue_dl_free(&dci_decoder->ue_dl);
-	
+
     printf("Going to Close %d-th DCI decoder!\n",decoder_idx);
 #ifdef ENABLE_GUI
 	if(enable_plot){
@@ -933,4 +924,3 @@ void* dci_decoder_thread(void* p){
 
     return NULL;
 }
-

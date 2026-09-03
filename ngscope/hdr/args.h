@@ -45,7 +45,6 @@ private:
     long long dl_freq; //downlink frequency
     long long ul_freq; //uplink frequency
     double rf_gain;
-    int rnti;
 
     // std::shared_ptr<ngscope_config_t> ngscope_config;
 };

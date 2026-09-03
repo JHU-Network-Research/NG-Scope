@@ -36,10 +36,9 @@ void srsran_ngscope_tree_copy_dci_fromArray2PerSub(ngscope_tree_t* q,
                                         int format,
                                         int idx);
 
-void srsran_ngscope_tree_CP_match(ngscope_tree_t* q, 
-                                    int             blk_idx, 
-                                    int             loc_idx, 
-									uint16_t 		targetRNTI,
+void srsran_ngscope_tree_CP_match(ngscope_tree_t* q,
+                                    int             blk_idx,
+                                    int             loc_idx,
                                     int*            nof_matched,
                                     int*            root_idx,
                                     int*            format_idx);
@@ -47,7 +46,6 @@ void srsran_ngscope_tree_CP_match(ngscope_tree_t* q,
 int  srsran_ngscope_tree_prune_node(ngscope_tree_t* q,
                                         int nof_matched,
                                         int root,
-										uint16_t rnti,
                                         int* format_vec,
                                         int* format_idx);
 

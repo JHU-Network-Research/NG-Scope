@@ -31,7 +31,7 @@
 
 extern bool go_exit;
 
-//Waiting for the rf to be ready 
+//Waiting for the rf to be ready
 extern pthread_mutex_t     cell_mutex;
 extern srsran_cell_t       cell_vec[MAX_NOF_RF_DEV];
 
@@ -74,7 +74,7 @@ void wait_for_radio(ngscope_status_tracker_t* q, int nof_dev){
         }else{
             usleep(10000);
         }
-    }     
+    }
     pthread_mutex_lock(&cell_mutex);
     for(int i=0; i<nof_dev; i++){
         q->cell_prb[i] = cell_vec[i].nof_prb;
@@ -86,7 +86,7 @@ void wait_for_radio(ngscope_status_tracker_t* q, int nof_dev){
 
 void* status_tracker_thread(void* p){
     /* TODO log target status */
-    //prog_args_t* prog_args = (prog_args_t*)p; 
+    //prog_args_t* prog_args = (prog_args_t*)p;
 
 	ngscope_config_t* config = (ngscope_config_t *)p;
 
@@ -96,7 +96,6 @@ void* status_tracker_thread(void* p){
     //int nof_prb = 0;
     int dis_plot = config->rf_config[0].disable_plot;
 
-    uint16_t targetRNTI = config->rnti;
     int remote_enable   = config->remote_enable;
 
     printf("DIS_PLOT:%d nof_RF_DEV:%d \n", dis_plot, nof_dev);
@@ -105,10 +104,9 @@ void* status_tracker_thread(void* p){
     memset(&status_tracker, 0, sizeof(ngscope_status_tracker_t));
 
     /* INIT status_tracker */
-    status_tracker.targetRNTI = targetRNTI;
     status_tracker.nof_cell   = nof_dev;
 
-    // Container for store obtained csi  
+    // Container for store obtained csi
     ngscope_status_buffer_t    dci_queue[MAX_DCI_BUFFER];
 
     /* Wait the Radio to be ready */
@@ -117,11 +115,10 @@ void* status_tracker_thread(void* p){
 	log_config_t dci_log_config;
 	memcpy(&dci_log_config.config, config, sizeof(ngscope_config_t));
 
-	uint16_t cell_prb[MAX_NOF_RF_DEV];	
+	uint16_t cell_prb[MAX_NOF_RF_DEV];
 	cell_config_t 	cell_config;
 
 	cell_config.nof_cell 	= nof_dev;
-	cell_config.rnti 		= targetRNTI;
 
 	for(int i=0; i<nof_dev; i++){
 		cell_prb[i] = status_tracker.cell_prb[i];
@@ -129,11 +126,11 @@ void* status_tracker_thread(void* p){
 		dci_log_config.cell_prb[i] = status_tracker.cell_prb[i];
 	}
 
-	// remote can be any program on the same device or 
+	// remote can be any program on the same device or
     // program running on other devices
     // We sync the decoded DCI with the remote ones
-    if(remote_enable){    
-		// init the dci_sink that stores all the client 
+    if(remote_enable){
+		// init the dci_sink that stores all the client
 		sock_init_dci_sink(&dci_sink_serv, 6666);
 
 		status_tracker.remote_sock = 1;
@@ -142,13 +139,12 @@ void* status_tracker_thread(void* p){
     	pthread_create(&dci_sink_thd, NULL, dci_sink_server_thread, (void*)(&cell_config));
     }
 
-    printf("\n\n\n Radio is ready! \n\n"); 
+    printf("\n\n\n Radio is ready! \n\n");
 
 	/* Create the cell status tracking thread */
     pthread_t 			cell_stat_thd;
 	cell_status_info_t 	info;
 
-	info.targetRNTI 	= targetRNTI;
 	info.nof_cell 		= nof_dev;
 	info.remote_sock 	= status_tracker.remote_sock;
 	info.remote_enable 	= remote_enable;
@@ -158,7 +154,7 @@ void* status_tracker_thread(void* p){
     pthread_create(&cell_stat_thd, NULL, cell_status_thread, (void*)(&info));
 
 	/* create the dci logging thread */
-	pthread_t 	dci_log_thd;	
+	pthread_t 	dci_log_thd;
 	if(ngscope_config_check_log(config)){
     	pthread_create(&dci_log_thd, NULL, dci_log_thread, (void*)(&dci_log_config));
 	}
@@ -169,10 +165,10 @@ void* status_tracker_thread(void* p){
 
     while(true){
         if(go_exit) break;
-        // reset the dci queue 
+        // reset the dci queue
         memset(dci_queue, 0, MAX_DCI_BUFFER * sizeof(ngscope_status_buffer_t));
 
-		/* Data handling between DCI decoder and StatusTracker 
+		/* Data handling between DCI decoder and StatusTracker
 		 *  DCI-Decoder--> dci--> dci_buffer --> Status-Tracker */
         pthread_mutex_lock(&dci_ready.mutex);
         // Use while in case some corner case conditional wake up
@@ -183,7 +179,7 @@ void* status_tracker_thread(void* p){
         nof_dci     = dci_ready.nof_dci;
         memcpy(dci_queue, dci_buffer, nof_dci * sizeof(ngscope_status_buffer_t));
 
-        // clean the dci buffer 
+        // clean the dci buffer
         memset(dci_buffer, 0, nof_dci * sizeof(ngscope_status_buffer_t));
 
         // reset the dci buffer
@@ -204,11 +200,11 @@ void* status_tracker_thread(void* p){
 				cell_stat_ready.nof_dci++;
 			}
 		}
-        //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci, 
+        //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci,
         //                                        dci_per_sub.nof_dl_dci, dci_ready.nof_dci);
         pthread_cond_signal(&cell_stat_ready.cond);
         pthread_mutex_unlock(&cell_stat_ready.mutex);
- 
+
         /* put the dci into the log status buffer, later, the DCI logger will handle it
 		 *  Status-Tracker -->  log_stat_buffer --> DCI-Logger */
         pthread_mutex_lock(&log_stat_ready.mutex);
@@ -222,12 +218,12 @@ void* status_tracker_thread(void* p){
 				log_stat_ready.nof_dci++;
 			}
 		}
-        //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci, 
+        //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci,
         //                                        dci_per_sub.nof_dl_dci, dci_ready.nof_dci);
         pthread_cond_signal(&log_stat_ready.cond);
         pthread_mutex_unlock(&log_stat_ready.mutex);
-     
-        //printf("Copy %d dci->", nof_dci); 
+
+        //printf("Copy %d dci->", nof_dci);
         for(int i=0; i<nof_dci; i++){
 			fprintf(fd, "%d\t%d\n", dci_queue[i].tti, nof_dci);
             //printf(" %d-th dci: ul dci:%d dl_dci:%d  tti:%d IDX:%d\n", i, dci_queue[i].dci_per_sub.nof_ul_dci, \
@@ -236,7 +232,7 @@ void* status_tracker_thread(void* p){
 		//printf("\n");
     }
     printf("Close Status Tracker!\n");
-	fclose(fd);    
+	fclose(fd);
 	//close_and_notify_udp(status_tracker.remote_sock);
 //
 //    if(dis_plot == 0){
@@ -245,7 +241,7 @@ void* status_tracker_thread(void* p){
 //          pthread_join(plot_thread, NULL);
 //        }
 //    }
- 	wait_for_ALL_RF_DEV_close();        
+ 	wait_for_ALL_RF_DEV_close();
 
 	// Wait for the cell status tracking thread to end
 	pthread_join(cell_stat_thd, NULL);
@@ -254,7 +250,7 @@ void* status_tracker_thread(void* p){
 	if(ngscope_config_check_log(config)){
 		pthread_join(dci_log_thd, NULL);
 	}
-    
+
     // close the remote socket
     if(status_tracker.remote_sock > 0){
         close(status_tracker.remote_sock);

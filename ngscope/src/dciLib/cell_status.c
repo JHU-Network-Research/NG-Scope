@@ -44,7 +44,7 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //	q->nof_cell 	= nof_cell;
 //	q->header 		= 0;
 //	q->all_cell_ready 		= false;
-//	
+//
 //	memcpy(&q->cell_prb, cell_prb, MAX_NOF_RF_DEV *sizeof(int));
 //	return 0;
 //}
@@ -53,13 +53,13 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //    if( (a-b) >= 0){
 //       return true;
 //    }else{
-//        /* b --> 320 --> a 
+//        /* b --> 320 --> a
 //           b 310   a 1 (a is larger then b in this case) */
-//        if( (abs(NOF_LOG_SUBF - b) < NOF_LOG_SUBF/8) && 
+//        if( (abs(NOF_LOG_SUBF - b) < NOF_LOG_SUBF/8) &&
 //            (a < NOF_LOG_SUBF/8)){
 //            return true;
 //        }
-//    } 
+//    }
 //    return false;
 //}
 //
@@ -75,7 +75,7 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //}
 //
 //void update_CA_status_header(CA_status_t* q, ngscope_cell_dci_ring_buffer_t 	p[MAX_NOF_RF_DEV]){
-//	int nof_cell = q->nof_cell; 
+//	int nof_cell = q->nof_cell;
 //	int cell_header[MAX_NOF_RF_DEV] = {0};
 //
 //	bool cell_ready = true;
@@ -92,7 +92,7 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //			q->header = find_header(cell_header, nof_cell);
 //			printf("\n\n\n ALL THREE CELL ARE READY!!! \n\n\n");
 //		}
-//	}	
+//	}
 //	return;
 //}
 //
@@ -127,25 +127,25 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //    // Set the logging timestamp
 //    q->timestamp_us 	= timestamp_us();
 //
-//	/* copy downlink and uplink messages 
+//	/* copy downlink and uplink messages
 //	 * NOTE: we need to copy all MAX_DCI_PER_SUB dci message */
-//	memcpy(&(q->dl_msg), &(dci_buffer->dci_per_sub.dl_msg), 
+//	memcpy(&(q->dl_msg), &(dci_buffer->dci_per_sub.dl_msg),
 //				MAX_DCI_PER_SUB * sizeof(ngscope_dci_msg_t));
 //
-//	memcpy(&(q->ul_msg), &(dci_buffer->dci_per_sub.ul_msg), 
+//	memcpy(&(q->ul_msg), &(dci_buffer->dci_per_sub.ul_msg),
 //				MAX_DCI_PER_SUB * sizeof(ngscope_dci_msg_t));
 //
-//	q->ue_dl_prb 	= 0;	
-//	q->ue_ul_prb 	= 0;	
+//	q->ue_dl_prb 	= 0;
+//	q->ue_ul_prb 	= 0;
 //
 //	int cell_prb = 0;
 //
 //	if(q->nof_dl_msg > 0){
-//		// handle the downlink 
+//		// handle the downlink
 //		for(int i=0; i<q->nof_dl_msg; i++){
-//			cell_prb += q->dl_msg[i].prb;	
+//			cell_prb += q->dl_msg[i].prb;
 //			if(q->dl_msg[i].rnti == targetRNTI){
-//				q->ue_dl_prb 	= q->dl_msg[i].prb;	
+//				q->ue_dl_prb 	= q->dl_msg[i].prb;
 //			}
 //		}
 //		q->cell_dl_prb = cell_prb;
@@ -153,11 +153,11 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //
 //	if(q->nof_ul_msg > 0){
 //		cell_prb = 0;
-//		// handle the uplink 
+//		// handle the uplink
 //		for(int i=0; i<q->nof_ul_msg; i++){
-//			cell_prb += q->ul_msg[i].prb;	
+//			cell_prb += q->ul_msg[i].prb;
 //			if(q->ul_msg[i].rnti == targetRNTI){
-//				q->ue_ul_prb 	= q->ul_msg[i].prb;	
+//				q->ue_ul_prb 	= q->ul_msg[i].prb;
 //			}
 //		}
 //		q->cell_ul_prb = cell_prb;
@@ -179,7 +179,7 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //	dci_sync_init(&dci_sync);
 //
 //	// container for the dci to be pushed
-//	/* We push one dci per subframe, 
+//	/* We push one dci per subframe,
 //	   no matter we have the dci of the target UE or not*/
 //	dci_sync.time_stamp = q->timestamp_us;
 //	dci_sync.tti        = q->tti;
@@ -213,10 +213,10 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //}
 //
 //// check if the dci message decoding has timed out
-//// This is to prevent that in some cases the dci decoding of a specific 
+//// This is to prevent that in some cases the dci decoding of a specific
 //// subframe has been missed
 //void check_dci_decoding_timeout(ngscope_cell_dci_ring_buffer_t* q){
-//	int header 		= TTI_TO_IDX( (q->cell_header + 1)); 
+//	int header 		= TTI_TO_IDX( (q->cell_header + 1));
 //	int recent_sf 	= q->most_recent_sf;
 //	while(header != recent_sf){
 //		//printf("header:%d\n",header);
@@ -268,12 +268,12 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //			q->most_recent_sf = index;
 //		}
 //	}
-//	
+//
 //	return;
 //}
 //
 ///* insert the dci into the cell status */
-//void enqueue_dci_cell(ngscope_cell_dci_ring_buffer_t* q, 
+//void enqueue_dci_cell(ngscope_cell_dci_ring_buffer_t* q,
 //						ngscope_status_buffer_t* dci_buffer,
 //						int remote_sock,
 //						FILE* fd1,
@@ -326,12 +326,12 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 //}
 
 void* cell_status_thread(void* arg){
-	// get the info 
+	// get the info
 	cell_status_info_t info;
 	info = *(cell_status_info_t *)arg;
 	int remote_sock 	= info.remote_sock;
-	
-	int buf_size = CELL_STATUS_RING_BUF_SIZE; 
+
+	int buf_size = CELL_STATUS_RING_BUF_SIZE;
 	int nof_dci;
 
 	ngscope_cell_dci_ring_buffer_t 		cell_status[MAX_NOF_RF_DEV];
@@ -341,11 +341,11 @@ void* cell_status_thread(void* arg){
 
 	/* We now init two status buffer CA status and cell status */
 	// --> init the CA status
-	CA_status_init(&ca_status, buf_size, info.targetRNTI, info.nof_cell, info.cell_prb);
+	CA_status_init(&ca_status, buf_size, info.nof_cell, info.cell_prb);
 
 	// --> init the cell status
 	for(int i=0; i<info.nof_cell; i++){
-		dci_ring_buffer_init(&cell_status[i], info.targetRNTI, info.cell_prb[i], i, buf_size, info.out_dir);
+		dci_ring_buffer_init(&cell_status[i], info.cell_prb[i], i, buf_size, info.out_dir);
 	}
 
 	char statuspath[1024];
@@ -367,7 +367,7 @@ void* cell_status_thread(void* arg){
 		//fprintf(fd, "%d\t%d\n", cell_stat_buffer[0].tti, nof_dci);
 		memcpy(dci_buf, cell_stat_buffer, nof_dci * sizeof(ngscope_status_buffer_t));
 
-        // clean the dci buffer 
+        // clean the dci buffer
         memset(cell_stat_buffer, 0, nof_dci * sizeof(ngscope_status_buffer_t));
 
         // reset the dci buffer
@@ -379,7 +379,7 @@ void* cell_status_thread(void* arg){
 //		//printf("cell ready:%d \n", cell_status[0].cell_ready);
         //pthread_mutex_lock(&cell_status_mutex);
 		for(int i=0; i<nof_dci; i++){
-			int cell_idx = dci_buf[i].cell_idx;	
+			int cell_idx = dci_buf[i].cell_idx;
   			fprintf(fd, "%d\t%d\t%d\t\n", dci_buf[i].tti, nof_dci, cell_status[cell_idx].cell_header);
 			//fprintf(fd, "%d\t%d\n", dci_buf[i].tti, nof_dci);
 			//enqueue the dci to the according cell status buffer
@@ -395,7 +395,7 @@ void* cell_status_thread(void* arg){
 
 			ngscope_ue_list_enqueue_rnti_per_sf_per_cell(ue_list, &dci_buf[i]);
 
-			//int cell_idx = dci_buf[i].cell_idx;	
+			//int cell_idx = dci_buf[i].cell_idx;
 			//for(int j=0; j<dci_buf[i].dci_per_sub.nof_dl_dci; j++){
 			//	enqueue_ue_list_rnti(&(ue_list[cell_idx]), dci_buf[i].tti, \
 			//			dci_buf[i].dci_per_sub.dl_msg[j].rnti, true);
@@ -405,9 +405,9 @@ void* cell_status_thread(void* arg){
 			//			dci_buf[i].dci_per_sub.ul_msg[j].rnti, false);
 			//}
 		}
-    } 
+    }
 
- 	wait_for_ALL_RF_DEV_close();        
+ 	wait_for_ALL_RF_DEV_close();
 	for(int i=0; i<info.nof_cell; i++){
 
 		ngscope_ue_list_print_ue_freq(&(ue_list[i]));
@@ -415,7 +415,7 @@ void* cell_status_thread(void* arg){
 		// delete the ring buffer
 		dci_ring_buffer_delete(&(cell_status[i]));
 	}
-	
+
 	fclose(fd);
 	//fclose(fd_log);
 	//fclose(fd_tti);

@@ -33,7 +33,6 @@ typedef struct{
 
 typedef struct{
     int                 nof_rf_dev;
-    int                 rnti;
     int                 remote_enable;
 	int 				decode_single_ue;
 	int 				decode_SIB;
@@ -82,7 +81,6 @@ typedef struct{
 /* Top-level keys, written to ngscope_config_t */
 #define NGSCOPE_TOP_LEVEL_KEYS(X)                                                          \
     X(INT,    "nof_rf_dev",        nof_rf_dev,         1,      false)                      \
-    X(INT,    "rnti",              rnti,               0,      true)                       \
     X(BOOL,   "remote_enable",     remote_enable,      false,  false)                      \
     X(BOOL,   "decode_single_ue",  decode_single_ue,   false,  false)                      \
     X(BOOL,   "decode_SIB",        decode_SIB,         false,  false)                      \
