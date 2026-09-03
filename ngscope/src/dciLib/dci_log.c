@@ -395,8 +395,8 @@ void log_phich_subframe(sf_status_t* q, FILE* fd_phich){
 
 				// PHICH
 				fprintf(fd_phich,"\"rv\": \"%d\",\n", q->ul_msg[i].tb[0].rv);
-				fprintf(fd_phich,"\"timestamp_us\": \"%ld\"\n", q->timestamp_us);
-				fprintf(fd_phich,"\"collection_time\": \"%ld\",\n",q->collection_time);
+				fprintf(fd_phich,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+				fprintf(fd_phich,"\"collection_time\": \"%ld\"\n",q->collection_time);
 				fprintf(fd_phich,"}");
 				if (isFirstCall == true){
 					isFirstCall = false;
