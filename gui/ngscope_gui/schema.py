@@ -15,10 +15,18 @@ load_config.h -- no widget code to touch.
 [[rf_config]] array (load_config_toml.c:174-183), and emitting the key would be ignored at
 best and misleading at worst.
 
-A field may carry `replay_only`: the C side ANDs that setting with `mode == REPLAY`
-(task_scheduler.c), so it does nothing for a live run. The frontend disables such fields
-unless some cell is replaying, which makes the constraint visible instead of leaving the
-user to wonder why the setting had no effect.
+Two markers express settings that are not the user's to make in a given mode. Both hide the
+control and emit a fixed value, so nobody has to set something back after switching modes:
+
+* `replay_only` -- the C side refuses or ignores it outside `mode == REPLAY`. Hidden while no
+  cell is replaying, and `config_io` emits the schema default instead of whatever the user
+  last chose, which stays in GUI state and returns when they switch back.
+* `mode_locked` -- `{mode: value}`. In that mode the setting has exactly one valid value, so
+  the form should not offer a choice. `nof_rx_ant` in Record is the case: the IQ recorder
+  writes channel 0 only, and ngscope refuses anything else outright (load_config.c).
+
+Both exist because a rejected config is a bad way to learn about a constraint, especially
+for a control the form did not show.
 """
 
 # Compile-time limits from ngscope/hdr/dciLib/ngscope_def.h
@@ -91,8 +99,12 @@ TOP_LEVEL = [
         "place stays unknown. Also turns on the coverage reporting at teardown -- how many "
         "UEs were tracked, why each left the tracked set, and what became of every DL-DCCH "
         "SDU -- which is what makes the detection rate readable as a property of the cell "
-        "rather than of the receiver. In Replay mode it also unlocks the two decode aids below; "
-        "neither is safe live, where the scheduler discards subframes.",
+        "rather than of the receiver. Implies MAC pcap: ngscope writes each tracked UE's "
+        "transport blocks to mac-<rf>.pcapng and makes no claim about their contents. "
+        "tools/security_scan.py dissects that capture with Wireshark -- which reassembles "
+        "RLC and reads NAS, neither of which ngscope ever did -- and writes security_events "
+        "/ security_sessions / security_summary beside the run.",
+        replay_only=True,
     ),
     _f(
         "rach_filter_only", "bool", False, "RACH filter only",
@@ -110,17 +122,6 @@ TOP_LEVEL = [
         "Per-file size cap in MB; 0 is unlimited. A busy 20 MHz cell can produce around a "
         "gigabyte a minute.",
         min=0,
-    ),
-    _f(
-        "rlc_reassembly", "bool", True, "Rejoin split RRC",
-        "Rejoin an RRC message the eNB split across several grants, so a SecurityModeCommand "
-        "that did not fit one transport block is still read. Replay only: it holds a partial "
-        "SDU until the rest arrives, which is sound only where no subframe goes missing. Live "
-        "capture discards subframes when every decoder is busy, and a discarded middle segment "
-        "would leave a partial that never completes -- indistinguishable from a UE that never "
-        "reached security. How much it matters is very cell-dependent: 8 of 41 DL-DCCH SDUs "
-        "needed rejoining on one AT&T capture, 2 of 325 on another.",
-        replay_only=True,
     ),
     _f(
         "qam_retry", "bool", True, "Test the MCS→TBS table",
@@ -179,6 +180,9 @@ RF_DEV = [
         "two daughterboards). No help on a 4-port cell, where srsRAN cannot predecode spatial "
         "multiplexing at all.",
         min=1, max=4,
+        # The recorder writes channel 0 only and rx_frame_header_t has no channel count, so
+        # ngscope refuses nof_rx_ant > 1 with mode=1 rather than silently losing a channel.
+        mode_locked={MODE_RECORD: 1},
     ),
     _f(
         "mode", "mode", MODE_NORMAL, "Mode",
