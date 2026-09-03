@@ -301,10 +301,25 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
         config->decode_RAR = true;
     }
 
-    /* rlc_reassembly and qam_retry are replay-only by construction (task_scheduler.c ANDs them
-     * with mode == REPLAY), so say so rather than letting a live run look as though it had
-     * them. Not an error: they default on, so every live config would otherwise trip it. */
-    if (config->rlc_reassembly || config->qam_retry) {
+    /* Detection is offline now: ngscope decodes each tracked UE's transport blocks into the
+     * MAC pcapng and makes no claim about what they contain. tools/security_scan.py reads
+     * that pcapng. So the setting is worthless without a pcap to write into -- it would pay
+     * for a second PDSCH decode per grant and discard the result. */
+    if (config->mark_security_phase && !config->pcap_mac) {
+        printf("config: WARNING: mark_security_phase decodes each tracked UE's transport "
+               "blocks so they reach mac-<rf>.pcapng, which is what tools/security_scan.py "
+               "reads; with pcap_mac off the decode would be thrown away. Forcing pcap_mac "
+               "on.\n");
+        config->pcap_mac = true;
+    }
+
+    /* mark_security_phase is replay-only. Without in-process parsing a UE never leaves the
+     * tracked set early, so every one is scanned for the full window -- in replay that is
+     * only wall time, because the scheduler blocks on a busy decoder, but live capture
+     * discards subframes instead and the extra work would turn into silent loss. Refused
+     * rather than warned about: a live run would produce a pcap that looks analysable and a
+     * detection rate quietly biased by dropped subframes. */
+    if (config->mark_security_phase) {
         bool any_replay = false;
         for (int i = 0; i < config->nof_rf_dev; i++) {
             if (config->rf_config[i].mode == REPLAY) {
@@ -313,8 +328,28 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
             }
         }
         if (!any_replay) {
-            printf("config: note: rlc_reassembly and qam_retry apply to replay only; no "
-                   "rf_config is in mode=2, so both are inert this run\n");
+            printf("config: ERROR: mark_security_phase requires a replay (mode=2) rf_config. "
+                   "Detection runs offline over the pcapng, and scanning every tracked UE for "
+                   "the full window costs decode time that live capture pays for in dropped "
+                   "subframes. Record first, then replay.\n");
+            nof_missing_required++;
+        }
+    }
+
+    /* qam_retry is replay-only by construction (task_scheduler.c ANDs it with
+     * mode == REPLAY), so say so rather than letting a live run look as though it had it.
+     * Not an error: it defaults on, so every live config would otherwise trip it. */
+    if (config->qam_retry) {
+        bool any_replay = false;
+        for (int i = 0; i < config->nof_rf_dev; i++) {
+            if (config->rf_config[i].mode == REPLAY) {
+                any_replay = true;
+                break;
+            }
+        }
+        if (!any_replay) {
+            printf("config: note: qam_retry applies to replay only; no rf_config is in "
+                   "mode=2, so it is inert this run\n");
         }
     }
 

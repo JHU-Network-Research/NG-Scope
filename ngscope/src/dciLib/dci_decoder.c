@@ -606,24 +606,13 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
 									rf_idx, tti, dci_per_sub->timestamp,
 									dci_per_sub->collection_time,
-									dci_decoder->prog_args.out_path, sec_scan_cap);
+									sec_scan_cap);
 		}
 
-		// Stamp every message with where it sits relative to its UE's security context.
-		// Broadcast RNTIs and any UE we could not place both come out UNKNOWN -- the
-		// boundary is only ever set by an observed SecurityModeCommand.
-		if (dci_decoder->prog_args.mark_security_phase) {
-			for (int i = 0; i < dci_per_sub->nof_dl_dci; i++) {
-				dci_per_sub->dl_msg[i].sec_phase =
-					(uint8_t)ngscope_sec_phase(rf_idx, dci_per_sub->dl_msg[i].rnti,
-												dci_per_sub->timestamp);
-			}
-			for (int i = 0; i < dci_per_sub->nof_ul_dci; i++) {
-				dci_per_sub->ul_msg[i].sec_phase =
-					(uint8_t)ngscope_sec_phase(rf_idx, dci_per_sub->ul_msg[i].rnti,
-												dci_per_sub->timestamp);
-			}
-		}
+		// sec_phase is no longer stamped here. Nothing in this process knows a UE's
+		// security state any more, so every record leaves as NGSCOPE_SEC_UNKNOWN (0) and
+		// tools/security_phase_join.py fills it in from the offline scan. The field stays
+		// in ngscope_dci_msg_t because it is part of the remote-sink wire struct.
 
 		// Restrict the reported DCIs to RNTIs that were seen completing RACH. Applied after
 		// the debug CSV is written, so that file stays a complete record of what the decoder

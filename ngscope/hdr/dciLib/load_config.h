@@ -44,10 +44,8 @@ typedef struct{
 	int 				enable_256qam;
 	int 				pcap_mac;
 	int 				pcap_max_mb;
-	/* Replay-only decode aids. Both are inert in live capture -- see security_rrc.h for why
-	 * holding partial RLC state, or spending a second PDSCH decode, is only sound where the
-	 * scheduler blocks on a busy decoder instead of discarding the subframe. */
-	int 				rlc_reassembly;
+	/* Replay-only decode aid: inert in live capture, where spending a second PDSCH decode
+	 * per failure would be paid for in discarded subframes. See security_rrc.h. */
 	int 				qam_retry;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
@@ -93,7 +91,6 @@ typedef struct{
     X(BOOL,   "enable_256qam",     enable_256qam,      true,   false)                      \
     X(BOOL,   "pcap_mac",          pcap_mac,           false,  false)                      \
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
-    X(BOOL,   "rlc_reassembly",    rlc_reassembly,     true,   false)                      \
     X(BOOL,   "qam_retry",         qam_retry,          true,   false)
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */

@@ -19,19 +19,6 @@ extern "C" {
 #define NGSCOPE_SEC_SCAN_CAP_LIVE 128
 #define NGSCOPE_SEC_SCAN_CAP_REPLAY 512
 
-/* Rejoin DL-DCCH SDUs that the eNB split across several RLC PDUs, so a SecurityModeCommand
- * that did not fit one grant is still read. Off unless this is called.
- *
- * Replay only, deliberately. Reassembly means holding a partial SDU until its remaining
- * segments arrive, and that is only sound where nothing goes missing: replay blocks on a
- * busy decoder and therefore sees every subframe, whereas live capture discards them
- * (task_scheduler.c, find_idle_decoder). A discarded middle segment leaves a partial SDU
- * that never completes -- indistinguishable, in the output, from a UE that never reached
- * security, which is exactly the confusion this measurement exists to avoid.
- *
- * Set before any decoder thread starts. */
-void ngscope_sec_rrc_set_reassembly(int rf_idx, bool enable);
-
 /* When a transport block fails its CRC, rebuild the grant on the other MCS->TBS table and try
  * once more, keeping whichever passes. Off unless this is called.
  *
@@ -47,24 +34,23 @@ void ngscope_sec_rrc_set_reassembly(int rf_idx, bool enable);
  * spending CPU there is lossless. Set before any decoder thread starts. */
 void ngscope_sec_rrc_set_qam_retry(int rf_idx, bool enable);
 
-/* Account for partial SDUs still held at teardown. Each one is an RRC message that was
- * observed and never read, so it is counted as lost rather than forgotten. Call once per
- * device, before ngscope_sec_report(). */
-void ngscope_sec_rrc_reasm_flush(void);
-
-/* For each RNTI currently anchored by a RAR and not yet past the security boundary, try to
- * decode its downlink transport block in this subframe and unpack the RRC inside it.
+/* For each RNTI currently anchored by a RAR, decode its downlink transport block in this
+ * subframe and write it to the MAC pcapng. Nothing here parses the payload.
  *
  * Everything needed is already known: the DCI search is targeted, so the PDCCH CRC is
  * checked against the RNTI rather than recovered from it, and the transport-block CRC then
  * confirms the grant. A decode that survives both is not a false positive.
+ *
+ * What the bytes mean is decided offline by tools/security_scan.py, which dissects the
+ * pcapng with Wireshark. That is why this function no longer takes an out_path: it writes
+ * no logs and reaches no conclusions.
  *
  * scan_cap bounds how many tracked UEs are attempted this subframe; 0 means the built-in
  * maximum. Live capture wants it low, because overspending here makes the scheduler discard
  * whole subframes; replay wants it high, because replay blocks rather than dropping and so
  * stays lossless however slow it runs.
  *
- * Returns the number of RNTIs for which RRC was successfully unpacked. */
+ * Returns the number of transport blocks written to the pcap. */
 int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               srsran_dl_sf_cfg_t* sf,
                               srsran_ue_dl_cfg_t* cfg,
@@ -74,7 +60,6 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               uint32_t            tti,
                               uint64_t            ts_us,
                               uint64_t            collection_time,
-                              const char*         out_path,
                               int                 scan_cap);
 
 #ifdef __cplusplus

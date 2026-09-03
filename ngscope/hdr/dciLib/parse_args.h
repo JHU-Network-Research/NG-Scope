@@ -59,7 +59,6 @@ typedef struct {
   int 	   mark_security_phase;
   int 	   pcap_mac;
   int 	   pcap_max_mb;
-  int 	   rlc_reassembly;
   int 	   qam_retry;
 
   float    rf_gain;
