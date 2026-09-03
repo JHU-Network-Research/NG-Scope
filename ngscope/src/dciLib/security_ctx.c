@@ -34,6 +34,9 @@ typedef struct {
     /* Latest successfully decoded unciphered RRC message. Anything up to here is provably
      * pre-security even when the SMC itself is never decoded. */
     uint64_t last_clear_us;
+
+    /* This UE resumed a context it already had, so it will never show a boundary. */
+    bool     reused_ctx;
 } sec_rnti_t;
 
 /* Cap on UEs tracked concurrently. Only a backstop against a pathological cell, so it must
@@ -88,6 +91,11 @@ typedef struct {
     uint64_t   nof_tb_decoded;
     uint64_t   nof_tb_retried;
     uint64_t   nof_tb_retry_tried;
+
+    /* UEs that resumed an existing AS context, by kind. Kept apart from the boundary count
+     * because they are not failures to reach security -- they are proof of having reached it
+     * previously, on a connection this capture did not see. */
+    uint64_t   nof_reuse[NGSCOPE_REUSE_NOF_KINDS];
 } sec_ctx_t;
 
 static sec_ctx_t       sec_ctx[MAX_NOF_RF_DEV];
@@ -270,6 +278,66 @@ static void sec_log_write(const char* out_path,
             (smc_ct > rar_ct) ? (double)(smc_ct - rar_ct) / 1000.0
                               : (double)(smc_us - rar_us) / 1000.0);
     fclose(f);
+}
+
+/* <out_path>/security_reuse-<rf_idx>.csv -- one row per UE observed resuming a context.
+ *
+ * A sibling of security_log rather than a column in it: that file is one row per observed
+ * boundary, and a reusing UE has no boundary. Adding rows there would change what it means
+ * and break the joins built on it. */
+static void reuse_log_write(const char* out_path, int rf_idx, uint16_t rnti,
+                            ngscope_reuse_kind_t kind, uint32_t tti, uint64_t ts_us,
+                            uint64_t collection_time)
+{
+    if (out_path == NULL) {
+        return;
+    }
+    char path[1024];
+    snprintf(path, sizeof(path), "%ssecurity_reuse-%d.csv", out_path, rf_idx);
+
+    bool  fresh = access(path, F_OK) != 0;
+    FILE* f     = fopen(path, "a");
+    if (f == NULL) {
+        return;
+    }
+    if (fresh) {
+        fprintf(f, "rnti,kind,tti,timestamp,collection_time\n");
+    }
+    fprintf(f, "%u,%s,%u,%" PRIu64 ",%" PRIu64 "\n",
+            rnti,
+            (kind == NGSCOPE_REUSE_RESUME) ? "resume" : "reestablish",
+            tti, ts_us, collection_time);
+    fclose(f);
+}
+
+void ngscope_sec_note_ctx_reuse(int rf_idx, uint16_t rnti, ngscope_reuse_kind_t kind,
+                                uint32_t tti, uint64_t ts_us, uint64_t collection_time,
+                                const char* out_path)
+{
+    if (!rf_idx_valid(rf_idx) || !ngscope_sec_is_unicast(rnti) ||
+        kind < 0 || kind >= NGSCOPE_REUSE_NOF_KINDS) {
+        return;
+    }
+    sec_ctx_t* q = &sec_ctx[rf_idx];
+
+    bool first = false;
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    /* Only counted for a UE the tracker actually anchored, so the figure stays comparable
+     * with the anchored total it is subtracted from. */
+    if (q->rnti[rnti].anchored && !q->rnti[rnti].reused_ctx) {
+        q->rnti[rnti].reused_ctx = true;
+        q->nof_reuse[kind]++;
+        first = true;
+    }
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+
+    if (first) {
+        printf("SECURITY: TTI=%d rnti=%d %s -- resumed an existing AS context, so no "
+               "SecurityModeCommand will follow\n",
+               tti, rnti,
+               (kind == NGSCOPE_REUSE_RESUME) ? "RRCConnectionResume" : "RRCConnectionReestablishment");
+        reuse_log_write(out_path, rf_idx, rnti, kind, tti, ts_us, collection_time);
+    }
 }
 
 void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
@@ -475,12 +543,16 @@ void ngscope_sec_report(int rf_idx)
     sec_ctx_t* q = &sec_ctx[rf_idx];
 
     pthread_mutex_lock(&sec_mutex[rf_idx]);
-    int anchored = 0, bounded = 0;
+    int anchored = 0, bounded = 0, reuse_no_smc = 0;
     for (int rnti = 1; rnti < 65536; rnti++) {
         if (q->rnti[rnti].anchored) {
             anchored++;
             if (q->rnti[rnti].have_smc) {
                 bounded++;
+            } else if (q->rnti[rnti].reused_ctx) {
+                /* Resumed a context it already held: it was never going to show a boundary,
+                 * so counting it as a failure to reach security is simply wrong. */
+                reuse_no_smc++;
             }
         }
     }
@@ -495,6 +567,26 @@ void ngscope_sec_report(int rf_idx)
            q->nof_attempt ? 100.0 * q->nof_pdsch_ok / q->nof_attempt : 0.0,
            (unsigned long long)q->nof_rrc_ok,
            q->nof_attempt ? 100.0 * q->nof_rrc_ok / q->nof_attempt : 0.0);
+
+    /* UEs that resumed an existing AS context never send a SecurityModeCommand, so they do
+     * not belong in the denominator. Reported rather than silently subtracted: the raw ratio
+     * is what earlier captures were quoted with, and the correction has to be auditable. */
+    if (q->nof_reuse[NGSCOPE_REUSE_REESTABLISH] || q->nof_reuse[NGSCOPE_REUSE_RESUME]) {
+        const int eligible = anchored - reuse_no_smc;
+        const unsigned long long reest = q->nof_reuse[NGSCOPE_REUSE_REESTABLISH];
+        const unsigned long long res   = q->nof_reuse[NGSCOPE_REUSE_RESUME];
+        printf("SECURITY (cell %d): context reuse -- %llu re-establishment, %llu resume. "
+               "%d of those %llu never showed a boundary and cannot; excluding them, "
+               "%d of %d (%.1f%%)\n",
+               rf_idx,
+               reest,
+               res,
+               reuse_no_smc,
+               reest + res,
+               bounded,
+               eligible,
+               eligible > 0 ? 100.0 * bounded / eligible : 0.0);
+    }
 
     /* Coverage. A UE dropped by either of these is indistinguishable in the output from one
      * that genuinely never reached security, so the detection rate above can only be read as

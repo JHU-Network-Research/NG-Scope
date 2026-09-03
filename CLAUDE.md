@@ -116,6 +116,13 @@ indistinguishable in the output from a UE that never reached security — which 
 the detector is trying to measure. Every such path is counted and reported at teardown. **If you
 add a path that can drop a tracked UE, add a counter with it.**
 
+**Some UEs can never show a boundary.** `RRCConnectionReestablishment` (DL-CCCH) and
+`RRCConnectionResume-r13` (DL-DCCH) restore a stored `K_eNB`, so no SecurityModeCommand
+follows. They are recorded in `security_reuse-<rf>.csv` and excluded from the denominator in a
+separate teardown line — never silently. Reaching either is *positive* evidence of a real prior
+context, so counting them as failures is backwards. Handover-in is the same case but is not
+detectable from the target cell alone.
+
 **Zero boundaries must look like a measurement, not a missing file.** `security_log-<rf>.csv`
 is created with its header at startup (`ngscope_sec_log_init`), so empty means "measured, none
 found" — the positive result for catcher detection — and absent means "never measured". It used

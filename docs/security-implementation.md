@@ -336,6 +336,70 @@ and `ngscope_sec_tracked()` walks `nof_active`, not the array size. But high-wat
 512, and at 4096 the scan cap would bind first and lose the same information *without* the
 eviction counter firing. Raising the outer cap alone converts a loud failure into a quiet one.
 
+**Inferring the boundary from ciphered DCCH.** The idea: a UE whose DCCH parses in the clear
+and then stops parsing has had security activate, even if the SecurityModeCommand itself was
+never decoded — recoverable from the `ciphered/unparseable` bucket the DCCH accounting already
+counts. It sounds sound. It is not, and the reason is measurable.
+
+Calibrating against UEs whose boundary *is* known, post-boundary SDUs should be opaque and
+pre-boundary ones readable. They are not:
+
+| capture | `sec=pre` | `sec=post` |
+|---|---|---|
+| `att_trolley` | 273 parsed / 2 opaque (0.7%) | 48 parsed / 2 opaque (**4.0%**) |
+| `att_850_office` | 21 parsed / 0 opaque | 4 parsed / 1 opaque (20%) |
+
+**96% of post-security DCCH still parses**, so as a detector of "security activated" this has
+about 4% sensitivity, against a 0.7% false-positive rate pointing the other way. Two reasons,
+both already known: EEA0 null ciphering leaves post-security traffic readable, and the boundary
+is early by construction — ciphering starts at `SecurityModeComplete`, which is uplink and
+invisible, so traffic just after the SMC is legitimately still clear.
+
+A third contaminant: the `ciphered/unparseable` bucket is not purely ciphertext. On
+`att_850_office` at least one of its four was a corrupt 7-byte SDU on a marginal decode
+(EVM > 1) that Wireshark read as a SecurityModeCommand and srsRAN's ASN.1 rejected. So even the
+small opaque population is mixed.
+
+**Payload entropy instead of parse failure** is the obvious next idea, and it fails the same way
+for sharper reasons. Raw, it looks convincing:
+
+```
+sec=pre    n=274  median len   8 B  median entropy 3.00 bits/byte
+sec=post   n= 50  median len 136 B  median entropy 6.66 bits/byte
+```
+
+But entropy is bounded by log2(length) and the two populations are entirely different sizes.
+Length-matching removes the effect completely — on the only length both phases share, 8 bytes,
+pre is 3.00 and post is 3.00.
+
+It cannot work at either end of the size range, and both failures are structural:
+
+- **Short SDUs are floored by the MAC-I.** An 8-byte SRB SDU is 1 byte PDCP + 3 bytes RRC +
+  4 bytes MAC-I, and the MAC-I is an integrity tag — high entropy whether or not the payload is
+  ciphered. With 7–9 distinct bytes the ceiling is 2.81–3.17 bits/byte, and plaintext
+  SecurityModeCommands already sit at 3.00, pinned against it. There is no headroom for
+  ciphering to move into.
+- **Long payloads are ceilinged by PER.** Of the post-boundary payloads ≥ 32 bytes, 46 of 48
+  parse as readable RRC at 6.67–7.20 bits/byte. ASN.1 PER is densely packed, and near-optimal
+  coding is near-maximal entropy by definition, so plaintext RRC is indistinguishable from
+  ciphertext by this measure.
+
+So low entropy does not imply plaintext and high entropy does not imply ciphertext, and both
+error directions are populated in the captures here.
+
+Note the *original* objection to this class of inference — that the in-stream label goes wrong
+when decoder threads run out of order (see `ngscope_sec_phase()`) — is surmountable, because an
+offline inference in the join sees everything in order. It is the premise that fails, which is
+the stronger reason.
+
+**If you revisit this, run the calibration before the detector.** Cross-tabulate DCCH payloads
+by joined phase against whether they parse, on a capture where you have boundaries. Every
+variant of this idea assumes post-boundary traffic is opaque; on the cells measured here it is
+readable 96% of the time, and no statistic can detect encryption that is not present. A cell
+that genuinely ciphers its DCCH would change that, and entropy would then be the better
+discriminator of the two, because unlike parse failure it does not conflate ciphertext with
+corrupt or unsupported decodes.
+
 **Multi-channel IQ recording.** Needs a format version bump so old files are not misparsed.
 Currently refused rather than silently wrong.
 
@@ -383,6 +447,47 @@ gap, not a physical limit — 4-port spatial multiplexing is decodable in princi
 - **The correlation gate is still commented out** (`ue_dl.c`, `JH CORR_FILTER`). `73db5f8`
   replaced it with the RACH filter; now that the filter is optional, blind mode has no
   false-positive gate at all.
+- **NAS is never parsed**, and two signals sit unused behind that. Both are measured below and
+  neither is built: each needs a NAS layer ngscope does not currently have, and on the captures
+  here each is worth around 1% of the denominator. Recorded so the numbers do not have to be
+  rediscovered, and so the decision is revisitable on a cell where they are larger.
+
+  **Rejects would shrink the denominator.** A NAS `Attach reject` or `Tracking area update
+  reject` means the network refused the UE, so it was never going to reach AS security — the
+  same argument as context reuse (§4), and it belongs in the same teardown line. Counted per UE
+  on `lte-rrc`/`nas-eps` field filters, never `_ws.col.Info`:
+
+  | capture | RARs | SMCs | UEs carrying NAS | rejected, no SMC |
+  |---|---|---|---|---|
+  | `att_trolley` | 692 | 271 | 11 | **8** (1.2%) |
+  | `att_850_office` | 68 | 21 | 1 | 1 |
+  | `verizon_66636` | 96 | 52 | 0 | 0 |
+  | `mt_airy02/5330` | 97 | 10 | 1 | 0 |
+
+  On the trolley that moves 39.2% to 39.7%. Note `Authentication request` points the other way:
+  those two UEs got *further* than most, so a missing SMC there is a coverage failure rather
+  than a property of the cell. The EMM type field returns **hex** (`0x44` attach reject, `0x4b`
+  TAU reject, `0x52` authentication request, `0x5d` NAS security mode command) — a decimal map
+  silently reports zero rejects everywhere.
+
+  **NAS states its own security, in the clear.** Unlike RRC, every NAS message carries a
+  `security_header_type` octet that is never ciphered (24.301), so nothing has to be inferred:
+
+  ```
+  trolley   Plain, not security protected      126  (90.6%)
+            Integrity protected AND CIPHERED    12  ( 8.6%)
+            Integrity protected, new context     1  ( 0.7%)
+  ```
+
+  The declaration matches the observable — the EMM type is unreadable on exactly the ciphered
+  ones. **This is why the §6 entropy and parse-failure findings do not transfer to NAS**: there
+  is no length confound, no MAC-I floor, and unlike the AS side the ciphering demonstrably does
+  engage. A UE whose NAS goes ciphered has provably completed NAS authentication and NAS SMC
+  with the **core network**, which a fake base station cannot fake.
+
+  It is not a route to the AS boundary, though: NAS security is a separate context, separate
+  keys, separate peer. It is independent evidence about a UE, not a substitute for the
+  SecurityModeCommand.
 
 ---
 

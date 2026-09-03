@@ -44,6 +44,26 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
  * preceded security activation, even if the SecurityModeCommand itself is never seen. */
 void ngscope_sec_note_unciphered_rrc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us);
 
+/* An RRC procedure that resumes an AS security context the UE already held, rather than
+ * establishing a new one.
+ *
+ * Both re-establishment (DL-CCCH, after radio link or handover failure) and resume (DL-DCCH,
+ * Rel-13 suspend/resume) restore a stored K_eNB instead of deriving a fresh one, so **no
+ * SecurityModeCommand is ever sent**. Such a UE would otherwise sit in the denominator as a
+ * failure, when in fact it is the opposite: reaching this point means it presented credentials
+ * derived from a real prior context, which a fake base station cannot manufacture.
+ *
+ * Recorded so the rate can be quoted against the UEs that could have shown a boundary. */
+typedef enum {
+    NGSCOPE_REUSE_REESTABLISH = 0,   /* RRCConnectionReestablishment */
+    NGSCOPE_REUSE_RESUME,            /* RRCConnectionResume-r13 */
+    NGSCOPE_REUSE_NOF_KINDS
+} ngscope_reuse_kind_t;
+
+void ngscope_sec_note_ctx_reuse(int rf_idx, uint16_t rnti, ngscope_reuse_kind_t kind,
+                                uint32_t tti, uint64_t ts_us, uint64_t collection_time,
+                                const char* out_path);
+
 /* The SecurityModeCommand: the boundary itself. */
 void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
                           uint64_t collection_time, const char* out_path);

@@ -46,11 +46,20 @@ extern bool debug;
 #define SEC_PDCP_SRB_HDR_LEN 1
 #define SEC_PDCP_SRB_MAC_I_LEN 4
 
+/* When something happened, in both clocks the rest of the tool carries: the radio-domain
+ * collection_time alongside the host wall clock taken at decode. */
+typedef struct {
+  uint32_t tti;
+  uint64_t ts_us;
+  uint64_t ct;
+} sec_when_t;
+
 /* Unpack a DL-CCCH message (SRB0, RLC-TM, no PDCP), i.e. Msg4. Returns true if it decoded.
  *
  * Anything that unpacks here is by definition pre-security: SRB0 is never ciphered, and
  * the connection is not even set up yet. */
-static bool unpack_ccch(uint8_t* sdu, uint32_t len, uint16_t rnti, uint32_t tti)
+static bool unpack_ccch(uint8_t* sdu, uint32_t len, int rf_idx, uint16_t rnti,
+                        const sec_when_t* now, const char* out_path)
 {
   asn1::cbit_ref             bref(sdu, len);
   asn1::rrc::dl_ccch_msg_s   msg;
@@ -61,8 +70,20 @@ static bool unpack_ccch(uint8_t* sdu, uint32_t len, uint16_t rnti, uint32_t tti)
   if (msg.msg.type().value != asn1::rrc::dl_ccch_msg_type_c::types_opts::c1) {
     return false;
   }
+
+  /* RRCConnectionReestablishment travels on SRB0, so it arrives here rather than on the
+   * DCCH with the other procedures. It restores a stored K_eNB, so this UE will never show
+   * a SecurityModeCommand -- and getting this far means the network accepted a shortMAC-I
+   * derived from a context it genuinely held. */
+  using ccch_types = asn1::rrc::dl_ccch_msg_type_c::c1_c_::types_opts;
+  if (msg.msg.c1().type().value == ccch_types::rrc_conn_reest) {
+    ngscope_sec_note_ctx_reuse(rf_idx, rnti, NGSCOPE_REUSE_REESTABLISH,
+                               now->tti, now->ts_us, now->ct, out_path);
+  }
+
   if (debug) {
-    printf("DEBUG: TTI=%d rnti=%d DL-CCCH %s\n", tti, rnti, msg.msg.c1().type().to_string());
+    printf("DEBUG: TTI=%d rnti=%d DL-CCCH %s\n", now->tti, rnti,
+           msg.msg.c1().type().to_string());
   }
   return true;
 }
@@ -82,14 +103,6 @@ static bool unpack_ccch(uint8_t* sdu, uint32_t len, uint16_t rnti, uint32_t tti)
 #define SEC_REASM_MAX_LEN  (SEC_REASM_MAX_SEG * SEC_REASM_SEG_LEN)
 #define SEC_REASM_SN_MOD   1024  /* the AM sequence number is 10 bits */
 #define SEC_REASM_MAX_LI   15    /* length indicators in one PDU */
-
-/* When something happened, in both clocks the rest of the tool carries: the radio-domain
- * collection_time alongside the host wall clock taken at decode. */
-typedef struct {
-  uint32_t tti;
-  uint64_t ts_us;
-  uint64_t ct;
-} sec_when_t;
 
 /* What one PDU contributes to SDUs that span PDU boundaries.
  *
@@ -380,6 +393,7 @@ static bool unpack_dcch_sdu(const uint8_t* sdu,
                             uint16_t       rnti,
                             uint32_t       tti,
                             bool*          is_smc,
+                            bool*          is_resume,
                             bool           reassembled)
 {
   if (len < SEC_PDCP_SRB_HDR_LEN + SEC_PDCP_SRB_MAC_I_LEN + 1) {
@@ -400,6 +414,10 @@ static bool unpack_dcch_sdu(const uint8_t* sdu,
   using c1_types = asn1::rrc::dl_dcch_msg_type_c::c1_c_::types_opts;
   if (msg.msg.c1().type().value == c1_types::security_mode_cmd) {
     *is_smc = true;
+  } else if (msg.msg.c1().type().value == c1_types::rrc_conn_resume_r13) {
+    /* Rel-13 suspend/resume: the AS context was stored at suspend and is restored here, so
+     * no SecurityModeCommand follows. Same reasoning as re-establishment above. */
+    *is_resume = true;
   }
   ngscope_sec_count_dcch(rf_idx, reassembled ? NGSCOPE_DCCH_REASSEMBLED : NGSCOPE_DCCH_OK);
   if (debug) {
@@ -469,7 +487,8 @@ static bool unpack_dcch(const uint8_t*    pdu,
                         uint8_t           lcid,
                         const sec_when_t* now,
                         bool*             is_smc,
-                        sec_when_t*       smc_when)
+                        sec_when_t*       smc_when,
+                        bool*             is_resume)
 {
   if (len < 2) {
     ngscope_sec_count_dcch(rf_idx, NGSCOPE_DCCH_SHORT);
@@ -561,7 +580,7 @@ static bool unpack_dcch(const uint8_t*    pdu,
       continue;
     }
     bool smc = false;
-    if (unpack_dcch_sdu(piece[i], piece_len[i], rf_idx, rnti, now->tti, &smc, false)) {
+    if (unpack_dcch_sdu(piece[i], piece_len[i], rf_idx, rnti, now->tti, &smc, is_resume, false)) {
       any = true;
       if (smc) {
         *is_smc   = true;
@@ -626,7 +645,7 @@ static bool unpack_dcch(const uint8_t*    pdu,
   }
 
   bool smc = false;
-  if (unpack_dcch_sdu(full, full_len, rf_idx, rnti, last.tti, &smc, true)) {
+  if (unpack_dcch_sdu(full, full_len, rf_idx, rnti, last.tti, &smc, is_resume, true)) {
     any = true;
     if (smc) {
       *is_smc   = true;
@@ -643,7 +662,9 @@ static bool scan_mac_pdu(uint8_t*          payload,
                          uint16_t          rnti,
                          const sec_when_t* now,
                          bool*             is_smc,
-                         sec_when_t*       smc_when)
+                         sec_when_t*       smc_when,
+                         bool*             is_resume,
+                         const char*       out_path)
 {
   /* Unless a reassembly says otherwise, the message belongs to the subframe being scanned. */
   *smc_when = *now;
@@ -668,9 +689,9 @@ static bool scan_mac_pdu(uint8_t*          payload,
     }
 
     if (lcid == SEC_LCID_CCCH) {
-      any |= unpack_ccch(sdu, len, rnti, now->tti);
+      any |= unpack_ccch(sdu, len, rf_idx, rnti, now, out_path);
     } else if (lcid == SEC_LCID_SRB1 || lcid == SEC_LCID_SRB2) {
-      if (unpack_dcch(sdu, len, rf_idx, rnti, (uint8_t)lcid, now, is_smc, smc_when)) {
+      if (unpack_dcch(sdu, len, rf_idx, rnti, (uint8_t)lcid, now, is_smc, smc_when, is_resume)) {
         any = true;
       }
     }
@@ -768,9 +789,10 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         continue;   /* no buildable grant: not an attempt */
       }
 
-      bool pdsch_ok = false;
-      bool rrc_ok   = false;
-      bool is_smc   = false;
+      bool pdsch_ok  = false;
+      bool rrc_ok    = false;
+      bool is_smc    = false;
+      bool is_resume = false;
 
       /* Where this subframe sits in both clocks, and where the SecurityModeCommand sits if
        * one turns up. They differ only when a reassembly places the message in an earlier
@@ -810,7 +832,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
           ngscope_mac_pcap_write(&cap);
 
           rrc_ok   = scan_mac_pdu(pdsch_res[0].payload, (uint32_t)tbs / 8, rf_idx, rnti, &now,
-                                  &is_smc, &smc_when);
+                                  &is_smc, &smc_when, &is_resume, out_path);
         }
       }
 
@@ -822,6 +844,10 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         ngscope_sec_note_unciphered_rrc(rf_idx, rnti, tti, ts_us);
         if (is_smc) {
           ngscope_sec_note_smc(rf_idx, rnti, smc_when.tti, smc_when.ts_us, smc_when.ct, out_path);
+        }
+        if (is_resume) {
+          ngscope_sec_note_ctx_reuse(rf_idx, rnti, NGSCOPE_REUSE_RESUME, tti, ts_us,
+                                     collection_time, out_path);
         }
       }
     }

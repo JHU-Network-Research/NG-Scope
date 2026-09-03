@@ -41,6 +41,36 @@ subsets; each is an independent observation of the same population.
 
 **The headline ratio is 424/1318 = 32.2%.**
 
+### UEs that could never have shown a boundary
+
+Not every UE in the denominator was ever going to produce a SecurityModeCommand. Two RRC
+procedures restore a stored `K_eNB` instead of deriving a fresh one, and neither is followed by
+an SMC:
+
+| procedure | channel | why no SMC |
+|---|---|---|
+| `RRCConnectionReestablishment` | DL-CCCH (SRB0) | the UE presented a `shortMAC-I` derived from its stored `K_RRCint` and the network accepted it |
+| `RRCConnectionResume-r13` | DL-DCCH | the context was stored at suspend and restored |
+
+Counting these as failures is not just imprecise, it is backwards: reaching either point is
+*positive* evidence that the UE held a real AS context with this network, which a fake base
+station cannot manufacture. NG-Scope records them and reports the corrected ratio:
+
+```
+SECURITY (cell 0): context reuse -- 2 re-establishment, 2 resume. 3 of those 4 never showed
+                   a boundary and cannot; excluding them, 271 of 689 (39.3%)
+```
+
+Reported rather than silently subtracted, because the raw ratio is what earlier captures were
+quoted with and the correction has to be auditable. On the trolley capture it moves the figure
+by 0.1 points — but on a cell with heavy radio-link failure, or a Rel-13 suspend/resume
+deployment, the same correction could be large, and without it you would read a healthy cell as
+a suspicious one.
+
+Handover-in is the third such case and is **not** detected: the target cell reuses via NH/NCC,
+but the command saying so is sent by the *source* cell, so from here it is indistinguishable
+from a failed attach.
+
 ### Which denominator to use
 
 `424/1318` mixes two very different things: UEs that genuinely never reached security, and
@@ -323,6 +353,7 @@ Outputs:
 
 | file | contents |
 |---|---|
+| `security_reuse-<rf>.csv` | one row per UE seen resuming an AS context it already held — `RRCConnectionReestablishment` or `RRCConnectionResume-r13`. These never send a SecurityModeCommand, so they do not belong in the denominator |
 | `security_log-<rf>.csv` | one row per observed boundary, both clocks, `rar_to_smc_ms`. **Created at startup**, so a header-only file means the run measured security and found none — which is the result of interest here — while an absent file means it never measured at all |
 | `security_phase.csv` | every DCI with its joined phase and derived deltas |
 | `dci_output_joined/` | the `.dciLog` files with corrected phases |
