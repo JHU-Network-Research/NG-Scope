@@ -50,6 +50,10 @@ from collections import Counter, defaultdict
 # to say what is inside. Same mapping documented in docs/pcap.md.
 DLT_OPT = 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""'
 
+# Ubuntu confines /usr/bin/tshark; this is the vendor-supported place to widen it, named
+# here only so a denial can say whether one already exists. See docs/pcap.md.
+LOCAL_AA_PROFILE = "/etc/apparmor.d/local/tshark"
+
 # The tracker's window (SEC_TRACK_WINDOW_US, security_ctx.c). Bounds what could possibly
 # have been *observed* for a UE, as distinct from what can be attributed to it.
 TRACK_WINDOW_US = 10 * 1000 * 1000
@@ -90,7 +94,10 @@ NAS_TYPES = {
 NAS_PROTECTED_HEADERS = {2, 4}
 
 TSHARK_FIELDS = [
-    "frame.number", "frame.comment",
+    # frame.protocols is what proves the DLT mapping took effect. Without it a capture
+    # that dissects as nothing is indistinguishable from one that dissects as MAC-LTE and
+    # contains no security indicators -- and the second is this tool's positive result.
+    "frame.number", "frame.comment", "frame.protocols",
     "mac-lte.rnti", "mac-lte.dlsch.lcid",
     "mac-lte.rar.rapid", "mac-lte.rar.temporary-crnti", "mac-lte.rar.ta",
     "nas-eps.nas_msg_emm_type", "nas-eps.security_header_type",
@@ -128,6 +135,123 @@ BROADCAST_RNTIS = {0, 0xFFFF, 0xFFFE}
 RARNTI_RANGE = range(1, 0x000B)
 
 
+class TsharkError(RuntimeError):
+    """tshark could not be used, or produced output that cannot be trusted.
+
+    `detail` holds extra lines the caller should print under the summary line. They exist
+    because both failures this carries look like something else: a sandbox denial looks
+    like a file-permission problem, and a missing DLT mapping looks like a clean scan.
+    """
+
+    def __init__(self, message, detail=None):
+        super().__init__(message)
+        self.detail = detail or []
+
+
+def _diagnose_read_denial(pcap):
+    """tshark reported a permission error. Return advice lines if the filesystem disagrees.
+
+    Returns None when the denial is an ordinary POSIX one, in which case tshark's own
+    message is accurate and there is nothing to add.
+    """
+    try:
+        if not os.access(pcap, os.R_OK):
+            return None
+        with open(pcap, "rb") as fh:
+            fh.read(1)
+    except OSError:
+        return None
+
+    lines = [
+        "This process CAN read that file -- open() on it just succeeded -- so the denial",
+        "is not coming from the filesystem, and `ls -l` will look fine. Something is",
+        "confining tshark itself.",
+    ]
+    if os.path.exists("/etc/apparmor.d/tshark"):
+        lines += [
+            "",
+            "/etc/apparmor.d/tshark exists, which is the Ubuntu AppArmor profile for",
+            "/usr/bin/tshark. Out of the box it grants read access to /tmp",
+            "(abstractions/user-tmp) and /usr/share/wireshark, and nothing under $HOME. Its",
+            "`file r /**.pcap{,ng}` rule is inside the nested dumpcap subprofile and does",
+            "not apply to `tshark -r`.",
+        ]
+        if os.path.exists(LOCAL_AA_PROFILE):
+            # Widened already, yet still denied -- so the rules do not cover THIS path.
+            # Saying "add an override" here would send the reader to a file they wrote.
+            lines += [
+                "",
+                f"{LOCAL_AA_PROFILE} already exists, so the profile has been widened before",
+                "and its rules do not cover this path. A common cause is an extension the",
+                "usual rule misses: `file r @{HOME}/**.pcap{,ng}{,.gz},` does not match a",
+                "capture named anything else. Current contents:",
+                "",
+            ]
+            try:
+                with open(LOCAL_AA_PROFILE) as fh:
+                    body = [ln.rstrip() for ln in fh.read().splitlines() if ln.strip()]
+                lines += [f"    {ln}" for ln in body[:12]]
+            except OSError as exc:
+                lines.append(f"    (could not be read: {exc})")
+            lines += ["", "Reload with: sudo apparmor_parser -r /etc/apparmor.d/tshark"]
+        else:
+            lines += [
+                "",
+                "The profile ends with `include if exists <local/tshark>`, which is the",
+                "supported place to widen it:",
+                "",
+                f"    sudo tee {LOCAL_AA_PROFILE} >/dev/null <<'EOF'",
+                "    file r @{HOME}/**.pcap{,ng}{,.gz},",
+                "    file r @{HOME}/.config/wireshark/{,**},",
+                "    EOF",
+                "    sudo apparmor_parser -r /etc/apparmor.d/tshark",
+            ]
+    else:
+        lines += [
+            "",
+            "Check for a sandbox around tshark: an AppArmor or SELinux profile, a snap or",
+            "flatpak build, or a container without this path mounted.",
+        ]
+    lines += [
+        "",
+        "Failing that, scan a copy under a path the confinement already allows (/tmp).",
+    ]
+    return lines
+
+
+def assert_dissected(rows, pcap):
+    """Every frame ngscope writes is a MAC PDU, so a scan where none dissect as mac-lte
+    means the DLT 147 mapping did not take effect -- not that the cell was quiet.
+
+    This is the one failure that would otherwise be silent and wrong in the same direction
+    as the result the tool exists to report: no dissection means no RRC events, and zero
+    events across a populated capture is the IMSI-catcher signal. Checked rather than
+    assumed because it is cheap and because tshark reports no error for it.
+    """
+    if not rows:
+        return          # an empty capture is a legitimate measurement, not a failure
+    if any("mac-lte" in (r.get("frame.protocols") or "") for r in rows):
+        return
+    seen = Counter((r.get("frame.protocols") or "(none)") for r in rows)
+    raise TsharkError(
+        f"{len(rows)} frames dissected, none as mac-lte -- the DLT 147 mapping did not "
+        f"take effect",
+        [
+            "Frames were read, so the file is fine; they were just not decoded as LTE MAC.",
+            "Protocol chains seen: " + ", ".join(f"{k} x{v}" for k, v in seen.most_common(3)),
+            "",
+            "Refusing to continue: with no dissection there are no RRC events, and zero",
+            "events across a populated capture is exactly this tool's positive result. It",
+            "would be reported as 'no UE reached AS security' with nothing to distinguish",
+            "it from the real thing.",
+            "",
+            "The mapping is passed as -o " + DLT_OPT,
+            "so this usually means a tshark too old for mac-lte-framed, or a build without",
+            "the LTE dissectors.",
+        ],
+    )
+
+
 def is_unicast(rnti):
     return rnti is not None and rnti not in BROADCAST_RNTIS and rnti not in RARNTI_RANGE
 
@@ -155,7 +279,12 @@ def run_tshark(pcap, extra_filter=None):
         argv += ["-e", f]
     proc = subprocess.run(argv, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"tshark failed: {(proc.stderr or '').strip().splitlines()[-1:]}")
+        err = (proc.stderr or "").strip()
+        last = err.splitlines()[-1] if err.splitlines() else "(no output)"
+        detail = None
+        if "permission" in last.lower() or "denied" in last.lower():
+            detail = _diagnose_read_denial(pcap)
+        raise TsharkError(f"tshark failed: {last}", detail)
     rows = []
     for line in proc.stdout.splitlines():
         parts = line.split("\t")
@@ -516,6 +645,7 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
         status, out_of_order = ("not reordered (--no-reorder)", None)
 
     rows = run_tshark(work)
+    assert_dissected(rows, work)
     events, frames = build_events(rows)
     anchors, rar_path = load_rar_anchors(run_dir, rf_idx)
     sessions = build_sessions(anchors, events, frames)
@@ -717,6 +847,8 @@ def main():
             print("  Its security_events / security_sessions files are empty because it was "
                   "NOT scanned,")
             print("  which is not the same as having been scanned and found nothing.")
+            for line in getattr(exc, "detail", None) or []:
+                print(f"  {line}" if line else "")
             failed.append(f"rf {rf_idx}: {os.path.basename(cap)} did not dissect")
             continue
         summary["cells"].append(cell)

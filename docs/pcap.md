@@ -35,6 +35,67 @@ tshark -r mac-0.pcapng \
 
 The same `-o` works with `wireshark`.
 
+### AppArmor: tshark may be refused files under `$HOME`
+
+Ubuntu ships `/etc/apparmor.d/tshark`, a Canonical profile confining `/usr/bin/tshark`. It
+grants read access to `/tmp` (via `abstractions/user-tmp`) and `/usr/share/wireshark`, and
+nothing under `$HOME`. The profile does contain `file r /**.pcap{,ng}{,.gz}` — but inside the
+nested `dumpcap` subprofile, which covers live capture, not `tshark -r`.
+
+The symptom is misleading, because it is not a filesystem problem:
+
+```
+tshark: You don't have permission to read the file ".../pcap_joined/mac-0.pcapng"
+tshark: Error loading table 'User DLTs Table': Permission denied
+```
+
+while `ls -l` shows the file owned by you and mode `rw-rw-r--`, and `cat` reads it fine. The
+give-away is that the *same bytes* dissect when copied to `/tmp`.
+
+The profile ends with `include if exists <local/tshark>`, which is the supported place to
+widen it:
+
+```bash
+sudo tee /etc/apparmor.d/local/tshark >/dev/null <<'EOF'
+file r @{HOME}/**.pcap{,ng}{,.gz},
+file r @{HOME}/.config/wireshark/{,**},
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/tshark
+```
+
+The second rule fixes the `User DLTs Table` denial, which otherwise appears on *every* run.
+It is harmless only because `security_scan.py` passes the mapping with `-o` — but it means
+the GUI-configured mapping is unavailable, so anything relying on saved preferences silently
+gets no dissection.
+
+Note the first rule matches by **extension**: a capture named anything other than
+`.pcap`/`.pcapng`/`.gz` is still refused. `security_scan.py` detects a confinement denial,
+distinguishes it from an ordinary POSIX one, and prints the existing override's contents when
+there is one.
+
+**Only `tshark` is confined.** `reordercap`, `editcap`, `capinfos`, `mergecap`, `rawshark` and
+`sharkd` have no profile, which is why the reorder step succeeds and only the dissection
+fails.
+
+### Do not switch to `sharkd` to dodge this
+
+It is a tempting fix — `sharkd` is the same libwireshark and reads `$HOME` fine — but it
+trades a loud failure for a silent one. `sharkd` has **no `-o`**; its only preference control
+is `-C <config profile>`, so the DLT 147 mapping can only come from config on disk. Measured
+with a pristine `HOME`:
+
+| | result |
+|---|---|
+| `sharkd`, no `user_dlts` | `{"status":"OK"}`, all frames loaded, protocol `Packet`, **no dissection and no error** |
+| `tshark`, no `-o` | undissected too, but `-o` is passed on every invocation so it cannot happen |
+| `tshark`, with `-o` | MAC-LTE / RLC-LTE / RRC |
+
+A scan that dissects nothing finds no RRC events, and zero events across a populated capture
+is this project's *positive* result. `sharkd` would report "no UE reached AS security" with
+nothing distinguishing it from the real thing. `assert_dissected()` in `security_scan.py`
+exists to make that impossible whichever tool is used: frames present and none dissecting as
+`mac-lte` is a hard error.
+
 ### Getting RRC out of it
 
 MAC alone is rarely what you want. Two dissector preferences do most of the work:

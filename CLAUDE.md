@@ -41,6 +41,19 @@ no write-inside/inspect-outside split. `tshark` needs the DLT mapping every time
 tshark -r mac-0.pcapng -o 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""'
 ```
 
+**`tshark` is confined by AppArmor and cannot read `$HOME` out of the box** -- the profile at
+`/etc/apparmor.d/tshark` allows `/tmp` and `/usr/share/wireshark` only, so a run directory
+under `~/ngscope-data/` fails with a *permission* error while `ls -l` looks fine and `cat`
+works. Widened here via `/etc/apparmor.d/local/tshark`; `docs/pcap.md` has the recipe. Only
+`tshark` is confined -- `reordercap`, `capinfos` and `sharkd` are not, which is why a failing
+run still produces `pcap_joined/`.
+
+**Do not switch to `sharkd` to get around it.** Measured: with a pristine `HOME` it loads the
+capture, reports `status: OK`, and dissects *nothing*, with no error -- it has no `-o`, so the
+DLT mapping can only come from on-disk config. Zero events across a populated capture is this
+project's positive result, so that is a phantom detection. `assert_dissected()` in
+`security_scan.py` now makes it a hard error whichever tool is used.
+
 ## Measuring
 
 **Replay, not live.** The scheduler blocks on a busy decoder in replay but *discards* subframes
