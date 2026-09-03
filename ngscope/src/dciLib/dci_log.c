@@ -599,7 +599,7 @@ void fill_file_descriptor(FILE* fd_dl[MAX_NOF_RF_DEV],
 
 void fill_dci_log_config(ngscope_dci_log_config_t* q, ngscope_config_t* config){
 	q->nof_cell 	= config->nof_rf_dev; 
-	q->targetRNTI 	= config->rnti; 
+	q->targetRNTI 	= 0; /* the target RNTI config key is gone; see status_tracker.c */
 	for(int i=0; i<q->nof_cell; i++){
 		//q->cell_prb[i] 	= config.rf_config[i].
 		q->log_dl[i] 	= config->rf_config[i].log_dl;

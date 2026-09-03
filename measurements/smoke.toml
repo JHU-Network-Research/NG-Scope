@@ -1,8 +1,6 @@
 # Measurement config: replay of recordings/prefix_10s.bin
 # EARFCN 5035 -> band 12, DL 729 + 0.1*(5035-5010) = 731.5 MHz
-rnti = 9185
 remote_enable = false
-decode_single_ue = false
 decode_SIB = true
 decode_RAR = true
 rar_seed_tracker = false

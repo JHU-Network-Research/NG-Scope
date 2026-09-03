@@ -35,7 +35,6 @@ is marked, which makes a typo'd key obvious:
 
 ```
 config: nof_rf_dev = 1
-config: rnti = 9185
 config: decode_RAR = true
 config: rach_filter_only = false (default)
 config: rf_config0.rf_freq = 2680000000
@@ -54,7 +53,6 @@ formats cannot drift apart:
 ```c
 #define NGSCOPE_TOP_LEVEL_KEYS(X)                              \
     X(INT,   "nof_rf_dev",      nof_rf_dev,      1,     false) \
-    X(INT,   "rnti",            rnti,            0,     true)  \
     X(BOOL,  "decode_RAR",      decode_RAR,      false, false) \
     ...
 ```
@@ -66,10 +64,13 @@ both formats at once.
 
 Two rules the tables enforce:
 
-- **Required keys have no default.** `rnti` and `rf_config<N>.rf_freq` are required: if
-  either is missing NG-Scope reports it and exits, rather than running on a fabricated
-  value. (`rnti = 0` in particular is not inert — `srsran_ngscope_tree_copy_rnti()` matches
-  zeroed tree slots, so it would flood the output.)
+- **Required keys have no default.** A key marked required in the last column has no usable
+  default: if it is missing NG-Scope reports it and exits, rather than running on a
+  fabricated value. **No key is currently marked required** — `rnti` was the last one and it
+  is gone (see below), and `rf_config<N>.rf_freq` is enforced by
+  `ngscope_config_finalize()` for the modes that actually tune rather than by the table,
+  because replay learns it from the recording. The mechanism is still wired through every
+  backend, so a future required key is one column away.
 - **Every optional key has an explicit default.** `ngscope_config_t` is a stack local in
   `main()`, so a key with neither a value nor a default previously left the field holding
   garbage — not zero.
@@ -84,7 +85,7 @@ The two formats differ only in how repeated RF-device sections are written.
 
 ```
 nof_rf_dev = 1;          // top-level scalars
-rnti = 9185;
+decode_RAR = true;
 
 rf_config0 = { ... };    // one block per RF device, numbered from 0
 rf_config1 = { ... };
@@ -97,7 +98,7 @@ Blocks beyond `nof_rf_dev` are ignored, so the count and the blocks must be kept
 **TOML (`.toml`)** — an array of tables, which needs no count:
 
 ```toml
-rnti = 9185              # top-level scalars
+decode_RAR = true        # top-level scalars
 
 [[rf_config]]            # one table per RF device
 rf_freq = 2680000000
@@ -120,9 +121,7 @@ Note also that `rf_freq` takes no `L` suffix in TOML, since its integers are alr
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `nof_rf_dev` | int | `1` | **libconfig only.** Number of RF devices (cells) to decode simultaneously. Must be 1–4 (`MAX_NOF_RF_DEV`); outside that range NG-Scope exits. Each needs its own `rf_configN` block. In TOML it is derived from the `[[rf_config]]` array and must not be set. |
-| `rnti` | int | **required** | Target RNTI. Used as the single-UE target when `decode_single_ue = true`, for PHICH tracking, and as a preferred RNTI in the blind decoder's candidate selection. |
 | `remote_enable` | bool | `false` | Start the DCI sink server, which streams decoded DCIs to remote subscribers over the network. |
-| `decode_single_ue` | bool | `false` | Decode only `rnti` instead of running the multi-UE blind search. Much cheaper, but reports one UE. |
 | `decode_SIB` | bool | `false` | Decode SIB1/SIB2 and write cell identity (MCC/MNC/TAC/cell ID) and reference signal power to `cellcfg.json`. |
 | `decode_RAR` | bool | `false` | Decode Random Access Responses. See [RACH decoding](#rach-decoding) below. |
 | `rar_seed_tracker` | bool | `false` | Prime the UE tracker with RACH-assigned RNTIs. See [RACH decoding](#rach-decoding). |
@@ -150,7 +149,7 @@ missing **required** key is fatal — NG-Scope lists what is missing and exits.
 | `disable_plot` | bool | `true` | Disable the GUI for this cell. Only effective in builds with `ENABLE_GUI`. |
 | `log_dl` | bool | `true` | Write the downlink `.dciLog` file. **This is the flag that controls DL logging**, not `dci_log_config.log_dl`. |
 | `log_ul` | bool | `true` | Write the uplink `.dciLog` file. |
-| `log_phich` | bool | `false` | Write the PHICH `.dciLog` file. |
+| `log_phich` | bool | `false` | **No longer supported — forced off with a warning.** It wrote the PHICH `.dciLog`, whose only real content was the synthetic `rv = 4` record PHICH decoding injected for the configured target RNTI. Both are gone; see [Removed settings](#removed-settings). |
 | `mode` | int | `0` | `0` normal, `1` record IQ to disk, `2` replay IQ from disk. |
 | `replay_fname` | string | none | Source file for `mode = 2`. Required only in replay mode; NG-Scope exits if it is missing. Recording always writes to `<out_dir>/<timestamp>/recorded-samples.bin` and ignores this key. |
 | `debug` | bool | `false` | Verbose per-subframe tracing. Extremely noisy — thousands of lines per second. |
@@ -177,8 +176,95 @@ configuration change: run twice on the same file, changing one flag.
 
 This block used to also accept `log_dl` and `log_ul`. They were parsed and stored but never
 read, so setting them had no effect; they have been removed. Which `.dciLog` files get
-written is controlled per cell by `rf_configN.log_dl` / `log_ul` / `log_phich`. Older configs
-that still set them keep working — libconfig ignores keys the program does not ask for.
+written is controlled per cell by `rf_configN.log_dl` / `log_ul`. Older configs that still
+set them keep working — libconfig ignores keys the program does not ask for.
+
+---
+
+## Removed settings
+
+**Old configs keep working.** Both backends look up only the keys in the schema, so a key
+the program no longer asks for is ignored rather than rejected. Nothing has to be edited out
+of an existing `.cfg` or `.toml`.
+
+### `rnti` and `decode_single_ue`
+
+`rnti` named one UE — the "target RNTI" — and `decode_single_ue` decoded only that UE. Both
+are gone, along with everything that treated the named UE differently from any other. It was
+the last key marked required, so no key is required today.
+
+Three decode paths gave the target RNTI preferential treatment, and all three are now
+disabled by passing 0 rather than deleted, so a future per-UE feature can reuse them:
+
+| site | what it did |
+|---|---|
+| `match_two_dci_vec()` (`ngscope_tree.c`) | accepted a candidate on an RNTI match alone, skipping the child-parent agreement check every other candidate has to pass |
+| `srsran_ngscope_tree_prune_node()` | short-circuited format selection for that RNTI |
+| `srsran_ngscope_tree_copy_rnti()` | lifted its DCIs straight into the output, bypassing pruning entirely |
+
+Each is now guarded on `targetRNTI > 0`, which is **required rather than defensive**: an
+unfilled tree slot has `rnti == 0`, so an unguarded zero target would match every empty node.
+That is the hazard the old "`rnti = 0` is not inert" warning described.
+
+`srsran_ngscope_decode_dci_singleUE_yx()` (`lib/src/phy/ue/ngscope.c`) is likewise kept and
+uncalled; `srsran_ue_decode_dci_yx()` beneath it already returns 0 for a zero RNTI.
+
+**What it changed, measured.** Same 20 s prefix of the Verizon reference capture
+(`verizon_66636/…/2026_08_13_15_31_42`, PCI 56, 100 PRB), same config, one build before the
+removal and one after:
+
+| | before | after |
+|---|---|---|
+| DL records, non-zero RNTI | 25,214 | 25,205 |
+| UL records, non-zero RNTI | 5,815 | 5,815 |
+| records for `rnti = 9185` | 12 | 0 |
+| replay wall time | 23.66 s | 23.66 s |
+
+Diffed on `(tti, rnti)`, the *only* records the old build had and the new one does not are
+those 12 — nothing else was lost, and the uplink is identical. The new build gained three
+records, for RNTIs 12379, 26160 and 38195. That is the shortcut's real cost: at TTI 1716 the
+old build reported 9185 on 60 PRB where the new one reports 12379 on 100 PRB, so the
+preference was not merely adding a phantom UE, it was displacing a candidate that passed the
+child-parent check.
+
+9185 appears in **none** of that run's 30 RARs — it is a stale value carried in every shipped
+config from a T-Mobile capture, and the cell it was being reported on had never assigned it.
+
+Two consumers of the target elsewhere are guarded the same way and stay in place:
+`push_dci_to_remote()`, which fed one named UE to the DCI sink, and the `ue_dl_prb` /
+`ue_ul_prb` fields in the ring buffer, which nothing read.
+
+### `log_phich`
+
+Still accepted, but `ngscope_config_finalize()` forces it off with a warning.
+
+PHICH carries the eNB's HARQ feedback for a UE's PUSCH, and it is the only way a downlink
+sniffer can observe a *non-adaptive* uplink retransmission — on a NACK the UE retransmits on
+the same resources with no new grant, so nothing appears on the PDCCH. Adaptive
+retransmissions do carry a fresh grant and are still logged for every UE via `TB1_rv` /
+`TB1_ndi`; none of that changed.
+
+It went with the target RNTI because it could only ever follow that one UE, and because of
+what it wrote:
+
+- `pend_ack_list` (`phich_decoder.h`) holds exactly one `(I_lowest, n_dmrs)` per TTI, so it
+  is structurally single-UE.
+- On a NACK the caller **synthesised** a UL DCI — `rnti = target, rv = 4, prb = 0, tbs = 0,
+  decode_prob = 100` — and pushed it into `dci_per_sub`, so it reached the `.dciLog`
+  indistinguishable from a real grant except by that signature. In one recorded capture 34
+  of the 63 UL records for the target RNTI were synthetic.
+- ACKs were decoded and discarded. Only NACKs produced output.
+- `ack_list` is a single global shared by every decoder thread and every RF device, and the
+  read and reset in `decode_phich()` do not hold `ack_mutex` — a live race at
+  `nof_thread > 1`.
+
+`dci_decoder_phich_decode()` and `phich_decoder.c` are kept intact and uncalled, with
+`targetRNTI` now a parameter rather than a config read so the function still compiles. A
+useful revival needs all four fixed: a per-RNTI pending-ack list, a separate PHICH log
+instead of injection into the DCI stream, ACKs recorded as well as NACKs, and per-device
+state. Since nothing writes an `rv == 4` record any more, and that is the only thing
+`log_phich_subframe()` reports, leaving the key enabled would produce a log of empty filler
+records — which is why it is forced off rather than left as a silent no-op.
 
 ---
 
@@ -339,9 +425,6 @@ These are surprising but current behaviour, listed so you do not lose time to th
   only symptom is the setting you meant reporting `(default)` at startup. Top-level
   `disable_plot` is a live example: it is never parsed (only `rf_configN.disable_plot` is)
   yet still appears in three of the four shipped configs, where it does nothing.
-- **A phich-only configuration never starts the logger.** The check that decides whether to
-  spawn the logging thread tests only `log_dl` and `log_ul`, so `log_phich = true` with both
-  others `false` produces no output at all.
 - **`.dciLog` files contain a zero-filled placeholder record for every TTI with no DCIs**, so
   the record count is not the DCI count. Filter on `"rnti"` ≠ 0.
 - **Long `-o` paths are silently truncated** at 128 characters.

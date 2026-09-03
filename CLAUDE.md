@@ -153,6 +153,22 @@ one is now the only implementation.
 descrambled CRCs — 6,369 of them in 60 s against 188 real. Fine for aggregate load, unsound
 per-UE.
 
+**There is no target RNTI any more.** The `rnti` and `decode_single_ue` config keys are gone,
+with everything that treated one UE differently. `docs/configuration.md` § *Removed settings*
+has the full account. Three things follow that are easy to trip over:
+
+- **`targetRNTI > 0` guards in `ngscope_tree.c` are load-bearing, not defensive.** An
+  unfilled `dci_array` slot has `rnti == 0`, so an unguarded zero target matches every empty
+  node — `srsran_ngscope_tree_copy_rnti()` would copy the whole empty tree into the output.
+  Anything that reintroduces a preferred-RNTI parameter must keep them.
+- **PHICH is kept but has no caller.** `dci_decoder_phich_decode()` and `phich_decoder.c` are
+  intact and documented in place; `log_phich` is still an accepted key but
+  `ngscope_config_finalize()` forces it off, because nothing writes the `rv == 4` record the
+  phich log reports. Measured: on a 20 s replay the old build's phich log held 15,884 records
+  and **zero** with a non-zero RNTI — entirely filler.
+- **`rnti` was the last required key**, so the `required` column of the X-macro tables is now
+  unexercised. The machinery is still wired through every backend.
+
 **Config keys live in five places** and the schema comment says so: `load_config.h`,
 `gui/ngscope_gui/schema.py`, `ngscope/config.toml`, `ngscope/config.cfg`, and the table in
 `docs/configuration.md`. A top-level key also needs a field in `parse_args.h` and a line in
@@ -188,7 +204,8 @@ Wireshark. Verified on all five reference captures: identical detections, RAR cr
 identical, zero comment/dissection mismatches, the `sec=` splice byte-exact.
 `mark_security_phase` is replay-only and forces `pcap_mac` on. Also fixed on the way: PHICH
 `.dciLog` records were invalid JSON (`dci_log.c`, missing separator plus a trailing comma) --
-latent only because every config sets `log_phich = false`.
+latent only because every config sets `log_phich = false`. (That log is no longer written at
+all; see the target-RNTI note above.)
 
 Cost measured on the trolley capture: replay 119 s -> 142 s (+19%), PDSCH attempts 3,315 ->
 11,953, tracking high-water 64 -> 93 of 512, no evictions and nothing unscanned. The extra

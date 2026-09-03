@@ -91,9 +91,7 @@ int ngscope_main(ngscope_config_t* config)
 		task_scheduler_closed[i] 	= false;
 
 		prog_args[i].nof_rf_dev       = nof_rf_dev;
-		prog_args[i].rnti             = (uint16_t)config->rnti;
 		prog_args[i].remote_enable    = config->remote_enable;
-		prog_args[i].decode_single_ue = config->decode_single_ue;
 		prog_args[i].decode_SIB 	  = config->decode_SIB;
 		prog_args[i].decode_RAR 	  = config->decode_RAR;
 		prog_args[i].rar_seed_tracker = config->rar_seed_tracker;

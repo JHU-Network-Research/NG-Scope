@@ -17,7 +17,7 @@ const MODE_NORMAL = 0, MODE_RECORD = 1, MODE_REPLAY = 2;
 const FIELD_GROUPS = {
   cellPrimary: ['mode', 'rf_freq', 'rf_args', 'N_id_2', 'nof_thread'],
   cellToggles: ['decode_pdcch', 'log_dl', 'log_ul', 'log_phich', 'disable_plot', 'debug', 'silent'],
-  topNumbers: ['rnti'],
+  topNumbers: [],
   /* Promoted out of the Decoding list into their own card: these two decide what reaches
      the logs at all, and rach_filter_only silently forces decode_RAR on. */
   rachPrimary: ['decode_RAR', 'rach_filter_only'],
@@ -28,7 +28,7 @@ const FIELD_GROUPS = {
   /* Sub-options of the security scan that the C side ANDs with mode == REPLAY, so they are
      shown only when a cell is actually replaying. */
   securityReplay: ['qam_retry'],
-  topToggles: ['decode_single_ue', 'decode_SIB', 'remote_enable'],
+  topToggles: ['decode_SIB', 'remote_enable'],
 };
 
 /* Chips carry the one fact about a setting that is not obvious from its name -- a cost, or
@@ -84,7 +84,8 @@ function replaying() {
 }
 
 function availableFields(fields) {
-  return replaying() ? fields : fields.filter((f) => !f.replay_only);
+  const supported = fields.filter((f) => !f.unsupported);
+  return replaying() ? supported : supported.filter((f) => !f.replay_only);
 }
 
 /* Per-cell version: a mode_locked field has exactly one valid value in this cell's mode, so

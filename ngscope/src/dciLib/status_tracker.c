@@ -96,7 +96,11 @@ void* status_tracker_thread(void* p){
     //int nof_prb = 0;
     int dis_plot = config->rf_config[0].disable_plot;
 
-    uint16_t targetRNTI = config->rnti;
+    /* No target RNTI any more: the config key is gone. The field is kept through
+     * status_tracker, cell_status_info and the cell_config sent to the remote sink because
+     * it is part of structures the sink protocol shares, and the consumers in
+     * dci_ring_buffer.c are guarded on it being non-zero. */
+    uint16_t targetRNTI = 0;
     int remote_enable   = config->remote_enable;
 
     printf("DIS_PLOT:%d nof_RF_DEV:%d \n", dis_plot, nof_dev);

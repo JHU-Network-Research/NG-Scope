@@ -42,6 +42,11 @@ def _emit_fields(lines, fields, values, replaying=True):
         # not even show in that mode.
         if field.get("replay_only") and not replaying:
             value = field["default"]
+        # An unsupported setting can no longer do anything; ngscope_config_finalize() forces
+        # it back to its default anyway, so emit that rather than a value the startup echo
+        # would then contradict.
+        if field.get("unsupported"):
+            value = field["default"]
         # mode_locked is per cell, so it is applied against this table's own mode value.
         locked = field.get("mode_locked")
         if locked and values.get("mode") in locked:
@@ -155,16 +160,6 @@ def validate(model, out_dir):
     cells = model.get("cells", [])
 
     # -- top level
-    rnti = top.get("rnti", 0)
-    if not isinstance(rnti, int) or not 0 <= rnti <= 65535:
-        err("top.rnti", "RNTI must be between 0 and 65535.")
-    elif rnti == 0:
-        warn(
-            "top.rnti",
-            "RNTI 0 is not inert: it matches empty decoder-tree slots and floods the "
-            "output.",
-        )
-
     if top.get("rach_filter_only") and not top.get("decode_RAR"):
         warn(
             "top.decode_RAR",

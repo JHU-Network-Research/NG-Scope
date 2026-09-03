@@ -109,6 +109,9 @@ void enqueue_dci_sf(sf_status_t* q, uint16_t targetRNTI, ngscope_status_buffer_t
 
   memcpy(&(q->ul_msg), &(dci_buffer->dci_per_sub.ul_msg), MAX_DCI_PER_SUB * sizeof(ngscope_dci_msg_t));
 
+  /* ue_dl_prb / ue_ul_prb hold the target UE's own PRB count for the subframe. There is no
+   * target RNTI any more (targetRNTI is always 0 here), and nothing reads either field, so
+   * they stay zero. Kept alongside the cell_*_prb totals, which are read. */
   q->ue_dl_prb = 0;
   q->ue_ul_prb = 0;
 
@@ -118,7 +121,7 @@ void enqueue_dci_sf(sf_status_t* q, uint16_t targetRNTI, ngscope_status_buffer_t
     // handle the downlink
     for (int i = 0; i < q->nof_dl_msg; i++) {
       cell_prb += q->dl_msg[i].prb;
-      if (q->dl_msg[i].rnti == targetRNTI) {
+      if (targetRNTI > 0 && q->dl_msg[i].rnti == targetRNTI) {
         q->ue_dl_prb = q->dl_msg[i].prb;
       }
     }
@@ -130,7 +133,7 @@ void enqueue_dci_sf(sf_status_t* q, uint16_t targetRNTI, ngscope_status_buffer_t
     // handle the uplink
     for (int i = 0; i < q->nof_ul_msg; i++) {
       cell_prb += q->ul_msg[i].prb;
-      if (q->ul_msg[i].rnti == targetRNTI) {
+      if (targetRNTI > 0 && q->ul_msg[i].rnti == targetRNTI) {
         q->ue_ul_prb = q->ul_msg[i].prb;
       }
     }
@@ -143,8 +146,18 @@ void enqueue_dci_sf(sf_status_t* q, uint16_t targetRNTI, ngscope_status_buffer_t
 }
 
 // TODO change it later to remove the remote_sock
+/* Sends one UE's per-subframe DCI summary to the remote sink.
+ *
+ * RETAINED BUT UNREACHABLE -- targetRNTI is always 0 now, so this returns immediately. It
+ * reports a single named UE, which is what the target RNTI config key selected; with that
+ * key gone there is nothing to name. Without the guard it would send a ue_dci_t of zeros
+ * for every subframe the ring buffer retires. A future per-UE remote feed would call this
+ * per tracked RNTI rather than once per subframe. */
 int push_dci_to_remote(sf_status_t* q, int cell_idx, uint16_t targetRNTI, int remote_sock)
 {
+  if (targetRNTI == 0) {
+    return -1;
+  }
   if (remote_sock <= 0) {
     // printf("ERROR: sock not set!\n\n");
     return -1;

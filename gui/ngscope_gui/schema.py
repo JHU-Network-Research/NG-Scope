@@ -15,8 +15,8 @@ load_config.h -- no widget code to touch.
 [[rf_config]] array (load_config_toml.c:174-183), and emitting the key would be ignored at
 best and misleading at worst.
 
-Two markers express settings that are not the user's to make in a given mode. Both hide the
-control and emit a fixed value, so nobody has to set something back after switching modes:
+Three markers express settings that are not the user's to make. All of them hide the control
+and emit a fixed value, so nobody has to set something back after switching modes:
 
 * `replay_only` -- the C side refuses or ignores it outside `mode == REPLAY`. Hidden while no
   cell is replaying, and `config_io` emits the schema default instead of whatever the user
@@ -25,8 +25,13 @@ control and emit a fixed value, so nobody has to set something back after switch
   the form should not offer a choice. `nof_rx_ant` in Record is the case: the IQ recorder
   writes channel 0 only, and ngscope refuses anything else outright (load_config.c).
 
-Both exist because a rejected config is a bad way to learn about a constraint, especially
-for a control the form did not show.
+* `unsupported` -- the key is still accepted by the C schema but can no longer do anything,
+  and `ngscope_config_finalize()` forces it to its default. `log_phich` is the case: PHICH
+  decoding followed a single configured target RNTI, which no longer exists. Kept in this
+  table rather than deleted so it still mirrors `load_config.h` key for key.
+
+They exist because a rejected config -- or a log file full of empty records -- is a bad way
+to learn about a constraint, especially for a control the form did not show.
 """
 
 # Compile-time limits from ngscope/hdr/dciLib/ngscope_def.h
@@ -58,19 +63,8 @@ def _f(key, type_, default, label, help_, required=False, **extra):
 
 TOP_LEVEL = [
     _f(
-        "rnti", "int", 0, "Target RNTI",
-        "Required: there is no safe default. 0 is not inert -- it matches empty "
-        "decoder-tree slots and floods the output.",
-        required=True, min=0, max=65535,
-    ),
-    _f(
         "remote_enable", "bool", False, "Remote sink",
         "Stream decoded DCIs to remote subscribers over the network (the DCI sink server).",
-    ),
-    _f(
-        "decode_single_ue", "bool", False, "Single-UE decode",
-        "Decode only the target RNTI instead of running the multi-UE blind search. "
-        "Much cheaper.",
     ),
     _f(
         "decode_SIB", "bool", False, "Decode SIB",
@@ -201,7 +195,12 @@ RF_DEV = [
     ),
     _f("log_dl", "bool", True, "Log downlink", "Write the downlink .dciLog file."),
     _f("log_ul", "bool", True, "Log uplink", "Write the uplink .dciLog file."),
-    _f("log_phich", "bool", False, "Log PHICH", "Write the PHICH .dciLog file."),
+    _f(
+        "log_phich", "bool", False, "Log PHICH",
+        "No longer supported: ngscope forces it off. PHICH decoding followed the one "
+        "configured target RNTI, and that setting is gone.",
+        unsupported=True,
+    ),
     _f(
         "disable_plot", "bool", True, "Disable plot",
         "Disable the GUI plot for this cell. Only meaningful in builds with ENABLE_GUI.",

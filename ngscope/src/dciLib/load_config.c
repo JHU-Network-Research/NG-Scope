@@ -354,6 +354,20 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
     }
 
     for (int i = 0; i < config->nof_rf_dev; i++) {
+        /* PHICH decoding is gone. It could only ever follow the one configured target RNTI,
+         * whose config key has been removed, and on a NACK it synthesised a UL DCI into the
+         * output rather than logging separately -- see dci_decoder_phich_decode(), which is
+         * kept but has no caller. Nothing now writes a record with rv == 4, which is the
+         * only thing log_phich_subframe() reports, so leaving the key enabled would produce
+         * a phich log holding one empty filler record per subframe and nothing else. Forced
+         * off rather than left as a silent no-op that looks like a measurement. */
+        if (config->rf_config[i].log_phich) {
+            printf("config: WARNING: rf_config%d log_phich is no longer supported -- PHICH "
+                   "decoding followed a single configured target RNTI, which no longer "
+                   "exists. The log would contain only empty records. Forcing it off.\n", i);
+            config->rf_config[i].log_phich = false;
+        }
+
         /* srsran_ue_dl_init() and the sync buffers are sized from this, and
          * srsran_rf_open_devname() asks the driver for exactly this many channels. */
         if (config->rf_config[i].nof_rx_ant < 1 || config->rf_config[i].nof_rx_ant > SRSRAN_MAX_PORTS) {

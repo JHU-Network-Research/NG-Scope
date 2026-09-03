@@ -6,15 +6,8 @@
 
 # ------------------------------- Top level -------------------------------
 
-# Target RNTI. Required: there is no safe default (0 is not inert -- it matches empty
-# decoder-tree slots and floods the output).
-rnti = 9185
-
 # Stream decoded DCIs to remote subscribers over the network (the DCI sink server).
 remote_enable = false
-
-# Decode only `rnti` instead of running the multi-UE blind search. Much cheaper.
-decode_single_ue = false
 
 # Decode SIB1/SIB2 and write cell identity and reference signal power to cellcfg.json.
 decode_SIB = false
