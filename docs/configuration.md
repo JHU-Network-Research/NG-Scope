@@ -254,12 +254,38 @@ like next to a UE still doing signalling. The clearest case on this capture is R
 downlink UE on the cell, and it is absent from every denominator the security measurement
 reports.
 
-**This does not mean the rate is wrong.** A UE that was already connected has an AS security
-context it established before capture began, so it cannot show a boundary — the same
-unobservable-by-construction case as `outcome=reused`. Adding these UEs to the denominator
-would depress the rate for UEs that never had a chance to be measured. What it does mean is
-that *"N UEs on this cell"* has to be read as **"N UEs that RACHed while we were listening"**,
-and on this capture that is roughly half the UEs actually present.
+### These UEs are positive evidence, not missing failures
+
+A first reading is that they are unobservable — no RAR, so no anchor, so nothing to measure.
+That is wrong, and the `ch` column shows why. The probe walks the DL-SCH subheaders of every
+passing block (36.321 6.1.2) and classifies the logical channel:
+
+| passing blocks by channel | RACH-confirmed | not confirmed |
+|---|---|---|
+| `ccch` | 44 | 17 |
+| `srb` | 152 | 158 |
+| **`drb`** | **23** | **168** |
+| `other` (MAC CE, padding) | 112 | 103 |
+| **RNTIs with ≥1 DRB block** | **11** | **15** |
+
+**A DRB cannot exist without AS security.** It is configured by an
+`RRCConnectionReconfiguration`, which the eNB may only send after a completed
+`SecurityModeCommand` — including the unauthenticated-emergency case, which still runs
+security mode establishment, just with the null algorithms. So a CRC-passing DRB block is
+itself proof that that UE established an AS security context *with this cell*. The boundary
+happened before the capture started; the consequence of it is still on the air.
+
+So on this capture 15 UEs have **demonstrated** AS security with the cell and appear in no
+denominator the security measurement reports. The published figure was 22/68 = 32.4%. Counting
+what is actually observable gives 37 UEs with demonstrated security, against 83 seen at all.
+
+This is the same error as counting `outcome=reused` as a failure, which
+[security-measurement.md](security-measurement.md) already warns is backwards:
+`SecurityModeCommand` is *one* observation of security establishment, not the only one.
+Reestablishment and resume are a second. DRB traffic is a third.
+
+The remaining honest caveat is the one-sidedness above: absence of a DRB block is not absence
+of security, so 15 is a floor on this population, not a count.
 
 Cost on the same capture: 40.6 s → 42.6 s of replay, about **+5%**. Lower than the ~8×
 decode-attempt figure suggests, because two thirds of probes end at the targeted PDCCH search

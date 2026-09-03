@@ -248,9 +248,67 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
  * writes no pcap and reaches no conclusion about security.
  */
 
+/* Walk the DL-SCH subheader region and collect its logical channel IDs.
+ *
+ * Needed because a passing CRC alone does not say what the block carried, and the
+ * distinction matters: DRBs are configured by an RRCConnectionReconfiguration that only
+ * follows a completed SecurityModeCommand, so DRB traffic is itself proof that AS security
+ * was established with this cell. SRB and CCCH traffic proves no such thing.
+ *
+ * 36.321 6.1.2: every subheader is R/R/E/LCID, plus F/L unless it is the last subheader
+ * (E == 0) or a fixed-size MAC control element. All subheaders precede all payloads, so the
+ * region can be walked without decoding any payload. Bounded by both the block length and a
+ * subheader count so a corrupt block cannot run away -- though a passing CRC means it is not
+ * corrupt. */
+#define PROBE_MAX_SUBHDR 12
+
+static void probe_walk_lcids(const uint8_t* p, uint32_t len, char* out, size_t outlen,
+                             bool* has_drb, bool* has_srb, bool* has_ccch)
+{
+  *has_drb = *has_srb = *has_ccch = false;
+  if (outlen > 0) {
+    out[0] = '\0';
+  }
+  if (p == NULL || len == 0) {
+    return;
+  }
+  size_t   used = 0;
+  uint32_t i    = 0;
+  for (int n = 0; n < PROBE_MAX_SUBHDR && i < len; n++) {
+    const int      e    = (p[i] >> 5) & 1;
+    const uint32_t lcid = p[i] & 0x1F;
+    i++;
+
+    if (lcid == 0) {
+      *has_ccch = true;
+    } else if (lcid <= 2) {
+      *has_srb = true;
+    } else if (lcid <= 10) {
+      *has_drb = true;
+    }
+    if (used + 4 < outlen) {
+      used += (size_t)snprintf(out + used, outlen - used, used ? ";%u" : "%u", lcid);
+    }
+
+    /* 27..31 are fixed-size control elements and padding: no F/L field. */
+    const bool fixed = (lcid >= 27);
+    if (e && !fixed) {
+      if (i >= len) {
+        break;
+      }
+      i += ((p[i] >> 7) & 1) ? 2 : 1; /* F == 1 selects the 15-bit L field */
+    }
+    if (!e) {
+      break; /* last subheader; payloads follow */
+    }
+  }
+}
+
 typedef struct {
   FILE*           fd;
   pthread_mutex_t mtx;
+  uint64_t drb[2];   /* passing blocks carrying a DRB -- proof of established security */
+  uint64_t srb[2];
   /* [rach_ok] x bucket. Three buckets, never collapsed: the test is one-sided. */
   uint64_t probed[2];
   uint64_t no_dci[2];   /* targeted search found nothing for this RNTI */
@@ -277,7 +335,7 @@ int ngscope_sec_probe_blind_init(const char* out_path, int rf_idx)
   pthread_mutex_init(&q->mtx, NULL);
   /* Header first, before anything that can fail: a header-only file then reads as "probed,
    * found nothing", which is a measurement, rather than as a run that never probed. */
-  fprintf(q->fd, "tti,ct,rnti,rach_ok,outcome,tbs,mcs,prb,rv,fmt\n");
+  fprintf(q->fd, "tti,ct,rnti,rach_ok,outcome,tbs,mcs,prb,rv,fmt,lcids,ch\n");
   fflush(q->fd);
   printf("BLIND PROBE: writing %s\n", path);
   return 0;
@@ -350,6 +408,8 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
     const int       nof_dci = srsran_ue_dl_find_dl_dci(ue_dl, sf, cfg, rnti, dci_dl);
 
     const char* outcome = "no_dci";
+    const char* ch      = "";
+    char        lcids[48] = {0};
     uint32_t    tbs = 0, mcs = 0, prb = 0;
     int         rv = 0, fmt = 0;
 
@@ -376,6 +436,15 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       outcome = (r == 1) ? "crc_pass" : "crc_fail";
       if (r == 1) {
         q->bytes[ok] += tbs / 8;
+        bool drb = false, srb = false, ccch = false;
+        probe_walk_lcids(pdsch_res[0].payload, tbs / 8, lcids, sizeof(lcids), &drb, &srb,
+                         &ccch);
+        ch = drb ? "drb" : (srb ? "srb" : (ccch ? "ccch" : "other"));
+        if (drb) {
+          q->drb[ok]++;
+        } else if (srb) {
+          q->srb[ok]++;
+        }
       }
     }
 
@@ -388,8 +457,9 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
     } else {
       q->crc_fail[ok]++;
     }
-    fprintf(q->fd, "%u,%llu,%u,%d,%s,%u,%u,%u,%d,%d\n", tti,
-            (unsigned long long)collection_time, rnti, ok, outcome, tbs, mcs, prb, rv, fmt);
+    fprintf(q->fd, "%u,%llu,%u,%d,%s,%u,%u,%u,%d,%d,%s,%s\n", tti,
+            (unsigned long long)collection_time, rnti, ok, outcome, tbs, mcs, prb, rv, fmt,
+            lcids, ch);
     pthread_mutex_unlock(&q->mtx);
     rows++;
   }
@@ -427,6 +497,12 @@ void ngscope_sec_probe_blind_report(int rf_idx)
            ok ? "pass rate, confirmed" : "pass rate, unconfirmed", pct,
            (unsigned long long)q->bytes[ok]);
   }
-  printf("  Read the unconfirmed pass rate as a LOWER BOUND on real UEs the RAR anchor\n");
-  printf("  missed -- UEs already connected before capture started, and handover-in.\n");
+  printf("  %-22s %14llu %14llu\n", "  of those, on a DRB", (unsigned long long)q->drb[1],
+         (unsigned long long)q->drb[0]);
+  printf("  %-22s %14llu %14llu\n", "  of those, SRB only", (unsigned long long)q->srb[1],
+         (unsigned long long)q->srb[0]);
+  printf("  A DRB is configured by an RRCConnectionReconfiguration that only follows a\n");
+  printf("  completed SecurityModeCommand, so a passing DRB block is itself proof that this\n");
+  printf("  UE established AS security with this cell -- the boundary simply happened before\n");
+  printf("  the capture began. Those UEs are evidence FOR the cell, not missing failures.\n");
 }

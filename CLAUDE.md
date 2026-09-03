@@ -172,11 +172,20 @@ the oracle — PDSCH descrambling is RNTI-seeded, the CRC24A is not, so a pass p
 `(RNTI, grant)` pair real at ~2⁻²⁴. On att_850_office/30 s: 5,114 unconfirmed RNTIs, 5,060 gave
 nothing (blind mode is noise, as expected), but **54 decoded and 43 gave ≥3 blocks each** —
 real UEs, none in `rar_log`. RNTI 10649 alone had 81 blocks over 17.8 s and is the cell's
-busiest downlink UE. They were already connected when capture began, so they *cannot* show a
-boundary — the same unobservable case as `outcome=reused`, and adding them to the denominator
-would be wrong. **What must change is the wording:** "N UEs on this cell" means "N UEs that
-RACHed while we were listening". Cost +5% replay. `docs/configuration.md` §*Is a blind DCI
-real?* has the table and the one-sidedness caveat.
+busiest downlink UE. **15 of them carry DRB traffic**, and a DRB is
+configured only by an `RRCConnectionReconfiguration` that follows a completed
+`SecurityModeCommand` — so those UEs *demonstrably* established AS security with this cell,
+before the capture began. They are positive evidence, not unobservable: the published 22/68 =
+32.4% omits 15 UEs with proven security. Cost +5% replay. `docs/configuration.md` §*Is a blind
+DCI real?* has the tables.
+
+**Known defect this exposes, not yet fixed.** `security_scan.py` computes
+`established / sum(all outcomes)`, so `reused` sits in the denominator and never the
+numerator — UEs that reached `RRCConnectionReestablishment`/`Resume` are counted as failures,
+which `docs/security-measurement.md` explicitly calls backwards. Live instance: the poconos
+capture reports 339/1318 = 25.7% with `reused = 26`; treating those as the positive evidence
+they are gives 365/1318 = 27.7%. `SecurityModeCommand` is one observation of establishment,
+not the only one.
 
 **There is no target RNTI any more.** The `rnti` and `decode_single_ue` config keys are gone,
 with everything that treated one UE differently. `docs/configuration.md` § *Removed settings*
