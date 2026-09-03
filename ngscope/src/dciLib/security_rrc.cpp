@@ -3,11 +3,13 @@
 extern "C" {
 #include "ngscope/hdr/dciLib/security_ctx.h"
 #include "ngscope/hdr/dciLib/ngscope_def.h"
+#include "ngscope/hdr/dciLib/rach_filter.h"
 }
 
 #include "ngscope/hdr/dciLib/mac_pcap.h"
 
 #include <pthread.h>
+#include <stdio.h>
 #include <string.h>
 
 extern bool debug;
@@ -234,4 +236,197 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
 
   pdsch_cfg->rnti = saved_rnti;
   return nof_written;
+}
+
+
+/* ================================================================= blind-DCI probe
+ *
+ * See security_rrc.h for what this measures and why the transport-block CRC is the right
+ * oracle. Deliberately a separate path from ngscope_sec_scan_subframe() above rather than a
+ * refactor of it: that function is verified against five reference captures and writes the
+ * evidence the whole security measurement rests on, and the two jobs differ -- this one
+ * writes no pcap and reaches no conclusion about security.
+ */
+
+typedef struct {
+  FILE*           fd;
+  pthread_mutex_t mtx;
+  /* [rach_ok] x bucket. Three buckets, never collapsed: the test is one-sided. */
+  uint64_t probed[2];
+  uint64_t no_dci[2];   /* targeted search found nothing for this RNTI */
+  uint64_t crc_fail[2]; /* DCI found, transport block did not decode */
+  uint64_t crc_pass[2]; /* decoded -- the (RNTI, grant) pair is real */
+  uint64_t bytes[2];    /* payload bytes recovered, passing blocks only */
+} blind_probe_t;
+
+static blind_probe_t blind_probe[MAX_NOF_RF_DEV];
+
+int ngscope_sec_probe_blind_init(const char* out_path, int rf_idx)
+{
+  if (!sec_rf_idx_ok(rf_idx)) {
+    return -1;
+  }
+  blind_probe_t* q = &blind_probe[rf_idx];
+  char           path[1024];
+  snprintf(path, sizeof(path), "%sblind_probe-%d.csv", out_path ? out_path : "", rf_idx);
+  q->fd = fopen(path, "w");
+  if (q->fd == NULL) {
+    printf("BLIND PROBE: could not open %s\n", path);
+    return -1;
+  }
+  pthread_mutex_init(&q->mtx, NULL);
+  /* Header first, before anything that can fail: a header-only file then reads as "probed,
+   * found nothing", which is a measurement, rather than as a run that never probed. */
+  fprintf(q->fd, "tti,ct,rnti,rach_ok,outcome,tbs,mcs,prb,rv,fmt\n");
+  fflush(q->fd);
+  printf("BLIND PROBE: writing %s\n", path);
+  return 0;
+}
+
+void ngscope_sec_probe_blind_close(int rf_idx)
+{
+  if (!sec_rf_idx_ok(rf_idx) || blind_probe[rf_idx].fd == NULL) {
+    return;
+  }
+  fclose(blind_probe[rf_idx].fd);
+  blind_probe[rf_idx].fd = NULL;
+}
+
+int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
+                            srsran_dl_sf_cfg_t*    sf,
+                            srsran_ue_dl_cfg_t*    cfg,
+                            srsran_pdsch_cfg_t*    pdsch_cfg,
+                            uint8_t*               data[SRSRAN_MAX_CODEWORDS],
+                            ngscope_dci_per_sub_t* dci_per_sub,
+                            int                    rf_idx,
+                            uint32_t               tti,
+                            uint64_t               ts_us,
+                            uint64_t               collection_time)
+{
+  (void)ts_us;
+  if (!sec_rf_idx_ok(rf_idx) || dci_per_sub == NULL || blind_probe[rf_idx].fd == NULL) {
+    return 0;
+  }
+
+  /* One probe per distinct RNTI per subframe. A UE with two DCIs in one subframe is one
+   * identity to confirm, and probing it twice would double-count it in the rates. */
+  uint16_t seen[MAX_DCI_PER_SUB];
+  int      nof_seen = 0;
+  for (int i = 0; i < dci_per_sub->nof_dl_dci && nof_seen < MAX_DCI_PER_SUB; i++) {
+    const uint16_t rnti = dci_per_sub->dl_msg[i].rnti;
+    /* SI-RNTI, P-RNTI and RA-RNTI are not UE identities; they are decoded by their own
+     * paths and would not be affected by RACH filtering either way. */
+    if (!ngscope_sec_is_unicast(rnti)) {
+      continue;
+    }
+    bool dup = false;
+    for (int j = 0; j < nof_seen; j++) {
+      if (seen[j] == rnti) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      seen[nof_seen++] = rnti;
+    }
+  }
+  if (nof_seen == 0) {
+    return 0;
+  }
+
+  blind_probe_t* q          = &blind_probe[rf_idx];
+  const uint16_t saved_rnti = pdsch_cfg->rnti;
+  const bool     cfg_alt    = cfg->cfg.pdsch.use_tbs_index_alt;
+  int            rows       = 0;
+
+  for (int i = 0; i < nof_seen; i++) {
+    const uint16_t rnti = seen[i];
+    const int      ok   = ngscope_rach_filter_pass(rf_idx, rnti) ? 1 : 0;
+
+    /* Targeted search: the PDCCH CRC is checked against this RNTI instead of being
+     * descrambled to produce one, so a hit is already meaningful. Not sufficient on its
+     * own, though -- the transport block below is what confirms the grant. */
+    srsran_dci_dl_t dci_dl[SRSRAN_MAX_DCI_MSG] = {};
+    const int       nof_dci = srsran_ue_dl_find_dl_dci(ue_dl, sf, cfg, rnti, dci_dl);
+
+    const char* outcome = "no_dci";
+    uint32_t    tbs = 0, mcs = 0, prb = 0;
+    int         rv = 0, fmt = 0;
+
+    if (nof_dci > 0) {
+      pdsch_cfg->rnti = rnti;
+      srsran_pdsch_res_t pdsch_res[SRSRAN_MAX_CODEWORDS];
+
+      int r = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[0], data, pdsch_res,
+                                      cfg_alt);
+      if (r == 0 && qam_retry_enabled[rf_idx]) {
+        /* Same reasoning as the security scan: altCQI-Table-r12 is per-UE state a sniffer
+         * cannot see, so a failure on one table is not evidence until the other is tried.
+         * Without this the blind population would look worse than it is. */
+        r = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[0], data, pdsch_res,
+                                    !cfg_alt);
+      }
+      cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
+
+      tbs     = (uint32_t)(pdsch_cfg->grant.tb[0].tbs > 0 ? pdsch_cfg->grant.tb[0].tbs : 0);
+      mcs     = pdsch_cfg->grant.tb[0].mcs_idx;
+      prb     = pdsch_cfg->grant.nof_prb;
+      rv      = pdsch_cfg->grant.tb[0].rv;
+      fmt     = (int)dci_dl[0].format;
+      outcome = (r == 1) ? "crc_pass" : "crc_fail";
+      if (r == 1) {
+        q->bytes[ok] += tbs / 8;
+      }
+    }
+
+    pthread_mutex_lock(&q->mtx);
+    q->probed[ok]++;
+    if (nof_dci <= 0) {
+      q->no_dci[ok]++;
+    } else if (outcome[4] == 'p') { /* crc_pass */
+      q->crc_pass[ok]++;
+    } else {
+      q->crc_fail[ok]++;
+    }
+    fprintf(q->fd, "%u,%llu,%u,%d,%s,%u,%u,%u,%d,%d\n", tti,
+            (unsigned long long)collection_time, rnti, ok, outcome, tbs, mcs, prb, rv, fmt);
+    pthread_mutex_unlock(&q->mtx);
+    rows++;
+  }
+
+  pdsch_cfg->rnti                  = saved_rnti;
+  cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
+  return rows;
+}
+
+void ngscope_sec_probe_blind_report(int rf_idx)
+{
+  if (!sec_rf_idx_ok(rf_idx) || blind_probe[rf_idx].fd == NULL) {
+    return;
+  }
+  blind_probe_t* q = &blind_probe[rf_idx];
+  fflush(q->fd);
+
+  printf("\nBLIND DCI PROBE (cell %d): is a reported DCI real?\n", rf_idx);
+  printf("  Oracle is the DL-SCH CRC: PDSCH descrambling is seeded with the RNTI and the\n");
+  printf("  transport-block CRC24A is not, so a pass means the (RNTI, grant) pair is real.\n");
+  printf("  The test is ONE-SIDED -- a failure proves nothing, because 4-port spatial\n");
+  printf("  multiplexing, the per-UE MCS->TBS table, weak signal and rv>0 all fail here too.\n");
+  printf("  %-22s %14s %14s\n", "", "RACH-confirmed", "not confirmed");
+  printf("  %-22s %14llu %14llu\n", "distinct RNTI-probes", (unsigned long long)q->probed[1],
+         (unsigned long long)q->probed[0]);
+  printf("  %-22s %14llu %14llu\n", "  no DCI found", (unsigned long long)q->no_dci[1],
+         (unsigned long long)q->no_dci[0]);
+  printf("  %-22s %14llu %14llu\n", "  found, CRC failed", (unsigned long long)q->crc_fail[1],
+         (unsigned long long)q->crc_fail[0]);
+  printf("  %-22s %14llu %14llu\n", "  CRC PASSED (real)", (unsigned long long)q->crc_pass[1],
+         (unsigned long long)q->crc_pass[0]);
+  for (int ok = 1; ok >= 0; ok--) {
+    const double pct = q->probed[ok] ? 100.0 * (double)q->crc_pass[ok] / (double)q->probed[ok] : 0.0;
+    printf("  %-22s %13.2f%%   (%llu bytes recovered)\n",
+           ok ? "pass rate, confirmed" : "pass rate, unconfirmed", pct,
+           (unsigned long long)q->bytes[ok]);
+  }
+  printf("  Read the unconfirmed pass rate as a LOWER BOUND on real UEs the RAR anchor\n");
+  printf("  missed -- UEs already connected before capture started, and handover-in.\n");
 }

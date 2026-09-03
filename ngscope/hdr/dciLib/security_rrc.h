@@ -62,6 +62,53 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               uint64_t            collection_time,
                               int                 scan_cap);
 
+/* ---------------------------------------------------------------- blind-DCI probe
+ *
+ * Measurement instrument, not part of the security measurement. Answers one question:
+ * of the DCIs the blind search reports, how many are real?
+ *
+ * The oracle is the transport-block CRC, and it is a strong one. PDSCH descrambling is
+ * seeded with the RNTI -- (rnti << 14) + (q << 13) + ((nslot/2) << 9) + cell_id, see
+ * sequences.c -- while the DL-SCH CRC is an unmasked CRC24A that the RNTI does not touch
+ * (sch.c). So a transport block that passes CRC was descrambled with the right RNTI and
+ * rate-matched to the right size: the (RNTI, grant) pair is real, with a false-pass
+ * probability around 2^-24. That is a far stronger test than asking whether the payload
+ * parses, and it is already computed by the decoder.
+ *
+ * The test is ONE-SIDED and the output keeps that visible. A pass proves the DCI real; a
+ * failure proves nothing, because srsRAN cannot predecode spatial multiplexing on a 4-port
+ * cell, the MCS->TBS table is a per-UE guess, the signal may simply be weak, and an rv > 0
+ * retransmission needs HARQ combining across TTIs that this does not do. Every probe is
+ * therefore recorded in one of three buckets -- no DCI found, found but CRC failed, CRC
+ * passed -- and never collapsed into "real" versus "spurious".
+ *
+ * Writes blind_probe-<rf_idx>.csv beside the run, one row per probed RNTI per subframe,
+ * carrying rach_ok so the two populations can be compared. Deliberately NOT written to the
+ * MAC pcapng: those frames would be attributed to RAR-anchored sessions by
+ * tools/security_scan.py and would change n_pdus and possibly an outcome, contaminating the
+ * measurement this is meant to inform.
+ *
+ * Replay only. It costs a targeted PDCCH search plus a PDSCH decode for every distinct RNTI
+ * in every subframe, which live capture would pay for in discarded subframes. */
+int  ngscope_sec_probe_blind_init(const char* out_path, int rf_idx);
+void ngscope_sec_probe_blind_close(int rf_idx);
+
+/* Probe every distinct unicast RNTI in `dci_per_sub`. Call BEFORE the RACH filter, so the
+ * population is what the blind search actually produced. Returns rows written. */
+int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
+                            srsran_dl_sf_cfg_t*    sf,
+                            srsran_ue_dl_cfg_t*    cfg,
+                            srsran_pdsch_cfg_t*    pdsch_cfg,
+                            uint8_t*               data[SRSRAN_MAX_CODEWORDS],
+                            ngscope_dci_per_sub_t* dci_per_sub,
+                            int                    rf_idx,
+                            uint32_t               tti,
+                            uint64_t               ts_us,
+                            uint64_t               collection_time);
+
+/* Teardown summary: the two populations side by side. */
+void ngscope_sec_probe_blind_report(int rf_idx);
+
 #ifdef __cplusplus
 }
 #endif

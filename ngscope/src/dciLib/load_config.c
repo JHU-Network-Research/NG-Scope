@@ -336,6 +336,34 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
         }
     }
 
+    /* probe_blind_dci is a measurement instrument, not part of a capture run. It costs a
+     * targeted PDCCH search plus a PDSCH decode for every distinct RNTI in every subframe --
+     * with rach_filter_only off that is the whole manufactured population, which is the
+     * point. Live capture would pay for it in discarded subframes, and those losses would
+     * bias the very rate it is measuring, so it is refused rather than warned about. */
+    if (config->probe_blind_dci) {
+        bool any_replay = false;
+        for (int i = 0; i < config->nof_rf_dev; i++) {
+            if (config->rf_config[i].mode == REPLAY) {
+                any_replay = true;
+                break;
+            }
+        }
+        if (!any_replay) {
+            printf("config: ERROR: probe_blind_dci requires a replay (mode=2) rf_config. It "
+                   "decodes a transport block for every DCI in every subframe; live capture "
+                   "would drop subframes and bias the measurement. Record first, then "
+                   "replay.\n");
+            nof_missing_required++;
+        }
+        if (config->rach_filter_only) {
+            printf("config: note: probe_blind_dci with rach_filter_only on -- the blind "
+                   "search is already restricted to RACH-confirmed RNTIs, so the "
+                   "'not confirmed' column will be near-empty. Turn rach_filter_only off to "
+                   "compare the two populations.\n");
+        }
+    }
+
     /* qam_retry is replay-only by construction (task_scheduler.c ANDs it with
      * mode == REPLAY), so say so rather than letting a live run look as though it had it.
      * Not an error: it defaults on, so every live config would otherwise trip it. */

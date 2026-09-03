@@ -99,6 +99,7 @@ int ngscope_main(ngscope_config_t* config)
 		prog_args[i].mark_security_phase = config->mark_security_phase;
 		prog_args[i].enable_256qam    = config->enable_256qam;
 		prog_args[i].pcap_mac         = config->pcap_mac;
+		prog_args[i].probe_blind_dci  = config->probe_blind_dci;
 		prog_args[i].pcap_max_mb      = config->pcap_max_mb;
 		prog_args[i].qam_retry        = config->qam_retry;
 

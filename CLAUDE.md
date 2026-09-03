@@ -166,6 +166,18 @@ one is now the only implementation.
 descrambled CRCs — 6,369 of them in 60 s against 188 real. Fine for aggregate load, unsound
 per-UE.
 
+**But the RAR anchor misses roughly half the UEs on a cell**, and `probe_blind_dci = true`
+measures how many. It decodes a transport block for every blind DCI and uses the DL-SCH CRC as
+the oracle — PDSCH descrambling is RNTI-seeded, the CRC24A is not, so a pass proves the
+`(RNTI, grant)` pair real at ~2⁻²⁴. On att_850_office/30 s: 5,114 unconfirmed RNTIs, 5,060 gave
+nothing (blind mode is noise, as expected), but **54 decoded and 43 gave ≥3 blocks each** —
+real UEs, none in `rar_log`. RNTI 10649 alone had 81 blocks over 17.8 s and is the cell's
+busiest downlink UE. They were already connected when capture began, so they *cannot* show a
+boundary — the same unobservable case as `outcome=reused`, and adding them to the denominator
+would be wrong. **What must change is the wording:** "N UEs on this cell" means "N UEs that
+RACHed while we were listening". Cost +5% replay. `docs/configuration.md` §*Is a blind DCI
+real?* has the table and the one-sidedness caveat.
+
 **There is no target RNTI any more.** The `rnti` and `decode_single_ue` config keys are gone,
 with everything that treated one UE differently. `docs/configuration.md` § *Removed settings*
 has the full account. Three things follow that are easy to trip over:

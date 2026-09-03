@@ -631,6 +631,13 @@ void* task_scheduler_thread(void* p){
                               task_scheduler->prog_args.pcap_max_mb);
     }
 
+    /* Blind-DCI probe. Same lifetime rule as the pcap above: opened before any decoder
+     * thread exists, so none sees a half-initialised handle. */
+    if(task_scheduler->prog_args.probe_blind_dci){
+        ngscope_sec_probe_blind_init(task_scheduler->prog_args.out_path,
+                                     task_scheduler->prog_args.rf_index);
+    }
+
     /* Tell the blind search whether this device wants RNTIs restricted to the RACH-observed
      * set. Set before any decoder thread for this device is created, below, so the threads
      * never observe it half-configured. */
@@ -875,6 +882,10 @@ void* task_scheduler_thread(void* p){
     // into a closed FILE*.
     if(task_scheduler->prog_args.pcap_mac){
         ngscope_mac_pcap_close(rf_idx);
+    }
+    if(task_scheduler->prog_args.probe_blind_dci){
+        ngscope_sec_probe_blind_report(rf_idx);
+        ngscope_sec_probe_blind_close(rf_idx);
     }
 
 	// free the ue dl and the related buffer

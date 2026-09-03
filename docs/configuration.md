@@ -130,6 +130,7 @@ Note also that `rf_freq` takes no `L` suffix in TOML, since its integers are alr
 | `pcap_mac` | bool | `false` | Write decoded downlink MAC PDUs to `mac-<rf_idx>.pcapng` in MAC-LTE encapsulation. See [docs/pcap.md](pcap.md) for the Wireshark setup, which is not optional — DLT 147 is `DLT_USER0` and dissects as nothing until configured. |
 | `pcap_max_mb` | int | `0` | Per-file cap in MB, `0` for unlimited. |
 | `qam_retry` | bool | `true` | **Replay only.** When a transport block fails its CRC, rebuild the grant on the other MCS→TBS table and decode again, keeping whichever passes. The CRC is ground truth, so this measures the table rather than trusting `enable_256qam`, per grant — the only way to be right, since `altCQI-Table-r12` is per-UE state. Costs a second PDSCH decode per failure, which is affordable exactly where the scheduler blocks instead of dropping subframes. On one capture it recovered 37 `SecurityModeCommand`s (33.8% → 39.2%) for 1 second in 65. |
+| `probe_blind_dci` | bool | `false` | **Replay only** — refused at config time otherwise. A measurement instrument, not part of a capture run: it decodes a transport block for every distinct RNTI the blind search reports and records whether the DL-SCH CRC passes, split by whether that RNTI was RACH-confirmed. Writes `blind_probe-<rf>.csv` and a teardown summary. Pair with `rach_filter_only = false`, or the unconfirmed column is empty by construction. See [Is a blind DCI real?](#is-a-blind-dci-real) below. |
 | `enable_256qam` | bool | `true` | Use the 256QAM MCS→TBS table for C-RNTI Format1/2 grants. Only correct when the cell configures `altCQI-Table-r12`, which is **per-UE** RRC state a downlink sniffer cannot observe — so it is a guess, and on a mixed cell no single value is right for every UE. It selects the MCS→TBS mapping, so it sets the transport block size: a wrong guess gives wrong `tbs` values in the `.dciLog` files *and* a transport block CRC that can never pass. srsRAN forces it off for Format1A and non-user RNTIs, so SIB, RAR and paging are unaffected. Every run prints a verdict at teardown; with `mark_security_phase` in replay, a failed block is retried on the other table, so the setting matters much less there. |
 
 A missing optional key is not fatal: it falls back to the default above and says so. A
@@ -178,6 +179,91 @@ This block used to also accept `log_dl` and `log_ul`. They were parsed and store
 read, so setting them had no effect; they have been removed. Which `.dciLog` files get
 written is controlled per cell by `rf_configN.log_dl` / `log_ul`. Older configs that still
 set them keep working — libconfig ignores keys the program does not ask for.
+
+---
+
+## Is a blind DCI real?
+
+With `rach_filter_only = false` the blind decoder reports far more RNTIs than exist — 6,369
+in 60 s against 188 real, on one capture. They come out of the PDCCH blind search, which
+*descrambles* the DCI CRC to recover an RNTI rather than checking it against a known one, so
+the CRC cannot reject anything: whatever 16 bits fall out become an RNTI.
+
+`probe_blind_dci = true` answers the question the DCI CRC cannot, using the **transport-block
+CRC** as the oracle:
+
+- PDSCH descrambling is seeded with the RNTI — `(rnti << 14) + (q << 13) + ((nslot/2) << 9) +
+  cell_id`, `lib/src/phy/phch/sequences.c`.
+- The DL-SCH CRC is an unmasked CRC24A that the RNTI never touches, `lib/src/phy/phch/sch.c`.
+
+So a transport block that passes CRC was descrambled with the right RNTI *and* rate-matched
+to the right size. The `(RNTI, grant)` pair is real, with a false-pass probability around
+2⁻²⁴. That is a much stronger test than asking whether the payload parses — and a real block
+often will *not* parse, because it is ciphered, or a DRB carrying IP, or an RLC segment.
+
+**The test is one-sided, and the output keeps that visible.** Every probe lands in one of
+three buckets, never collapsed into real-versus-spurious:
+
+| bucket | meaning |
+|---|---|
+| `no_dci` | a targeted search for that RNTI found no DCI at all |
+| `crc_fail` | DCI found, transport block did not decode — **inconclusive** |
+| `crc_pass` | decoded: the DCI is real |
+
+`crc_fail` proves nothing on its own. srsRAN cannot predecode spatial multiplexing on a
+4-port cell, the MCS→TBS table is per-UE state a sniffer cannot see (which is why the probe
+honours `qam_retry`), the signal may be weak, and an `rv > 0` retransmission needs HARQ
+combining across TTIs that this does not do.
+
+**What to read from it.** Not a per-DCI verdict but the *difference in pass rate* between the
+two populations. The RACH-confirmed column is the baseline for known-real UEs on that
+capture, which is well below 100% for the reasons above. The unconfirmed column is then a
+**lower bound** on real UEs the RAR anchor missed — UEs already connected before capture
+started, and handover-in, which
+[docs/security-measurement.md](security-measurement.md) records as invisible from the target
+cell alone. Those are missing from every denominator the security measurement reports.
+
+Results are **not** written to the MAC pcapng, deliberately: those frames would be attributed
+to RAR-anchored sessions by `tools/security_scan.py` and would change `n_pdus` and possibly an
+outcome, contaminating the measurement this is meant to inform.
+
+### Measured: `att_850_office`, 30 s, `rach_filter_only = false`
+
+| | RACH-confirmed | not confirmed |
+|---|---|---|
+| distinct RNTIs probed | 47 | 5,114 |
+| RNTIs with ≥1 CRC-passing block | **45 (95.7%)** | **54 (1.1%)** |
+| RNTIs with ≥3 passing blocks | 43 | 43 |
+| passing blocks | 331 | 446 |
+| passing-block TBS, median / mean | 88 / 278 | 144 / 603 |
+| appear in `rar_log` | 45 | **0** |
+
+Read per **RNTI**, not per block: the block-level pass rates (24.3% vs 1.5%) are depressed on
+both sides by `rv > 0`, MIMO and weak signal, and are not the interesting quantity.
+
+**Blind mode is overwhelmingly noise — and not entirely.** 5,060 of 5,114 unconfirmed RNTIs
+produced no decodable block at all, which is what `rach_filter_only` exists to remove. But 54
+did, and 43 of those produced three or more. Three independent CRC24A passes under one RNTI is
+a 2⁻⁷² coincidence, so those are real UEs, and **none of them appears in `rar_log`**.
+
+They are real UEs the RAR anchor structurally cannot see — already connected when the capture
+started, or handed over in. Their traffic profile says the same thing: larger transport blocks
+than the RACH-confirmed population, which is what an established session in data transfer looks
+like next to a UE still doing signalling. The clearest case on this capture is RNTI 10649, with
+81 passing blocks spanning 17.8 s — the same RNTI ngscope's own teardown names as the busiest
+downlink UE on the cell, and it is absent from every denominator the security measurement
+reports.
+
+**This does not mean the rate is wrong.** A UE that was already connected has an AS security
+context it established before capture began, so it cannot show a boundary — the same
+unobservable-by-construction case as `outcome=reused`. Adding these UEs to the denominator
+would depress the rate for UEs that never had a chance to be measured. What it does mean is
+that *"N UEs on this cell"* has to be read as **"N UEs that RACHed while we were listening"**,
+and on this capture that is roughly half the UEs actually present.
+
+Cost on the same capture: 40.6 s → 42.6 s of replay, about **+5%**. Lower than the ~8×
+decode-attempt figure suggests, because two thirds of probes end at the targeted PDCCH search
+without ever reaching a PDSCH decode.
 
 ---
 

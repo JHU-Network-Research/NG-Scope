@@ -620,6 +620,17 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 		// tools/security_phase_join.py fills it in from the offline scan. The field stays
 		// in ngscope_dci_msg_t because it is part of the remote-sink wire struct.
 
+		/* Blind-DCI probe. Runs BEFORE the RACH filter below, deliberately: the population
+		 * being measured is what the blind search reported, and the filter is the thing
+		 * whose necessity this is testing. Confirming DCIs after filtering them would only
+		 * ever confirm the filter's own output. */
+		if (dci_decoder->prog_args.probe_blind_dci) {
+			ngscope_sec_probe_blind(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
+									dci_per_sub, rf_idx, tti, dci_per_sub->timestamp,
+									dci_per_sub->collection_time);
+		}
+
 		// Restrict the reported DCIs to RNTIs that were seen completing RACH. Applied after
 		// the debug CSV is written, so that file stays a complete record of what the decoder
 		// found and its rach_ok column shows exactly what this drops. Everything downstream

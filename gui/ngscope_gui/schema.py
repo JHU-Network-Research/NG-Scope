@@ -129,6 +129,15 @@ TOP_LEVEL = [
         replay_only=True,
     ),
     _f(
+        "probe_blind_dci", "bool", False, "Probe blind DCIs",
+        "Measurement instrument, not part of a capture. Decodes a transport block for every "
+        "DCI the blind search reports and records whether the DL-SCH CRC passes, split by "
+        "whether the RNTI was RACH-confirmed -- a pass proves the DCI real. Pair it with "
+        "Single-UE/RACH filtering OFF, or the unconfirmed column is empty. Writes "
+        "blind_probe-<rf>.csv. Costs a PDSCH decode per RNTI per subframe.",
+        replay_only=True,
+    ),
+    _f(
         "enable_256qam", "bool", True, "256QAM table",
         "Use the 256QAM MCS->TBS table for C-RNTI Format1/2 grants. Only correct when the "
         "cell configures altCQI-Table-r12, which is per-UE RRC state a downlink sniffer "

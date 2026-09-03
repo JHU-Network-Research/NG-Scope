@@ -45,6 +45,9 @@ typedef struct{
 	/* Replay-only decode aid: inert in live capture, where spending a second PDSCH decode
 	 * per failure would be paid for in discarded subframes. See security_rrc.h. */
 	int 				qam_retry;
+	/* Replay-only measurement instrument: probe every blind-search DCI against the DL-SCH
+	 * CRC and record whether it is real, split by RACH confirmation. See security_rrc.h. */
+	int 				probe_blind_dci;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
     const char *        out_path;
@@ -87,7 +90,8 @@ typedef struct{
     X(BOOL,   "enable_256qam",     enable_256qam,      true,   false)                      \
     X(BOOL,   "pcap_mac",          pcap_mac,           false,  false)                      \
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
-    X(BOOL,   "qam_retry",         qam_retry,          true,   false)
+    X(BOOL,   "qam_retry",         qam_retry,          true,   false)                      \
+    X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \

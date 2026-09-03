@@ -56,6 +56,7 @@ typedef struct {
   int 	   rach_filter_only;
   int 	   mark_security_phase;
   int 	   pcap_mac;
+  int 	   probe_blind_dci;
   int 	   pcap_max_mb;
   int 	   qam_retry;
 
