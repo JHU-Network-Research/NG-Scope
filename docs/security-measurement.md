@@ -93,74 +93,78 @@ receiver. Two cells is not a baseline, but it is a second point: `docs/security-
 
 ## Reading the numbers
 
-A run prints four lines at teardown. All four matter.
+Two tools report, and they answer different questions.
+
+**ngscope, at teardown: coverage only.** It no longer knows anything about security, so it
+reports how well it decoded and nothing about what it decoded:
 
 ```
-SECURITY (cell 0): 1318 RNTIs anchored by a RAR, 424 with a SecurityModeCommand (32.2%).
-                   PDSCH attempts 8122, decoded 4780 (58.9%), RRC unpacked 1622 (20.0%).
-SECURITY (cell 0): tracking high-water 57 of 512 slots, no UE dropped for want of a slot
-SECURITY (cell 0): tracking exits -- 0 on SecurityModeCommand, 872 on the 10 s window;
-                   948 drops averted where a decoder thread was behind the RAR
-SECURITY (cell 0): DCCH SDUs -- 467 unpacked (2 of them reassembled), 556 RLC control;
-                   unread: 0 segmented, 2 unsupported, 0 short, 26 ciphered/unparseable;
-                   1 partial SDU(s) LOST before completing
+SECURITY (cell 0): 692 RNTIs anchored by a RAR. PDSCH attempts 11953, decoded 8068 (67.5%)
+                   -- written to the MAC pcap; run tools/security_scan.py over it for the
+                   detection rate.
+SECURITY (cell 0): tracking high-water 93 of 512 slots, no UE dropped for want of a slot
+SECURITY (cell 0): tracking exits -- 656 on the 10 s window; 283 drops averted where a
+                   decoder thread was behind the RAR
+SECURITY (cell 0): MCS->TBS table -- 8068 transport blocks decoded, 284 of them (3.5%) only
+                   after falling back to the other table
 ```
 
-Lines 1-3 are the 300 s band 12 reference capture; line 4 is from the 80 s AT&T capture, since
-the DCCH accounting postdates the reference run.
+**Lines 2 and 3 are validity conditions, not decoration.** A UE dropped for want of a tracking
+slot is indistinguishable *in the pcap* from a UE that never reached security, so whatever the
+scan concludes can only be read as a property of the cell while these say *no UE dropped*.
 
-- **Line 1** is the result. `PDSCH decoded` is the receiver's hit rate; `RRC unpacked` is how
-  often a decoded transport block actually contained readable RRC.
-- **Line 2 is a validity condition, not decoration.** A UE dropped for want of a tracking slot
-  is indistinguishable in the output from a UE that never reached security. The detection rate
-  can only be read as a property of the cell while this line says *no UE dropped*. If it
-  reports evictions or a tracked-but-unscanned count, the rate is an undercount of unknown
-  size.
-- **Line 3** breaks down why UEs left the tracked set. `on the 10 s window` is the honest
-  timeout. `drops averted` counts a bug class that used to discard UEs silently.
-- **Line 4 is the other validity condition.** It accounts for every DL-DCCH SDU the decoder saw.
-  `RLC control` is a STATUS PDU, which carries no SDU and is not a loss;
-  `ciphered/unparseable` is overwhelmingly post-security traffic and is expected. Everything
-  else after `unread:` is an RRC message that existed and was not read, and **any of them could
-  have been a SecurityModeCommand** — so they bound how much boundary evidence went missing.
-  `segmented` should be 0 on a replay, where reassembly is on; `unsupported` is now only
-  re-segmented PDUs and should be near zero. A `partial SDU(s) LOST` clause means reassembly
-  held pieces whose partners were never decoded — you cannot rejoin what you never received.
+**`security_scan.py`: the result.**
 
-The cheapest external check on all of this: run `reordercap` on the pcap and count distinct
-RNTIs carrying a SecurityModeCommand. It should equal the SMC count on line 1.
-
-```bash
-reordercap mac-0.pcapng sorted.pcapng
-tshark -r sorted.pcapng -o 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""' \
-  -Y 'lte-rrc.securityModeCommand_element' -T fields -e frame.comment \
-  | grep -o 'rnti=0x[0-9a-f]*' | sort -u | wc -l
+```
+### mac-0.pcapng  (rf 0)
+  frames            : 8,760   8760 frames, 1370 out of order
+  RAR cross-check   : rar_log 692 vs wireshark 692  identical=True
+  comment vs dissect: 0 mismatches
+  sessions          : established=271, in_progress=33, no_traffic=367, none=1, released=17, reused=3
+  rate              : 271/692 = 39.2% of all RACHing UEs
+                      271/325 = 83.4% of those we decoded any traffic for
+  events            : securityModeCommand=297, rrcConnectionSetup=333, nasTauReject=65, ...
 ```
 
-Two traps in that one command. Reorder first, because Wireshark cannot reassemble RLC from
-records written in decode-completion order. And filter on the field, never on the Info column:
-`_ws.col.Info` carries one summary per frame and the last SDU in a MAC PDU overwrites the
-others, which is enough to hide half the SecurityModeCommands in a capture.
+**Both rates, always.** `no_traffic` counts UEs for which not one transport block was decoded;
+dropping them says something about the receiver, but it also drops UEs that RACHed and
+genuinely did nothing, so the second figure is an upper bound rather than a correction.
+Quoting only one of them moves the headline by 40 points.
+
+**The first two lines are the cross-checks.** `RAR cross-check` compares srsRAN's RAR parse
+against Wireshark's on the same bytes — the only place two independent parsers still meet, and
+it validates the denominator, where an error silently changes the rate. `comment vs dissect`
+compares the RNTI ngscope wrote into every packet comment against the one Wireshark dissected,
+on 100% of records, which catches pcap framing drift.
 
 ### Per-packet phases
 
-The pcap and the `.dciLog` files label each record `pre`, `post`, `unknown` or `n/a`:
+The pcap and the `.dciLog` files carry the same seven values, written by the join. The pcap's
+`sec=` field is padded to exactly 7 characters, which is what makes patching it a byte splice,
+so nothing longer can ever be added:
 
 | value | meaning |
 |---|---|
-| `pre` | before this UE's SecurityModeCommand |
+| `pre` | before this UE's SecurityModeCommand (inclusive — the SMC is the last cleartext message) |
 | `post` | after it |
-| `unknown` | a UE whose boundary was never observed — **not** evidence of anything |
+| `reused` | the UE resumed a context it already held (re-establishment or resume), so no boundary was ever going to exist here |
+| `noctx` | the network refused the connection, so no context was created |
+| `none` | the UE was watched, traffic was decoded, and no security evidence appeared |
+| `unknown` | could not be placed: no traffic decoded, or still in progress when the window closed |
 | `n/a` | not a UE identity (SI-RNTI, P-RNTI, RA-RNTI), so no security context exists |
 
-**Zero boundaries is a result, not a missing file.** `security_log-<rf>.csv` is written with
-its header before any UE is tracked, as `rar_log-<rf>.csv` always was, so "nobody on this cell
-reached security" is an empty table rather than an absence. That distinction is the whole point
-for IMSI-catcher detection: absence of the file used to be indistinguishable from
-`mark_security_phase` being off or the wrong directory being given, and the join said so — it
-guessed at the configuration when the honest reading was a cell where no UE got that far. Read
-it alongside the RAR count and the coverage lines before concluding anything: zero boundaries
-with zero RARs means nothing was seen at all.
+**`none` and `unknown` are the pair that matters.** `none` is a measurement — the thing an
+IMSI-catcher would produce — and `unknown` is the absence of one. Collapsing them hides the
+detection behind the coverage gap.
+
+**Zero boundaries is a result, not a missing file.** `tools/security_scan.py` writes its three
+files with headers before anything that can fail, so "nobody on this cell reached security" is
+an empty table rather than an absence. That distinction is the whole point for IMSI-catcher detection, and it is now better
+supported than it used to be: `security_sessions` carries `n_pdus` per session, so the claim
+becomes "8,068 transport blocks decoded across 692 UEs and not one carried a
+SecurityModeCommand" rather than just an empty file. Read it alongside the RAR count and the
+coverage lines before concluding anything — zero boundaries with zero RARs means nothing was
+seen at all.
 
 `unknown` and `n/a` are deliberately distinct. `unknown` is the number that bounds how much of
 the capture is unaccounted for; folding broadcast traffic into it overstates that by more than
@@ -190,8 +194,9 @@ true figure by **26.5 ms at the median and up to 1046 ms**. Measured in the radi
 delta matches the TTI difference exactly in 104 of 104 cases, as it must, since one TTI is one
 millisecond.
 
-`rar_to_smc_ms` in `security_log-<rf_idx>.csv` is computed from collection times and is
-therefore the real over-the-air delay.
+`ms_rar_to_outcome` in `security_sessions-<rf_idx>.csv` is computed from collection times and
+is therefore the real over-the-air delay. The join keys on `collection_time` throughout for the
+same reason.
 
 ### Worked example: the same capture, bucketed both ways
 
@@ -303,17 +308,21 @@ that by rescuing nothing at all. Note how little the retried *fraction* predicts
 4.6% of blocks on the trolley capture is worth 37 extra SecurityModeCommands, because the
 affected grants are where the boundary evidence lives.
 
-**Not every DL-DCCH SDU can be read, and the ones that cannot are counted.** An SDU split
-across grants is rejoined on replay only; behind a length-indicator list it is not read at all;
-re-segmented PDUs are not handled. Line 4 of the teardown report is the size of that blind spot.
-What remains unread is `unsupported` (re-segmented PDUs, whose segment-offset header is not
-parsed) and fragments whose other pieces were never decoded. Both are counted.
+**RLC coverage is now Wireshark's problem, and it reports on itself.** ngscope used to do its
+own reassembly and length-indicator walking, and the SDUs it could not read were the blind spot.
+That whole path is gone: Wireshark reassembles across grants and walks LI chains natively, so
+the only DL-DCCH left unread is a re-segmented PDU (`RF = 1`, whose segment-offset header is not
+parsed — 2 across the trolley capture, 0 elsewhere) and fragments whose other pieces were never
+decoded at all.
 
-How much this matters is entirely cell-dependent, so read the line rather than carrying a figure
-over from another capture. Segmentation and concatenation were rare on one AT&T capture — 9 of
-428 AM data PDUs were segments — and constant on another, 48 of 100. Reading the
-length-indicator chain changed nothing at all on the first cell and doubled the measured rate on
-the second, from 23.1% to 46.2%.
+`security_events-<rf>.csv` carries `rlc_segments` and `rlc_skipped` per row, from
+`rlc-lte.reassembly-info.number-of-segments` and `rlc-lte.sequence-analysis.skipped-frames`.
+That is a strict upgrade on the old accounting, because it is computed by a different
+reassembler than the one that produced the bytes.
+
+How much this matters is entirely cell-dependent. Segmentation and concatenation were rare on
+one AT&T capture — 9 of 428 AM data PDUs were segments — and constant on another, 48 of 100. The
+retired parser scored 23.1% on the second where Wireshark reads 50.0% from the same bytes.
 
 **Null ciphering (EEA0).** Post-security traffic stays readable, so a `sec=post` packet that
 still parses is not a contradiction.
@@ -353,8 +362,11 @@ Outputs:
 
 | file | contents |
 |---|---|
-| `security_reuse-<rf>.csv` | one row per UE seen resuming an AS context it already held — `RRCConnectionReestablishment` or `RRCConnectionResume-r13`. These never send a SecurityModeCommand, so they do not belong in the denominator |
-| `security_log-<rf>.csv` | one row per observed boundary, both clocks, `rar_to_smc_ms`. **Created at startup**, so a header-only file means the run measured security and found none — which is the result of interest here — while an absent file means it never measured at all |
+| `security_events-<rf>.csv` | one row per indicator occurrence found by `security_scan.py` — RRC and NAS, with the tshark field that fired and the frame number in `pcap_joined/` |
+| `security_sessions-<rf>.csv` | one row per RAR-anchored session: the funnel and the denominator. Seeded from `rar_log`, so a UE with no evidence still has a row |
+| `security_summary.json` | provenance (tshark version, fields queried), the validity checks, per-cell counts and both rates |
+| ~~`security_reuse-<rf>.csv`~~ | *retired* — reuse is now an `outcome` value in `security_sessions`. Was: one row per UE seen resuming an AS context it already held — `RRCConnectionReestablishment` or `RRCConnectionResume-r13`. These never send a SecurityModeCommand, so they do not belong in the denominator |
+| ~~`security_log-<rf>.csv`~~ | *retired*, replaced by `security_sessions-<rf>.csv`. The zero-boundary rule carries over: `security_scan.py` writes its three files with headers before anything that can fail, so a header-only file means "scanned, found nothing" — the result of interest here — and an absent file means the run was never scanned |
 | `security_phase.csv` | every DCI with its joined phase and derived deltas |
 | `dci_output_joined/` | the `.dciLog` files with corrected phases |
 | `mac-<rf>.pcapng` | decoded MAC PDUs — see [pcap.md](pcap.md) |

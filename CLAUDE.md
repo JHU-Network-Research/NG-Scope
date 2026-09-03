@@ -89,21 +89,27 @@ stashed, at the identical site. `docs/security-implementation.md` §7 has the tr
 
 ### Regression gates that caught real mistakes
 
-- **Security figures must not move** when only the pcap path changes. The tee is meant to be inert.
-- **The pcapng join must preserve file size exactly** and give an identical `tshark` dissection
-  by md5. The fixed-width `sec=` field is what makes that possible — don't remove the padding.
-  **Run the join with `--no-reorder` for this check**: by default it now passes the output
-  through `reordercap`, which legitimately changes the bytes.
-- **`rar_to_smc_ms` must equal the TTI delta** of the same two subframes (1 TTI = 1 ms).
-- **Compare per-UE on `(temp C-RNTI, RAR tti)`**, not on timestamps — both come from the capture
-  and are stable across runs. Except the first RAR of a run, whose TTI is unstable (below).
-- **The SMC count must equal the distinct RNTIs with a SecurityModeCommand in the pcap**, after
-  `reordercap`. The only external check on the tracker; it caught both the segmentation and the
-  length-indicator losses. Count with `-Y lte-rrc.securityModeCommand_element`, **never by
-  grepping `_ws.col.Info`** — that is one summary per frame, last writer wins, so a MAC PDU
-  holding several SDUs reports only the last. It hid half the SMCs on mt_airy02.
+Detection is offline now: ngscope writes `mac-<rf>.pcapng` and claims nothing about it;
+`tools/security_scan.py` dissects it with Wireshark and writes `security_events` /
+`security_sessions` / `security_summary`; `tools/security_phase_join.py` labels the `.dciLog`
+files from that. The gates changed shape with it.
 
----
+- **`tools/fixtures/retired_parser_baseline.json` is the superset gate.** It froze the retired
+  in-process parser's per-`(rnti, rar_tti)` verdicts on all five reference captures while both
+  parsers still existed — the last time two independent parsers ran on the same bytes. A scan
+  must never lose an RNTI in `retired_established`. Verified: 271/52/22/13/10, MISSING 0.
+- **The RAR cross-check replaces the old SMC cross-check**, which went vacuous with one parser
+  left. srsRAN's RAR parse (`rar_log-<rf>.csv`) vs Wireshark's dissection of the same bytes;
+  `security_scan.py` runs it every time and puts it in the summary. It is better placed than
+  what it replaced, because the anchor set is the denominator of everything.
+- **Comment vs dissection, on every packet.** The RNTI ngscope wrote into the comment must
+  equal the one Wireshark dissected. Free, 100% coverage, catches pcap framing drift.
+- **The `sec=` splice must preserve file size exactly** and leave the dissection identical
+  apart from the comment line itself. Filter with `grep -v "^ *sec="` — in `tshark -V` the
+  comment is a bare indented line, not a `Comment:` line, so the obvious filter misses it.
+  The fixed 7-character field is what makes the splice possible; don't remove the padding.
+- **Compare per-UE on `(temp C-RNTI, RAR tti)`**, not on timestamps. Except the first RAR of a
+  run, whose TTI is unstable.
 
 ## Traps
 
@@ -116,21 +122,32 @@ indistinguishable in the output from a UE that never reached security — which 
 the detector is trying to measure. Every such path is counted and reported at teardown. **If you
 add a path that can drop a tracked UE, add a counter with it.**
 
-**Some UEs can never show a boundary.** `RRCConnectionReestablishment` (DL-CCCH) and
-`RRCConnectionResume-r13` (DL-DCCH) restore a stored `K_eNB`, so no SecurityModeCommand
-follows. They are recorded in `security_reuse-<rf>.csv` and excluded from the denominator in a
-separate teardown line — never silently. Reaching either is *positive* evidence of a real prior
-context, so counting them as failures is backwards. Handover-in is the same case but is not
-detectable from the target cell alone.
+**Some UEs can never show a boundary.** `RRCConnectionReestablishment` and
+`RRCConnectionResume-r13` restore a stored `K_eNB`, so no SecurityModeCommand follows; they
+land as `outcome=reused` in `security_sessions`. Reaching either is *positive* evidence of a
+real prior context, so counting them as failures is backwards. Handover-in is the same case but
+is not detectable from the target cell alone. **NAS is a separate context** — a ciphered NAS
+message proves the UE completed NAS security with the MME, not AS security with this eNB, so
+`nas_outcome` is its own column and never feeds `outcome`. Collapsing them once cost a phantom
+detection.
 
-**Zero boundaries must look like a measurement, not a missing file.** `security_log-<rf>.csv`
-is created with its header at startup (`ngscope_sec_log_init`), so empty means "measured, none
-found" — the positive result for catcher detection — and absent means "never measured". It used
-to be written lazily by the first boundary, which conflated the two and made the join blame the
-config.
+**Zero boundaries must look like a measurement, not a missing file.** `security_scan.py`
+writes its three files with headers before anything that can fail, so header-only means
+"scanned, found nothing" — the positive result for catcher detection — and absent means "never
+scanned". `security_sessions` also carries `n_pdus`, so the claim can be "8,068 blocks decoded
+across 692 UEs, none carried an SMC" rather than just an empty file.
 
-**Never guess a phase.** `unknown` means "not observed" and must stay distinct from `post`. Both
-weak-symbol defaults in `mac_pcap.c` answer `unknown`/`dlsch` deliberately.
+**Report both denominators.** `established/all RARs` is comparable with the historical figures;
+`established/(RARs with decoded traffic)` drops UEs the receiver never saw — but it also drops
+UEs that RACHed and did nothing, so it is an upper bound, not a correction. On the trolley
+capture the two are 39.2% and 83.4%. Quoting one alone moves the headline by 40 points.
+
+**Never guess a phase.** The domain is now seven values, and two pairs must not be collapsed:
+`unknown` (could not watch) vs `none` (watched, saw nothing — the detection signal), and
+`unknown` vs `n/a` (not a UE identity). The `sec=` field is padded to exactly 7 characters so
+the join can splice it in place, so nothing longer than `unknown` can ever be added. Both
+weak-symbol defaults in `mac_pcap.c` answer `unknown`/`dlsch` deliberately, and the sec_phase
+one is now the only implementation.
 
 **`rach_filter_only = true` for any per-UE work.** Blind mode manufactures RNTIs from
 descrambled CRCs — 6,369 of them in 60 s against 188 real. Fine for aggregate load, unsound
@@ -143,11 +160,14 @@ per-UE.
 sibling check — parsing the X-macros and grepping the other four caught `mark_security_phase`
 missing from the docs table.
 
-**`rlc_reassembly` and `qam_retry` are replay-only**, enforced in `task_scheduler.c` by ANDing
-each with `mode == REPLAY`, and their flags in `security_rrc.cpp` are **per rf_idx** — `mode` is
-per device, so a global flag would let a replaying device switch on behaviour that is unsound
-for a live neighbour. The GUI disables them unless a cell is replaying; that is guidance, the
-AND is the guarantee.
+**`mark_security_phase` is replay-only and refused at config time** for live or record: with
+no in-process parsing a UE never leaves the tracked set early, and the extra decode work is
+paid for in dropped subframes live. It also forces `pcap_mac` on, because the pcap is now the
+only output that matters. **`qam_retry` is replay-only too**, enforced in `task_scheduler.c` by
+ANDing with `mode == REPLAY`; its flag in `security_rrc.cpp` is **per rf_idx** — `mode` is per
+device, so a global flag would let a replaying device switch on behaviour unsound for a live
+neighbour. The GUI disables it unless a cell is replaying; that is guidance, the AND is the
+guarantee.
 
 ---
 
@@ -160,20 +180,20 @@ Branch `pcap`, 20 commits ahead of `13a0b95`, `origin/security` merged in. Pushe
 `amarder89/ng-scope:gui` image came from. `measurements/README.md` and `measurements/run.sh`
 still assume the container and its `/src/...` paths.
 
-**Uncommitted work in the tree**, validated across five captures and documented in
-`docs/security-implementation.md` §3.6, §3.7, §4 and §7:
+**Uncommitted work in the tree.** RRC/NAS detection has moved out of ngscope entirely:
+`security_rrc.cpp` went from 858 lines to ~247, the whole RLC reassembly / length-indicator /
+ASN.1 path is gone, and `security_ctx.c` keeps only the tracked set and the coverage counters.
+ngscope writes `mac-<rf>.pcapng` and claims nothing; `tools/security_scan.py` dissects it with
+Wireshark. Verified on all five reference captures: identical detections, RAR cross-check
+identical, zero comment/dissection mismatches, the `sec=` splice byte-exact.
+`mark_security_phase` is replay-only and forces `pcap_mac` on. Also fixed on the way: PHICH
+`.dciLog` records were invalid JSON (`dci_log.c`, missing separator plus a trailing comma) --
+latent only because every config sets `log_phich = false`.
 
-- `nof_thread > 8` is now refused at config time instead of segfaulting.
-- Every DL-DCCH SDU is accounted for in a fourth teardown line.
-- RLC reassembly of split SDUs, **replay only** — recovered a SecurityModeCommand that was
-  otherwise silently lost.
-- `unpack_dcch()` read the RLC framing-info and extension bits from the wrong octet.
-- `rlc_reassembly` and `qam_retry` are real config keys now, replay-gated in C and disabled
-  in the GUI unless a cell replays. GUI-side **Join after the run** runs
-  `tools/security_phase_join.py` when ngscope exits (not between sweep channels).
-- The RLC length-indicator chain is walked, so several SDUs in one PDU are all read. Worth
-  **6 extra SecurityModeCommands on mt_airy02 (23.1% → 46.2%)** and nothing on the trolley
-  capture, where it only adds 144 already-known messages.
+Cost measured on the trolley capture: replay 119 s -> 142 s (+19%), PDSCH attempts 3,315 ->
+11,953, tracking high-water 64 -> 93 of 512, no evictions and nothing unscanned. The extra
+work is because a UE no longer leaves the tracked set when its SMC is found -- nothing in the
+process knows what an SMC is any more.
 
 **`enable_256qam` still defaults to `true`, and in replay it no longer matters much.** The
 decoder now retries a failed transport block on the other MCS->TBS table and keeps whichever
@@ -188,10 +208,20 @@ flipping it changes `tbs` in existing output. Do not change it unprompted.
 
 ## Next
 
-Most worthwhile: **`ngscope_mac_pcap_classify()` has no strong override**, so the pcap comment
-reports `ch=dlsch` for every C-RNTI instead of `ccch`/`srb`/`drb`. The MAC PDU walk already
-exists in `scan_mac_pdu()` (`security_rrc.cpp`) and needs lifting into a shared classifier.
+The offline handover is done and verified; what is left is finishing the seams.
+
+- **`docs/security-implementation.md` §9** still describes the pre-handover verification
+  recipe and the old per-capture tables. The numbers are unchanged (39.2 / 54.2 / 32.4 / 50.0
+  / 10.3) but the commands are not.
+- **`ch=` could come from the dissection.** `mac-lte.dlsch.lcid` is already in the scan's
+  tshark pass, so `ccch`/`srb`/`drb` is a few lines in `security_scan.py` plus a second field
+  in the comment — not the shared C classifier the old note called for.
+- **`security_scan.py` has no `--verify` pass yet.** The plan's step 6 — re-dissect the patched
+  file and assert the indicator sets are unchanged — is not implemented. The equivalent check
+  was run by hand and passed (identical dissection outside the comment line, size preserved).
+- **Ordering integrity is not yet counted.** TTI inversions after reorder would tell you when
+  Wireshark's order-dependent RLC reassembly might be losing SDUs; nothing measures it today.
 
 `docs/security-implementation.md` §7 lists the other gaps and §6 records what was deliberately
-*not* built, with reasons — check it before proposing work, several plausible ideas were
-considered and rejected on measurement.
+*not* built, with reasons — including two inferences (opacity, payload entropy) rejected on
+measurement, which look compelling until you check them.

@@ -141,9 +141,9 @@ lte_rrc.securityModeCommand_element
 
 ## Known limitations
 
-- **`sec` is almost always `unknown` in the raw file.** The boundary is the
+- **`sec` is always `unknown` in the raw file, by construction.** The boundary is the
   SecurityModeCommand, which arrives *after* the packets it bounds, so most records cannot be
-  placed at the time they are written. Join against `security_log-<rf_idx>.csv` afterwards for
+  placed at the time they are written. Run `tools/security_scan.py` afterwards for
   the authoritative labelling.
 - **A gap in the capture and a UE that never received a message look identical.** Under live
   capture the scheduler discards subframes when every decoder is busy, leaving holes with no
