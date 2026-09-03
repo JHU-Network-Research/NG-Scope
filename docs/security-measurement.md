@@ -9,6 +9,13 @@ with a fake base station, because the fake eNB cannot derive `K_eNB` or produce 
 `SecurityModeCommand`. A cell where UEs attach but never reach security is the signature.
 The same measurement is useful for ordinary network characterisation.
 
+**Before the first run**, check that tshark is set up: detection is offline, so every number
+below comes from Wireshark dissecting `mac-<rf>.pcapng`. Only two things are needed — tshark
+with `reordercap`, and, on Ubuntu, an AppArmor allowance for capture files under `$HOME`. The
+DLT mapping is passed by the tool and the LTE dissector defaults are already correct.
+[docs/pcap.md § What tshark needs](pcap.md#what-tshark-needs) has the one-command check and
+the recipe.
+
 ---
 
 ## What is observable, and why
