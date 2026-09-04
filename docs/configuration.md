@@ -152,7 +152,7 @@ missing **required** key is fatal — NG-Scope lists what is missing and exits.
 | `log_ul` | bool | `true` | Write the uplink `.dciLog` file. |
 | `log_phich` | bool | `false` | **No longer supported — forced off with a warning.** It wrote the PHICH `.dciLog`, whose only real content was the synthetic `rv = 4` record PHICH decoding injected for the configured target RNTI. Both are gone; see [Removed settings](#removed-settings). |
 | `mode` | int | `0` | `0` normal, `1` record IQ to disk, `2` replay IQ from disk. |
-| `replay_fname` | string | none | Source file for `mode = 2`. Required only in replay mode; NG-Scope exits if it is missing. Recording always writes to `<out_dir>/<timestamp>/recorded-samples.bin` and ignores this key. |
+| `replay_fname` | string | none | Source file for `mode = 2`. Required only in replay mode; NG-Scope exits if it is missing **or unreadable** — checked at config time, before the radio and decoders are set up. May be compressed: a `.bz2`, `.gz` or `.xz` suffix is decompressed on the fly. Recording always writes to `<out_dir>/<timestamp>/recorded-samples.bin` and ignores this key. |
 | `debug` | bool | `false` | Verbose per-subframe tracing. Extremely noisy — thousands of lines per second. |
 | `silent` | bool | `false` | Suppress the per-subframe summary lines. |
 | `decode_pdcch` | bool | `true` | Decode the control channel. Setting it `false` synchronises and records without decoding, which is what you want for a pure IQ capture. |
@@ -166,6 +166,49 @@ takes about 60 seconds to replay.
 
 Replay is a faithful re-run of the decode path, which makes it the right way to A/B a
 configuration change: run twice on the same file, changing one flag.
+
+#### Compressed recordings
+
+`replay_fname` may point at a compressed recording. The suffix selects the decompressor, a
+parallel one preferred and the serial one used if that is absent:
+
+| suffix | preferred | fallback |
+|---|---|---|
+| `.bz2` | `lbzip2` | `bzip2` |
+| `.gz` | `pigz` | `gzip` |
+| `.xz` | `xz` | — |
+
+It runs as a subprocess on a pipe, concurrently with the decoder, so it costs wall time only
+when the decoder is left waiting on it. In-process decompression via `libbz2` was rejected on
+measurement: it is the same single-threaded algorithm as `bzip2 -dc` (and as `bzcat`, which is
+a symlink to the same binary), so it buys nothing over the subprocess and gives up the
+concurrency.
+
+**It never changes the result, only the wall time.** The replay reads strictly forward, and
+the one place it seeks — skipping a payload it has rejected — reads and discards on a pipe
+instead. Verified on a 3.14 GB capture: uncompressed, `lbzip2` and `bzip2` all produced
+17,072 frames read and the same 3,167 downlink DCIs, with identical RAR sets. The pcap
+differed by one packet, which is **baseline nondeterminism** — two identical uncompressed runs
+differ by the same one packet, because which tracked UEs a subframe's decoder gets to scan
+depends on thread timing.
+
+**Whether decompression limits the run depends on the cell, so it is measured, not
+predicted.** Every replay prints a `REPLAY SOURCE` line at teardown giving the fraction of
+wall time spent blocked reading the recording and the resulting source throughput. On that
+capture — 100 PRB, 5 decoder threads, so about 115 MB/s consumed:
+
+| source | wall | blocked | source rate | verdict |
+|---|---|---|---|---|
+| plain file | 27.2 s | 1% | 9,499 MB/s (page cache) | — |
+| `lbzip2` | 36.8 s | 13% | 642 MB/s | decompression kept up |
+| `bzip2` | 115.2 s | 79% | 34 MB/s | the decompressor was the limiter |
+
+So on a wide cell serial `bzip2` costs roughly 4× the wall time, while on a narrower one — or
+with heavier decode settings such as `probe_blind_dci`, which slow the consumer — it has room
+to keep up. Read the teardown line rather than assuming either way.
+
+Compression buys less than it costs on IQ: `bzip2` gets a recording to about 46% of its
+original size. Worth it for an archive, rarely for a capture being iterated on.
 
 ---
 

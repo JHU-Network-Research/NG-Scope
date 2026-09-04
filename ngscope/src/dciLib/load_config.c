@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <unistd.h>
 #include <string.h>
 #include <dirent.h>
 #include <libconfig.h>
@@ -429,6 +431,15 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
 
         if (config->rf_config[i].mode == REPLAY && config->rf_config[i].replay_fname == NULL) {
             printf("config: ERROR: rf_config%d mode=2 (replay) requires replay_fname\n", i);
+            nof_missing_required++;
+        }
+        /* Checked here rather than at open time so a typo'd path fails before the radio,
+         * the decoders and the pcap are set up -- and so a .bz2 that is simply absent is not
+         * mistaken for a decompressor problem. */
+        if (config->rf_config[i].mode == REPLAY && config->rf_config[i].replay_fname != NULL &&
+            access(config->rf_config[i].replay_fname, R_OK) != 0) {
+            printf("config: ERROR: rf_config%d replay_fname '%s' is not readable: %s\n", i,
+                   config->rf_config[i].replay_fname, strerror(errno));
             nof_missing_required++;
         }
     }

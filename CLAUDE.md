@@ -57,7 +57,16 @@ project's positive result, so that is a phantom detection. `assert_dissected()` 
 ## Measuring
 
 **Replay, not live.** The scheduler blocks on a busy decoder in replay but *discards* subframes
-live, so only replay gives a comparable yield figure. `measurements/` has the harness; its
+live, so only replay gives a comparable yield figure.
+
+**`replay_fname` may be compressed** -- `.bz2`/`.gz`/`.xz`, decompressed by a subprocess on a
+pipe (`lbzip2` preferred, `bzip2` fallback). Never changes the result, only wall time:
+verified identical frames/DCIs/RARs across all three on a 3.14 GB capture. `libbz2` in-process
+was rejected on measurement -- same single-threaded algorithm as `bzcat`, which is a symlink to
+`bzip2`, so it buys nothing and loses the concurrency. Whether it bottlenecks depends on the
+cell, so every replay now prints a `REPLAY SOURCE` teardown line with the fraction of wall time
+blocked on the source: 1% plain, 13% lbzip2, **79% serial bzip2** on a 100 PRB cell (27 s ->
+37 s -> 115 s). `measurements/` has the harness; its
 README explains the scripts.
 
 **The harness is not yet host-native.** `measurements/run.sh` hard-codes `/src/measurements/…`
