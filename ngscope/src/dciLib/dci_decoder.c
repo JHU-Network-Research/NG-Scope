@@ -318,8 +318,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	if (decode_SIB){
 		if ((sf_idx == 5 && (sfn % 2) == 0)) {
-			ret = 0;
-		ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+			ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
 			if (ret > 0) {
 				if (debug)
@@ -327,15 +326,13 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 				decoded_sib=true;
 			}
 		} else { //SIB2
-				ret = 0;
-				// have_sib2 = true;
 			ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
 										&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
-				if (ret > 0) {
-					if (debug)
-						printf("CELL: Successfully decoded SIB2 with code %d!\n", ret);
-					decoded_sib = true;
-				}
+			if (ret > 0) {
+				if (debug)
+					printf("CELL: Successfully decoded SIB2 with code %d!\n", ret);
+				decoded_sib = true;
+			}
 		}
 	}
 
@@ -413,7 +410,6 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 	dci_decoder->ue_dl.nof_allocated_locations = 0;
 
         // Now decode the PDSCH
-    // if(decode_pdsch && !decoded_sib){ // JH SKIP_SIBS
 	if(decode_pdsch) {
 
         /* SRSRAN_TM1 == 0, so the historical `tm = 3` here is TM4, not TM3.
@@ -486,11 +482,6 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
 				ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
 
-				//   int D = dl_msg.nof_bits + 16;
-  				//   int R_sb = (int)(ceil(D/32.0));    // the block will be padded with dummy values until its length is a multiple of 32
-  				//   int K_w = 3 * R_sb * 32;
-
-
 				ngscope_dci_tb_t tb1;
 				memset(&tb1, 0, sizeof(ngscope_dci_tb_t));
 				ngscope_dci_tb_t tb2;
@@ -503,10 +494,6 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 					tb2 = dl_msg.tb[1];
 				}
 
-				// uint32_t cfi = dci_decoder->dl_sf.cfi;
-				// uint32_t nof_cce = ((cfi > 0 && cfi < 4) ? dci_decoder->ue_dl.pdcch.nof_cce[cfi - 1] : 0);
-				// uint32_t nof_symbols = 36*nof_cce;
-				// ngscope_consistency_result_t cons = ngscope_consistency_check(&dci_decoder->cell, &dl_msg, sf_idx, cfi);
 
 				if(decodelog){
 					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];

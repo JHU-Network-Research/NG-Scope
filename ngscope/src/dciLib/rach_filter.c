@@ -1,6 +1,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include "ngscope/hdr/dciLib/rach_filter.h"
 #include "ngscope/hdr/dciLib/ngscope_def.h"
@@ -82,7 +83,7 @@ void ngscope_rach_filter_add(int rf_idx, uint16_t rnti, uint32_t tti)
     if (!rf_idx_valid(rf_idx) || rnti == 0) {
         return;
     }
-    rach_filter_t* q = &rach_filter[rf_idx];
+    rach_filter_t* q = &rach_filter[rf_idx]; // JH Does this need to be per rf device?
 
     pthread_mutex_lock(&rach_filter_mutex[rf_idx]);
     if (!q->seen[rnti]) {
@@ -96,6 +97,7 @@ void ngscope_rach_filter_add(int rf_idx, uint16_t rnti, uint32_t tti)
     pthread_mutex_unlock(&rach_filter_mutex[rf_idx]);
 }
 
+// Has the given rnti been seen by the specified rf device?
 bool ngscope_rach_filter_pass(int rf_idx, uint16_t rnti)
 {
     if (rnti == 0) {
@@ -114,6 +116,7 @@ bool ngscope_rach_filter_pass(int rf_idx, uint16_t rnti)
     return pass;
 }
 
+// prune DCIs from the given dci_per_sub struct according to the filter for the rf device
 int ngscope_rach_filter_apply(int rf_idx, ngscope_dci_per_sub_t* q)
 {
     if (q == NULL || !rf_idx_valid(rf_idx)) {
