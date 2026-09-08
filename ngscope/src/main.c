@@ -38,7 +38,7 @@ bool have_sib2 = false; // global variable for sib2 decoding
 /*********************************************
  * Function name: sig_int_handler
  * Return value type: void
- * Description: handle signal to modify the 
+ * Description: handle signal to modify the
  *     global variable "go_exit".
  * Author: PAWS (https://paws.princeton.edu/)
 *********************************************/
@@ -57,7 +57,7 @@ void sig_int_handler(int signo)
 /*********************************************
  * Function name: print_help
  * Return value type: void
- * Description: print help info for command 
+ * Description: print help info for command
  *     line inputs.
  * Author: PAWS (https://paws.princeton.edu/)
 *********************************************/
@@ -86,8 +86,8 @@ int main(int argc, char** argv)
     /* Variables tahtw ill hold the command line arguments */
     char* config_path = NULL;
     char* cellcfg_path = NULL;
-    char* sib_path = NULL;
-    char* out_path = NULL;
+    const char* sib_path = NULL;
+    const char* out_path = NULL;
 
     /* Parsing command line arguments */
     while ((c = getopt (argc, argv, "c:s:b:o:h")) != -1) {
