@@ -541,7 +541,13 @@ int srsran_ngscope_search_all_space_array_signleUE_yx(srsran_ue_dl_t*        q,
 	return ret;
 }
 
-/* Yaxiong's dci search function */
+/* Yaxiong's dci search function.
+ *
+ * RETAINED BUT UNREACHABLE -- nothing calls this. It decodes a single named RNTI instead of
+ * running the blind search, which was the decode_single_ue config option. Both that option
+ * and the target RNTI it decoded are gone, so there is no longer a way to name a UE. It is
+ * kept because it is a working targeted-decode path that a future per-UE feature could
+ * reuse; srsran_ue_decode_dci_yx() below it already returns 0 for a zero RNTI. */
 int srsran_ngscope_decode_dci_singleUE_yx(srsran_ue_dl_t*        	q,
                                              srsran_dl_sf_cfg_t*    sf,
                                              srsran_ue_dl_cfg_t*    cfg,

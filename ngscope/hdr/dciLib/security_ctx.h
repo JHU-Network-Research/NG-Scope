@@ -8,71 +8,34 @@
 extern "C" {
 #endif
 
-/* Where a unicast DCI sits relative to the UE establishing an AS security context.
+/* Which UEs are worth decoding transport blocks for, and how well that decoding went.
  *
- * Decided by observation only. AS security actually activates when the UE sends
- * SecurityModeComplete, which is uplink and therefore invisible here; what a downlink
- * sniffer can see is the SecurityModeCommand a few milliseconds earlier, sent unciphered.
- * That is the boundary used, and it is slightly early by construction.
+ * This file used to also decide what those transport blocks *meant* -- it tracked each UE's
+ * SecurityModeCommand and labelled every DCI pre/post/unknown. It no longer does. ngscope
+ * writes the decoded MAC PDUs to mac-<rf_idx>.pcapng and makes no claim about their
+ * contents; tools/security_scan.py dissects that capture with Wireshark, which reassembles
+ * RLC and understands NAS, and writes security_events / security_sessions / security_summary
+ * beside the run.
  *
- * Nothing is inferred from elapsed time or grant counts: a DCI we cannot place is
- * UNKNOWN. In particular, a failure to decode RRC is not evidence of ciphering -- it is
- * equally consistent with a missed subframe -- so it never yields POST. */
-typedef enum {
-    NGSCOPE_SEC_UNKNOWN = 0,
-    NGSCOPE_SEC_PRE,
-    NGSCOPE_SEC_POST,
-} ngscope_sec_phase_t;
+ * What remains here is the tracked set (a RAR anchors an RNTI; it stays for a bounded
+ * window) and the coverage counters. Those counters are the validity conditions for
+ * everything the offline tool concludes: a UE dropped by a cap or a busy decoder is
+ * indistinguishable in the pcap from a UE that never reached security, so the rate can only
+ * be read as a property of the cell while they are zero. */
 
-const char* ngscope_sec_phase_str(ngscope_sec_phase_t phase);
-
-/* SI-RNTI, P-RNTI and RA-RNTI are not UE identities and have no security context. */
+/* SI-RNTI, P-RNTI and RA-RNTI are not UE identities and are never tracked. */
 bool ngscope_sec_is_unicast(uint16_t rnti);
 
-/* Create security_log-<rf_idx>.csv with its header, before any UE is tracked. Call once per
- * device at startup, as with the RAR log: an empty file then means "measured, nobody reached
- * security" -- which for IMSI-catcher detection is the result of interest -- and a missing
- * file means the run never measured it. */
-void ngscope_sec_log_init(const char* out_path, int rf_idx);
-
-/* A RAR handed this RNTI out: the anchor. Re-arms the RNTI, so an identity reused later in
- * a long capture is tracked as the new session rather than the old one. */
+/* A RAR handed this RNTI out: the anchor, and the only way into the tracked set. Re-arms the
+ * RNTI, so an identity reused later in a long capture is tracked as the new session rather
+ * than the old one. The RAR log this feeds is also the denominator the offline tool seeds
+ * its sessions from. */
 void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
                           uint64_t collection_time);
 
-/* A successfully decoded, still-unciphered RRC message. Proves everything up to this point
- * preceded security activation, even if the SecurityModeCommand itself is never seen. */
-void ngscope_sec_note_unciphered_rrc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us);
-
-/* The SecurityModeCommand: the boundary itself. */
-void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
-                          uint64_t collection_time, const char* out_path);
-
-ngscope_sec_phase_t ngscope_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us);
-
-/* RNTIs worth attempting an RRC decode for right now: anchored by a RAR, not yet past the
- * boundary. Returns how many were written to out[]. */
+/* RNTIs worth attempting a PDSCH decode for right now: anchored by a RAR and still inside
+ * the tracking window. Returns how many were written to out[]. */
 int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out);
-
-/* What became of a DL-DCCH SDU handed to the RRC unpacker.
- *
- * Counted rather than dropped quietly. A SecurityModeCommand lost anywhere in here is
- * indistinguishable in the output from a UE that never reached security, which is the one
- * confusion this measurement cannot afford -- so every path that discards an SDU lands in
- * exactly one of these buckets and is reported at teardown. */
-typedef enum {
-    NGSCOPE_DCCH_OK = 0,       /* unpacked from a single PDU */
-    NGSCOPE_DCCH_REASSEMBLED,  /* unpacked after rejoining segments */
-    NGSCOPE_DCCH_CTRL,         /* RLC control PDU (STATUS): carries no SDU, not a loss */
-    NGSCOPE_DCCH_SEGMENTED,    /* part of a split SDU, and reassembly was off */
-    NGSCOPE_DCCH_UNSUPPORTED,  /* re-segmented, or carries a length-indicator list */
-    NGSCOPE_DCCH_SHORT,        /* too short to hold RLC + PDCP + MAC-I */
-    NGSCOPE_DCCH_ASN1,         /* headers stripped, ASN.1 refused it -- normally ciphered */
-    NGSCOPE_DCCH_REASM_LOST,   /* a partial SDU dropped before its last segment arrived */
-    NGSCOPE_DCCH_NOF_RESULTS
-} ngscope_dcch_result_t;
-
-void ngscope_sec_count_dcch(int rf_idx, ngscope_dcch_result_t result);
 
 /* One transport block decoded. `retried` means it only passed CRC after falling back to the
  * other MCS->TBS table, i.e. the configured enable_256qam is wrong for that grant. */
@@ -84,7 +47,7 @@ void ngscope_sec_count_tb_table(int rf_idx, bool retried);
 void ngscope_sec_count_tb_retry(int rf_idx);
 
 /* Counters, for measuring how often the decode actually lands. */
-void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok, bool rrc_ok);
+void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok);
 void ngscope_sec_report(int rf_idx);
 
 #ifdef __cplusplus

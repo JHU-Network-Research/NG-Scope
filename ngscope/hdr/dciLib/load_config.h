@@ -34,7 +34,6 @@ typedef struct{
 typedef struct{
     int                 nof_rf_dev;
     int                 remote_enable;
-	int 				decode_single_ue;
 	int 				decode_SIB;
 	int 				decode_RAR;
 	int 				rar_seed_tracker;
@@ -43,11 +42,12 @@ typedef struct{
 	int 				enable_256qam;
 	int 				pcap_mac;
 	int 				pcap_max_mb;
-	/* Replay-only decode aids. Both are inert in live capture -- see security_rrc.h for why
-	 * holding partial RLC state, or spending a second PDSCH decode, is only sound where the
-	 * scheduler blocks on a busy decoder instead of discarding the subframe. */
-	int 				rlc_reassembly;
+	/* Replay-only decode aid: inert in live capture, where spending a second PDSCH decode
+	 * per failure would be paid for in discarded subframes. See security_rrc.h. */
 	int 				qam_retry;
+	/* Replay-only measurement instrument: probe every blind-search DCI against the DL-SCH
+	 * CRC and record whether it is real, split by RACH confirmation. See security_rrc.h. */
+	int 				probe_blind_dci;
     const char *        dci_logs_path;
     const char *        sib_logs_path;
     const char *        out_path;
@@ -82,7 +82,6 @@ typedef struct{
 #define NGSCOPE_TOP_LEVEL_KEYS(X)                                                          \
     X(INT,    "nof_rf_dev",        nof_rf_dev,         1,      false)                      \
     X(BOOL,   "remote_enable",     remote_enable,      false,  false)                      \
-    X(BOOL,   "decode_single_ue",  decode_single_ue,   false,  false)                      \
     X(BOOL,   "decode_SIB",        decode_SIB,         false,  false)                      \
     X(BOOL,   "decode_RAR",        decode_RAR,         false,  false)                      \
     X(BOOL,   "rar_seed_tracker",  rar_seed_tracker,   false,  false)                      \
@@ -91,8 +90,8 @@ typedef struct{
     X(BOOL,   "enable_256qam",     enable_256qam,      true,   false)                      \
     X(BOOL,   "pcap_mac",          pcap_mac,           false,  false)                      \
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
-    X(BOOL,   "rlc_reassembly",    rlc_reassembly,     true,   false)                      \
-    X(BOOL,   "qam_retry",         qam_retry,          true,   false)
+    X(BOOL,   "qam_retry",         qam_retry,          true,   false)                      \
+    X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \

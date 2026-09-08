@@ -58,8 +58,12 @@ static const char* src_str(ngscope_mac_src_t src)
     }
 }
 
-/* Weak defaults. Both are overridden by the security/MAC-parsing half when it is present;
- * keeping them weak lets the writer land and be useful on its own. */
+/* Weak defaults, and now the only implementations of both.
+ *
+ * sec_phase used to be overridden by the in-process RRC parser. That parser is gone, so
+ * every packet is written "unknown" and tools/security_phase_join.py patches the field
+ * afterwards from the offline scan -- which is why mac_pcap.c pads it to a fixed 7
+ * characters. Left weak so a future in-process classifier could still override. */
 
 __attribute__((weak)) const char* ngscope_mac_pcap_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us)
 {

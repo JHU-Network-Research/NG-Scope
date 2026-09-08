@@ -142,7 +142,7 @@ entry points reset on entry, so the leak needs the RAR search to have hit — 30
 58,000. Yield was identical either way. Kept because it is free and correct. Recorded here
 because "plausible bug with no measured effect" is worth knowing.
 
-### 3.6 RLC framing info and the extension bit were read from the wrong octet — `security_rrc.cpp`
+### 3.6 RLC framing info and the extension bit were read from the wrong octet — `security_rrc.cpp` *(code since deleted)*
 
 `unpack_dcch()` took FI and E from octet 1 of the AMD PDU header. Per 36.322 §6.2.1.4 both live
 in octet 0 — `D/C | RF | P | FI(2) | E | SN(9:8)` — and octet 1 is the low byte of the sequence
@@ -216,44 +216,40 @@ so cannot live in `ngscope_dci`, which links against `srsran_phy`.
 The default was left `true` at the operator's request — flipping it changes existing `.dciLog`
 throughput figures.
 
-### `security_rrc.cpp` — DCCH accounting and RLC reassembly
+### `tools/security_scan.py` — offline RRC/NAS detection
 
-Every DL-DCCH SDU now lands in exactly one `ngscope_dcch_result_t` bucket, reported at teardown.
-RLC control PDUs are counted separately from failures because a STATUS PDU carries no SDU and is
-not a message we failed to read; everything else in the "unread" half is an RRC message that
-existed and was not decoded, and any of those could have been a SecurityModeCommand. Without
-this the loss was invisible, which is the one thing §5 says the measurement cannot tolerate.
+This replaced an in-process RRC parser in `security_rrc.cpp` that did its own RLC reassembly,
+length-indicator walking and ASN.1 unpacking. Every time that parser was compared against
+Wireshark on the same bytes it came up short — it bailed on segmentation, then on LI chains,
+and it had no NAS layer at all. Each gap was closed by hand; Wireshark had them for free.
 
-Reassembly rejoins SDUs the eNB split across grants, and is **enabled only for replay**
-(`ngscope_sec_rrc_set_reassembly()`, called from `task_scheduler.c` under `mode == REPLAY`,
-before any decoder thread starts). Holding a partial SDU until the rest arrives is sound exactly
-where nothing goes missing: replay blocks on a busy decoder and sees every subframe, whereas
-live capture discards them, and a discarded middle segment leaves a partial that never completes
-— indistinguishable, in the output, from a UE that never reached security.
+So ngscope now decodes each RACH-anchored UE's transport blocks into `mac-<rf>.pcapng` and
+makes **no claim about their contents**. The scanner reorders that capture, dissects it in one
+tshark pass, and writes:
 
-A PDU may also hold several SDUs at once, delimited by a **length-indicator chain**: a run of
-`[E(1), LI(11)]` pairs after the two fixed octets, padded with 4 bits when the count is odd.
-`unpack_dcch()` walks it, hands every whole piece straight to the unpacker, and sends only the
-leading and trailing pieces into reassembly. That matters because FI constrains just the outer
-pieces — a PDU can carry a complete message *and* the start of the next one, which is exactly
-the shape that hid a SecurityModeCommand on the mt_airy02 cell.
+| file | one row per |
+|---|---|
+| `security_events-<rf>.csv` | indicator occurrence — not per frame, which is the structural fix for the `_ws.col.Info` undercount |
+| `security_sessions-<rf>.csv` | RAR-anchored session, seeded from `rar_log` so a UE with no evidence still has a row |
+| `security_summary.json` | run: provenance, validity checks, both rates |
 
-Because a PDU can be both the end of one SDU and the start of another, the fragment store keeps
-a **head** and a **tail** per sequence number rather than a single buffer, and a completed SDU
-removes only the segments it consumed — clearing the whole slot would silently discard a second
-SDU still being assembled.
+Then it patches `sec=` in the reordered capture **in place, keyed on frame number** — an index
+into the very file it dissected, which removes the ambiguity the old `(rnti, timestamp)` join
+had when two PDUs for one RNTI landed in the same subframe.
 
-Two details that are not obvious:
+Three details that are not obvious:
 
-- **Segments are matched by sequence number, not arrival order.** Decoder threads run in
-  parallel, so a later subframe routinely finishes first. On the AT&T capture the last segment
-  was already held when the first arrived.
-- **A reassembled message is attributed to its FI=LAST segment**, not to whichever piece
-  completed the reassembly. Those differ for the same reason, and using the completing subframe
-  put the boundary at an arbitrary TTI — 1839 for a message that finished on air at 1840,
-  breaking the `rar_to_smc_ms == TTI delta` gate.
-
-Partial SDUs still held at teardown are flushed and counted as lost rather than forgotten.
+- **The AS outcome is resolved from RRC evidence only.** NAS security is a different context
+  with a different peer, and folding `nasSecurityModeCommand` into it produced a phantom
+  detection on the trolley capture — caught by the Stage 0 comparison below. `nas_outcome` is
+  its own column.
+- **`no_traffic` is kept apart from `none`.** Zero decoded PDUs is a statement about the
+  receiver; decoded traffic with no evidence is a statement about the cell. Both rates are
+  reported for the same reason.
+- **The retired parser's verdicts are frozen** in `tools/fixtures/retired_parser_baseline.json`,
+  captured while both parsers still existed. That was the last moment two independent parsers
+  could ever run on the same bytes; a scan must never lose an RNTI it lists. Verified on all
+  five reference captures — 271 / 52 / 22 / 13 / 10, zero missing.
 
 ### `security_rrc.cpp` — letting the CRC pick the MCS→TBS table
 
@@ -292,7 +288,7 @@ only on failures and PDSCH decoding is a small part of a replay's work.
 **Two clocks, and which is authoritative.** `timestamp_us` is host wall clock at decode;
 `collection_time` is the radio domain. In replay the wall clock advances at *decode* speed, so
 anything derived from it is wrong — measured, it overstated RAR-to-SMC delay by 26.5 ms at the
-median and 1046 ms at the tail. `security_log` now carries both, and `rar_to_smc_ms` comes from
+median and 1046 ms at the tail. `security_sessions` is keyed on collection time throughout, and `ms_rar_to_outcome` comes from
 the collection times. Validation: the capture-time delta matches the TTI delta of the same two
 subframes in 104 of 104 cases, as it must, since one TTI is one millisecond.
 
@@ -336,6 +332,70 @@ and `ngscope_sec_tracked()` walks `nof_active`, not the array size. But high-wat
 512, and at 4096 the scan cap would bind first and lose the same information *without* the
 eviction counter firing. Raising the outer cap alone converts a loud failure into a quiet one.
 
+**Inferring the boundary from ciphered DCCH.** The idea: a UE whose DCCH parses in the clear
+and then stops parsing has had security activate, even if the SecurityModeCommand itself was
+never decoded — recoverable from the `ciphered/unparseable` bucket the DCCH accounting already
+counts. It sounds sound. It is not, and the reason is measurable.
+
+Calibrating against UEs whose boundary *is* known, post-boundary SDUs should be opaque and
+pre-boundary ones readable. They are not:
+
+| capture | `sec=pre` | `sec=post` |
+|---|---|---|
+| `att_trolley` | 273 parsed / 2 opaque (0.7%) | 48 parsed / 2 opaque (**4.0%**) |
+| `att_850_office` | 21 parsed / 0 opaque | 4 parsed / 1 opaque (20%) |
+
+**96% of post-security DCCH still parses**, so as a detector of "security activated" this has
+about 4% sensitivity, against a 0.7% false-positive rate pointing the other way. Two reasons,
+both already known: EEA0 null ciphering leaves post-security traffic readable, and the boundary
+is early by construction — ciphering starts at `SecurityModeComplete`, which is uplink and
+invisible, so traffic just after the SMC is legitimately still clear.
+
+A third contaminant: the `ciphered/unparseable` bucket is not purely ciphertext. On
+`att_850_office` at least one of its four was a corrupt 7-byte SDU on a marginal decode
+(EVM > 1) that Wireshark read as a SecurityModeCommand and srsRAN's ASN.1 rejected. So even the
+small opaque population is mixed.
+
+**Payload entropy instead of parse failure** is the obvious next idea, and it fails the same way
+for sharper reasons. Raw, it looks convincing:
+
+```
+sec=pre    n=274  median len   8 B  median entropy 3.00 bits/byte
+sec=post   n= 50  median len 136 B  median entropy 6.66 bits/byte
+```
+
+But entropy is bounded by log2(length) and the two populations are entirely different sizes.
+Length-matching removes the effect completely — on the only length both phases share, 8 bytes,
+pre is 3.00 and post is 3.00.
+
+It cannot work at either end of the size range, and both failures are structural:
+
+- **Short SDUs are floored by the MAC-I.** An 8-byte SRB SDU is 1 byte PDCP + 3 bytes RRC +
+  4 bytes MAC-I, and the MAC-I is an integrity tag — high entropy whether or not the payload is
+  ciphered. With 7–9 distinct bytes the ceiling is 2.81–3.17 bits/byte, and plaintext
+  SecurityModeCommands already sit at 3.00, pinned against it. There is no headroom for
+  ciphering to move into.
+- **Long payloads are ceilinged by PER.** Of the post-boundary payloads ≥ 32 bytes, 46 of 48
+  parse as readable RRC at 6.67–7.20 bits/byte. ASN.1 PER is densely packed, and near-optimal
+  coding is near-maximal entropy by definition, so plaintext RRC is indistinguishable from
+  ciphertext by this measure.
+
+So low entropy does not imply plaintext and high entropy does not imply ciphertext, and both
+error directions are populated in the captures here.
+
+Note the *original* objection to this class of inference — that the in-stream label goes wrong
+when decoder threads run out of order (see `ngscope_sec_phase()`) — is surmountable, because an
+offline inference in the join sees everything in order. It is the premise that fails, which is
+the stronger reason.
+
+**If you revisit this, run the calibration before the detector.** Cross-tabulate DCCH payloads
+by joined phase against whether they parse, on a capture where you have boundaries. Every
+variant of this idea assumes post-boundary traffic is opaque; on the cells measured here it is
+readable 96% of the time, and no statistic can detect encryption that is not present. A cell
+that genuinely ciphers its DCCH would change that, and entropy would then be the better
+discriminator of the two, because unlike parse failure it does not conflate ciphertext with
+corrupt or unsupported decodes.
+
 **Multi-channel IQ recording.** Needs a format version bump so old files are not misparsed.
 Currently refused rather than silently wrong.
 
@@ -348,17 +408,15 @@ gap, not a physical limit — 4-port spatial multiplexing is decodable in princi
 
 ## 7. Known gaps
 
-- **`ngscope_mac_pcap_classify()` has no strong override**, so `ch=` reports `dlsch` for every
-  C-RNTI instead of `ccch`/`srb`/`drb`. The MAC PDU walk to implement it already exists in
-  `scan_mac_pdu()` in `security_rrc.cpp`; it needs lifting into a shared classifier. This is
-  the most obviously worthwhile next task.
-- **`scan_mac_pdu()` does not check `pdu.nof_subh()`.** `sch_pdu::parse_packet()` returns `void`
-  and swallows the base class's error (`lib/src/mac/pdu.cc:218`), so `nof_subh() == 0` is the
-  only observable failure signal for a corrupt PDU.
-- **RLC reassembly is replay-only**, by design (see §4). A live run still bails on a segmented
-  SDU and counts it `segmented`, so a SecurityModeCommand split across grants is missed there.
-  The alternative — holding partial SDUs while the scheduler is discarding subframes — turns a
-  missed middle segment into a stall indistinguishable from a UE that never reached security.
+- **`ngscope_mac_pcap_classify()` still reports `ch=dlsch` for every C-RNTI.** The MAC PDU walk
+  that could have fed it was deleted with the parser, and rightly so — `mac-lte.dlsch.lcid` is
+  already in the scan's tshark pass, so the honest fix is to write `ch=` from the dissection
+  rather than reintroduce a walker.
+- **The ASN.1 layer is now single-sourced.** Nothing independently checks Wireshark's decode of
+  a SecurityModeCommand. Building a third parser would be worse than either of the two that
+  existed and reintroduces the maintenance problem this change removed. What guards it instead:
+  the frozen fixture (§4), the RAR cross-check, and `tshark_version` plus `fields_queried`
+  recorded in every `security_summary.json` so a dissector regression is attributable.
 - **`decode_SIB = true` segfaults on some cells.** Confirmed on
   `mt_airy02/earfcn-5330`: a SIGSEGV inside `srsran_ue_dl_find_and_decode_sib1`
   (`decode_sib.cpp:140`), reached from `dci_decoder_decode` → `dci_decoder_thread`, roughly two
@@ -369,9 +427,6 @@ gap, not a physical limit — 4-port spatial multiplexing is decodable in princi
   `pdsch_res[]` in that function is left uninitialised and only the enabled transport blocks get
   a payload pointer. `decode_SIB = false` avoids it, at the cost of `cellcfg.json`. Not
   diagnosed further.
-- **Re-segmented PDUs (`RF = 1`) are not handled.** Their header carries a segment offset that
-  is not parsed; they are counted `unsupported`. Rare: 2 across the trolley capture, 0 on
-  mt_airy02, and both were retransmissions of the same 1-byte tail.
 - **The first RAR of a run gets a TTI up to 60 ms too large.** On the AT&T capture
   `tti - collection_time` is a constant 405.111 ms for 130 of 131 RARs and 345.111 for the
   first, so the two clocks disagree on exactly one record while the SFN settles. It breaks the
@@ -383,6 +438,47 @@ gap, not a physical limit — 4-port spatial multiplexing is decodable in princi
 - **The correlation gate is still commented out** (`ue_dl.c`, `JH CORR_FILTER`). `73db5f8`
   replaced it with the RACH filter; now that the filter is optional, blind mode has no
   false-positive gate at all.
+- **NAS is never parsed**, and two signals sit unused behind that. Both are measured below and
+  neither is built: each needs a NAS layer ngscope does not currently have, and on the captures
+  here each is worth around 1% of the denominator. Recorded so the numbers do not have to be
+  rediscovered, and so the decision is revisitable on a cell where they are larger.
+
+  **Rejects would shrink the denominator.** A NAS `Attach reject` or `Tracking area update
+  reject` means the network refused the UE, so it was never going to reach AS security — the
+  same argument as context reuse (§4), and it belongs in the same teardown line. Counted per UE
+  on `lte-rrc`/`nas-eps` field filters, never `_ws.col.Info`:
+
+  | capture | RARs | SMCs | UEs carrying NAS | rejected, no SMC |
+  |---|---|---|---|---|
+  | `att_trolley` | 692 | 271 | 11 | **8** (1.2%) |
+  | `att_850_office` | 68 | 21 | 1 | 1 |
+  | `verizon_66636` | 96 | 52 | 0 | 0 |
+  | `mt_airy02/5330` | 97 | 10 | 1 | 0 |
+
+  On the trolley that moves 39.2% to 39.7%. Note `Authentication request` points the other way:
+  those two UEs got *further* than most, so a missing SMC there is a coverage failure rather
+  than a property of the cell. The EMM type field returns **hex** (`0x44` attach reject, `0x4b`
+  TAU reject, `0x52` authentication request, `0x5d` NAS security mode command) — a decimal map
+  silently reports zero rejects everywhere.
+
+  **NAS states its own security, in the clear.** Unlike RRC, every NAS message carries a
+  `security_header_type` octet that is never ciphered (24.301), so nothing has to be inferred:
+
+  ```
+  trolley   Plain, not security protected      126  (90.6%)
+            Integrity protected AND CIPHERED    12  ( 8.6%)
+            Integrity protected, new context     1  ( 0.7%)
+  ```
+
+  The declaration matches the observable — the EMM type is unreadable on exactly the ciphered
+  ones. **This is why the §6 entropy and parse-failure findings do not transfer to NAS**: there
+  is no length confound, no MAC-I floor, and unlike the AS side the ciphering demonstrably does
+  engage. A UE whose NAS goes ciphered has provably completed NAS authentication and NAS SMC
+  with the **core network**, which a fake base station cannot fake.
+
+  It is not a route to the AS boundary, though: NAS security is a separate context, separate
+  keys, separate peer. It is independent evidence about a UE, not a substitute for the
+  SecurityModeCommand.
 
 ---
 
@@ -416,51 +512,98 @@ Replay is the instrument: the scheduler blocks rather than dropping, so two runs
 file see identical input.
 
 ```bash
-cd build && make -j"$(nproc)" ngscope    # binary at build/ngscope/src/ngscope
-ngscope -c <config>.toml -o out/
+cd build && make -j"$(nproc)" ngscope        # binary at build/ngscope/src/ngscope
+ngscope -c <config>.toml -o out/             # writes mac-<rf>.pcapng and rar_log-<rf>.csv
+tools/security_scan.py out/<timestamp>/      # dissects it; writes sessions/events/summary
+tools/security_phase_join.py out/<timestamp>/ -f all
 ```
+
+The join auto-runs the scan when `security_sessions-*.csv` is missing and tshark is present,
+so the second line is optional in practice — but run it directly when you want its output.
 
 On a host without UHD and FFTW the build goes through the `amarder89/ng-scope:gui` container
 against a `build-docker/` tree instead; `Dockerfile` is that image's provenance.
-`measurements/run.sh` still hard-codes the container's `/src/...` paths and needs rewriting for
-a host-native run.
+`measurements/run.sh` still hard-codes the container's `/src/...` paths.
 
 `measurements/run.sh` extracts DCI counts, distinct RNTIs, the `rach_ok` split, the format
-distribution and all teardown reports. `measurements/analyse_pcap.sh` cross-tabulates RRC
-message type against joined phase.
+distribution, the teardown reports, and — since detection moved offline — appends the scan's
+output, so `<label>.metrics` still carries a rate. `measurements/analyse_pcap.sh` cross-tabulates
+RRC message type against phase, and refuses outright on a capture where every packet is still
+`sec=unknown`, because that produces a table of zeros that looks like a finding.
 
-Regression gates that caught real mistakes here:
+### The gates
 
-- **Security figures must not move** when only the pcap path changes. The tee is supposed to be
-  inert; if the numbers shift, it is not.
-- **The pcapng rewrite must preserve file size exactly** and produce an identical `tshark`
-  dissection by md5. The fixed-width `sec=` field is what makes that true. Use `--no-reorder`:
-  the join now sorts its output through `reordercap` by default, which changes the bytes for
-  a good reason and would otherwise look like a regression.
-- **`rar_to_smc_ms` must equal the TTI delta** of the same two subframes, since one TTI is one
-  millisecond. This is how the two-clocks bug was confirmed.
-- **Compare per-UE, not in aggregate.** Key on `(temp C-RNTI, RAR tti)` — both come from the
-  capture and are stable across runs, unlike wall-clock timestamps. One caveat: the first RAR of
-  a run has an unstable TTI (§7).
-- **The SMC count must equal the number of distinct RNTIs carrying a SecurityModeCommand in the
-  pcap**, after `reordercap`. This is the only external check on the tracker, and it is what
-  exposed both the segmentation loss and the length-indicator loss. Reorder first — Wireshark
-  cannot reassemble RLC from records in decode-completion order.
+Four of these run automatically on every scan and set its exit status; a non-zero exit means
+the numbers above them are not trustworthy. The rest are manual.
 
-  **Count it with the field filter, never by grepping the Info column:**
+**Automatic, in `security_scan.py`:**
+
+- **RAR cross-check.** srsRAN's RAR parse (`rar_log-<rf>.csv`) against Wireshark's dissection of
+  the same bytes, compared on the temporary C-RNTI set. This replaced the old SMC cross-check,
+  which went vacuous once only one RRC parser was left. It is better placed than what it
+  replaced: the anchor set is the denominator of everything, so an error there silently changes
+  the rate. Verified identical on all five reference captures.
+- **Comment vs dissection, every packet.** The RNTI ngscope wrote into each packet comment must
+  equal the one Wireshark dissected. Free in the same pass, 100% coverage, catches pcap framing
+  drift in `ngscope_mac_pcap_write`.
+- **Splice verification** (`--verify`, on by default). After patching `sec=`, the file is
+  re-dissected and every field except `frame.comment` must come back identical. Get a pcapng
+  option or block length wrong and the file still opens while frames after the damage shift or
+  vanish — the check was tested against a deliberately corrupted block-total-length and reports
+  it rather than raising, because by then the file has already been rewritten in place. Costs
+  one extra tshark pass (~0.3 s per 2,900 frames).
+- **Undissectable input** is reported and skipped per cell rather than crashing, and the
+  header-only output files it leaves are explicitly disclaimed — "not scanned" is not the same
+  claim as "scanned, found nothing".
+
+**Manual:**
+
+- **The superset gate.** `tools/fixtures/retired_parser_baseline.json` froze the retired
+  in-process parser's per-`(rnti, rar_tti)` verdicts on all five reference captures, captured
+  while both parsers still existed. A scan must never lose an RNTI it lists:
+
+  ```bash
+  tools/security_scan.py <run-dir> --compare     # needs a legacy security_log-<rf>.csv
+  ```
+
+  That flag only works on a run made before the handover. For anything newer, diff
+  `security_sessions-<rf>.csv` against the fixture. Recorded results: 271 / 52 / 22 / 13 / 10,
+  zero missing.
+- **Byte-identity of the splice.** File size must be unchanged and the dissection identical
+  apart from the comment:
 
   ```bash
   reordercap mac-0.pcapng sorted.pcapng
-  tshark -r sorted.pcapng -o 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""' \
-    -Y 'lte-rrc.securityModeCommand_element' -T fields -e frame.comment \
-    | grep -o 'rnti=0x[0-9a-f]*' | sort -u | wc -l
+  DLT='uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""'
+  diff <(tshark -r sorted.pcapng -o "$DLT" -V | grep -v "^ *sec=") \
+       <(tshark -r pcap_joined/mac-0.pcapng -o "$DLT" -V | grep -v "^ *sec=")
   ```
 
-  `_ws.col.Info` holds one summary per *frame*, last writer wins, so a MAC PDU carrying several
-  SDUs reports only the last of them. Grepping it undercounted mt_airy02 at 7 SMCs where the
-  capture holds 12, and made a real loss look like a rounding error. Use
-  `lte-rrc.securityModeCommand_element`, not `..._r8_element`: the inner element is absent when
-  the critical-extensions body does not dissect, which drops one genuine SMC per capture here.
+  **Filter on `^ *sec=`, not `Comment:`** — in `tshark -V` the packet comment is rendered as a
+  bare indented line, so the obvious filter silently matches nothing and the diff looks like a
+  regression.
+- **Compare per-UE, not in aggregate.** Key on `(temp C-RNTI, RAR tti)` — both come from the
+  capture and are stable across runs, unlike wall-clock timestamps. One caveat: the first RAR of
+  a run has an unstable TTI (§7).
+- **Live-vs-replay reproduction.** Both `mt_airy02` captures ship the `rar_log-<rf>.csv` from
+  the live run that recorded them, and the replay reproduces each exactly per-UE — 26/26 and
+  97/97. That is the best evidence the decode path is faithful, and it sits upstream of
+  everything else here.
+
+**Counting SecurityModeCommands by hand**, if you ever need to check the scan:
+
+```bash
+tshark -r pcap_joined/mac-0.pcapng -o "$DLT" \
+  -Y 'lte-rrc.securityModeCommand_element' -T fields -e frame.comment \
+  | grep -o 'rnti=0x[0-9a-f]*' | sort -u | wc -l
+```
+
+Two traps in that one command. `_ws.col.Info` holds one summary per *frame*, last writer wins,
+so a MAC PDU carrying several SDUs reports only the last of them — grepping it undercounted
+mt_airy02 at 7 SMCs where the capture holds 12, and made a real loss look like a rounding
+error. And use `lte-rrc.securityModeCommand_element`, not `..._r8_element`: the inner element is
+absent when the critical-extensions body does not dissect, which drops one genuine SMC per
+capture here.
 
 ### Progression on the reference capture
 
@@ -476,52 +619,67 @@ On the 60 s prefix the three steps are separable: 21.2% → 28.5% → 34.4%.
 
 ### Other cells
 
-Five captures replayed so far, all with `rach_filter_only = true`. Every gate in the list above
-passes on every one of them except where noted.
+Five captures replayed, all with `rach_filter_only = true`. Every gate above passes on all of
+them. Figures are post-handover — measured with detection offline, and reproducing the frozen
+pre-handover fixture exactly except where noted.
 
-| capture | cell | RARs / SMCs | rate | PDSCH | replay |
+| capture | cell | RARs / SMCs | rate | of those with traffic | PDSCH |
 |---|---|---|---|---|---|
-| `tmobile_5035_poconos` (reference) | 25 PRB, 4 ports, band 12 | 1318 / 424 | 32.2% | 58.9% | 1.45× |
-| `att_trolley` | PCI 405, 100 PRB, 2 ports, AT&T | 692 / 234 | 33.8% | 61.7% | 1.48× |
-| `mt_airy02/earfcn-5110` | PCI 358, 50 PRB, 2 ports, AT&T | 26 / 12 | 46.2% | 35.5% | 1.06× |
-| `mt_airy02/earfcn-5330` | PCI 206, 50 PRB, 4 ports, band 14 | 97 / 10 | 10.3% | 43.6% | 1.04× |
-| `verizon_66636` | PCI 56, 100 PRB, 4 ports, Verizon | 96 / 52 | **54.2%** | 61.6% | 1.08× |
+| `att_trolley` | PCI 405, 100 PRB, 2 ports, AT&T | 692 / 271 | 39.2% | 83.4% | 67.5% |
+| `verizon_66636` | PCI 56, 100 PRB, 4 ports, Verizon | 96 / 52 | **54.2%** | 56.5% | 51.9% |
+| `mt_airy02/earfcn-5110` | PCI 358, 50 PRB, 2 ports, AT&T | 26 / 13 | 50.0% | 68.4% | 86.6% |
+| `att_850_office` | PCI 265, 100 PRB, 4 ports, band 2 | 68 / 22 | 32.4% | 48.9% | 72.3% |
+| `mt_airy02/earfcn-5330` | PCI 206, 50 PRB, 4 ports, band 14 | 97 / 10 | 10.3% | 18.9% | 46.7% |
 
-**The PDSCH column is not a receiver-quality ranking.** A UE stops being scanned once its
-SecurityModeCommand is seen, so a cell with a high detection rate spends its remaining attempts
-on the UEs that never yield one — which are the weak ones. That is why 5110 shows the lowest
-PDSCH rate and nearly the highest detection rate.
+The reference capture (`tmobile_5035_poconos`, 25 PRB, 4 ports, band 12) is not on this machine;
+its historical figure was 424 / 1318 = 32.2%.
 
-**Nor does port count predict much.** The 4-port cells sit at both ends of the table: 10.3% on
-5330 and 54.2% on Verizon. Signal strength dominates. What 4 ports costs is a hard ceiling on
-spatial multiplexing, which shows up as a decode-rate ceiling rather than a detection-rate one.
+**Only one number moved across the handover**: `att_850_office` went 21 → 22. That UE is RNTI
+`0x35e5`, a 7-byte SDU on an EVM > 1 decode — one byte shorter than every other SMC in the
+dataset. srsRAN's ASN.1 refused it and Wireshark accepts it, and the offline pipeline now takes
+Wireshark's reading. Worth knowing which direction that cuts: the more permissive parser
+*inflates* a detection rate, which is the direction that would mask a fake base station.
 
-Two of these carry the `rar_log-0.csv` from the live run that made the recording, which gives the
-one check nothing else can: **the replay reproduces the live run's RAR set exactly**, per-UE on
-`(temp C-RNTI, RAR tti)` — 26 of 26 on 5110, 97 of 97 on 5330.
+**Report both rate columns.** The second excludes sessions where not one transport block was
+decoded. That removes a receiver limitation from the denominator, but it also removes UEs that
+RACHed and genuinely did nothing, so it is an upper bound rather than a correction — the two
+differ by 40 points on the trolley capture.
+
+**The PDSCH column is not a receiver-quality ranking**, and the reason changed with the
+handover. It used to be that a UE stopped being scanned once its SecurityModeCommand was seen;
+nothing in the process knows what one is any more, so every anchored UE is now scanned for its
+full 10 s window. What the column reflects is how much of each cell's traffic is decodable at
+all — which is why the two 50 PRB cells sit at opposite ends of it.
+
+**Port count predicts little.** The 4-port cells span 10.3% to 54.2%. Signal strength dominates.
+What 4 ports costs is a hard ceiling on spatial multiplexing, which shows up as a decode-rate
+ceiling rather than a detection-rate one.
 
 #### `att_trolley` — 12.86 GB, 80 s
 
 No metadata sidecar: the frame chain gives the sample rate (23.04 Msps → 100 PRB) and the cell
-announces the rest. Reassembly moved a 20 s slice from 56 to 57 SMCs. The length-indicator walk
-changes the detection count not at all, exactly as the pcap predicted — all 72 LI PDUs here hold
-an `rrcConnectionRelease` and a `dlInformationTransfer`, no SecurityModeCommand — but it does
-read them, so `DCCH SDUs unpacked` rises 323 → 467 (the two SDUs behind each of the 72) and
-`unsupported` falls 74 → 2. The TBS probe finds 64QAM 13.0× cleaner.
+announces the rest. The TBS probe finds 64QAM 13.0× cleaner.
+
+RLC framing is light here — 9 of 428 AM data PDUs are segments, and all 72 length-indicator PDUs
+carry an `rrcConnectionRelease` plus a `dlInformationTransfer` rather than anything
+security-bearing. That is why the retired in-process parser scored well on this capture and
+badly on 5110: it is the one that never exercised the paths it lacked.
 
 #### `mt_airy02/earfcn-5110` — 22.9 GB, 249 s
 
-The capture that pays for both pieces of RLC work. It segments and concatenates constantly — 48
-of 100 AM data PDUs are segments, against 9 of 428 on the trolley — and the length-indicator walk
-doubles the measured rate:
+The capture that made the case for the handover. It segments and concatenates constantly — 48 of
+100 AM data PDUs are segments, against 9 of 428 on the trolley — and the retired parser handled
+neither at first:
 
-| | before the LI walk | after |
-|---|---|---|
-| SMCs | 6 / 26 (23.1%) | **12 / 26 (46.2%)** |
-| DCCH `unsupported` | 9 | 0 |
+| retired parser, as it grew | SMCs found |
+|---|---|
+| original | 6 / 26 (23.1%) |
+| + RLC reassembly | — |
+| + length-indicator walk | 13 / 26 (50.0%) |
 
-The reordered pcap holds 12 distinct RNTIs with a SecurityModeCommand either way, so the second
-row is the correct one and the first was a 50% undercount.
+Wireshark found all of them from the start, on the same bytes, with no work. Each row above is a
+gap closed by hand in C that the dissector already covered — which is the argument the handover
+rests on, stated in one table.
 
 #### `mt_airy02/earfcn-5330` — 27.4 GB, 300 s
 
@@ -536,7 +694,7 @@ Must be replayed with `decode_SIB = false`; see §7.
 #### `verizon_66636` — 10.37 GB, 60 s
 
 MCC 311 / MNC 480, band 66 at 2130 MHz from the capture's own `config.cfg`. The cleanest run of
-the five: 52 / 52 on `rar_to_smc_ms == TTI delta`, and 52 SMC RNTIs in `security_log` against the
+the five: 52 / 52 on the boundary delta, and 52 SMC RNTIs in `security_sessions` against the
 same 52 in the reordered pcap. Light RLC framing, like the trolley — 6 first-segments and 3 LI
 PDUs across the capture.
 

@@ -116,9 +116,18 @@ Adding a setting means one line in each — the form, the TOML writer, and the r
 driven from the schema, so no widget code has to change. A key that no group in `app.js`
 names still appears, under "More options".
 
-Two things sit outside that mirror. A schema field may carry `replay_only`, which the
-frontend uses to disable it unless a cell is replaying; the C side enforces the same rule
-independently by ANDing the setting with `mode == REPLAY`, so the UI gate is guidance rather
-than the guarantee. And purely GUI-side choices — output directory, binary override, **Join
-after the run** — live in `state.py` instead, because they are not ngscope settings and must
-never be emitted into the generated config.
+Two things sit outside that mirror.
+
+**Settings that are not the user's to make in a given mode are hidden, not disabled, and are
+emitted at a fixed value.** A schema field may carry `replay_only` (the C side refuses or
+ignores it outside `mode == REPLAY`) or `mode_locked = {mode: value}` (exactly one valid value
+in that mode — `nof_rx_ant` in Record, because the IQ recorder writes channel 0 only). In both
+cases the form stops offering the choice and `config_io` emits the fixed value, while whatever
+the user last chose stays in `state.py` and returns when they switch back. So switching a cell
+to Normal or Record can never produce a config ngscope refuses, and nobody has to set anything
+back afterwards. The C side enforces the same rules independently; the UI is the ergonomics,
+not the guarantee.
+
+**Purely GUI-side choices** — output directory, binary override, **Join after the run** — live
+in `state.py` instead, because they are not ngscope settings and must never be emitted into the
+generated config.

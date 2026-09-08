@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <execinfo.h>
+#include <errno.h>
 
 #include "srsran/srsran.h"
 
@@ -76,12 +77,191 @@ bool init_record(const char* path, uint32_t buf_size_gb)
   return true;
 }
 
+/* ------------------------------------------------------------ compressed replay
+ *
+ * A recording may be handed over compressed. The replay reads strictly forward -- a header,
+ * then its payload, and the only seek is a forward skip over a payload it has decided not
+ * to use -- so a decompression stream serves it as well as a file, provided the skip is
+ * implemented by reading and discarding rather than by fseek().
+ *
+ * Decompression runs in a subprocess rather than in-process, and that is a throughput
+ * decision, not a convenience one. Measured on this machine over 300 MB of IQ:
+ *
+ *     bzip2  -dc   34 MB/s     (single-threaded; what linking libbz2 would give)
+ *     lbzip2 -dc  400 MB/s     (16 threads)
+ *     replay consumes ~97 MB/s
+ *
+ * So the obvious implementation -- link libbz2 and decode inline -- would have made every
+ * replay about three times slower, while a parallel decompressor leaves fourfold headroom.
+ * A slow source cannot corrupt a measurement, because the replay scheduler blocks on a busy
+ * decoder rather than discarding subframes, but it does cost wall time on every run.
+ *
+ * The parallel tool is preferred and the serial one is the fallback, so this works on a host
+ * that has only the latter -- just slower, and it says so. gzip and xz are listed too: the
+ * mechanism is identical and leaving them out would be an arbitrary limitation.
+ *
+ * IQ compresses poorly -- bzip2 gets a recording to about 46% of its original size -- so
+ * this trades a lot of CPU for a moderate saving. Worth it for archived captures, rarely
+ * worth it for one being iterated on. */
+
+static bool     replay_is_pipe   = false;
+/* Time spent blocked reading the recording, against wall time. The question "is the
+ * decompressor the bottleneck?" has no general answer -- it depends on the cell's sample
+ * rate and on how much work the decode settings ask for -- so it is measured rather than
+ * predicted. Single-threaded and per device, like replay_fh itself. */
+static uint64_t replay_read_ns   = 0;
+static uint64_t replay_bytes     = 0;
+static uint64_t replay_start_ns  = 0;
+
+static uint64_t replay_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* fread() on the recording, timed. */
+static size_t replay_fread(void* dst, size_t size, size_t nmemb)
+{
+    const uint64_t t0 = replay_now_ns();
+    const size_t   n  = fread(dst, size, nmemb, replay_fh);
+    replay_read_ns += replay_now_ns() - t0;
+    replay_bytes   += n * size;
+    return n;
+}
+
+static const struct {
+    const char* ext;
+    const char* cmds[3]; /* preferred first; NULL-terminated */
+} REPLAY_CODECS[] = {
+    {".bz2", {"lbzip2", "bzip2", NULL}},
+    {".gz",  {"pigz",   "gzip",  NULL}},
+    {".xz",  {"xz",     NULL,    NULL}},
+};
+
+/* PATH lookup without spawning anything: popen() would report a missing decompressor only
+ * as an empty stream, which is indistinguishable here from an empty recording. */
+static bool replay_have_cmd(const char* cmd)
+{
+    const char* path = getenv("PATH");
+    if (path == NULL) {
+        return false;
+    }
+    char buf[4096];
+    snprintf(buf, sizeof(buf), "%s", path);
+    for (char* dir = strtok(buf, ":"); dir != NULL; dir = strtok(NULL, ":")) {
+        char full[4352];
+        snprintf(full, sizeof(full), "%s/%s", dir, cmd);
+        if (access(full, X_OK) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool replay_ends_with(const char* s, const char* suffix)
+{
+    const size_t ls = strlen(s), lx = strlen(suffix);
+    return ls >= lx && strcasecmp(s + ls - lx, suffix) == 0;
+}
+
 bool init_replay(const char* path)
 {
-    replay_path = path;
-    mode = REPLAY;
-    replay_fh = fopen(path, "rb");
+    replay_path     = path;
+    mode            = REPLAY;
+    replay_is_pipe  = false;
+    replay_fh       = NULL;
+    replay_read_ns  = 0;
+    replay_bytes    = 0;
+    replay_start_ns = replay_now_ns();
+
+    const char* cmd = NULL;
+    for (size_t i = 0; i < sizeof(REPLAY_CODECS) / sizeof(REPLAY_CODECS[0]); i++) {
+        if (!replay_ends_with(path, REPLAY_CODECS[i].ext)) {
+            continue;
+        }
+        for (int c = 0; REPLAY_CODECS[i].cmds[c] != NULL; c++) {
+            if (replay_have_cmd(REPLAY_CODECS[i].cmds[c])) {
+                cmd = REPLAY_CODECS[i].cmds[c];
+                if (c > 0) {
+                    /* Whether single-threaded decompression actually limits the run depends
+                     * on the cell's sample rate and how hard the decoder is working, which
+                     * this cannot know in advance. So say what was picked and let the
+                     * teardown report which side was the limiter. */
+                    printf("REPLAY: %s not found; using %s (single-threaded). The teardown "
+                           "reports whether it limited the run.\n",
+                           REPLAY_CODECS[i].cmds[0], cmd);
+                }
+                break;
+            }
+        }
+        if (cmd == NULL) {
+            fprintf(stderr, "REPLAY: ERROR: %s is compressed but no decompressor for '%s' "
+                            "is on PATH (looked for %s)\n",
+                    path, REPLAY_CODECS[i].ext, REPLAY_CODECS[i].cmds[0]);
+            return false;
+        }
+        break;
+    }
+
+    if (cmd == NULL) {
+        replay_fh = fopen(path, "rb");
+        if (replay_fh == NULL) {
+            fprintf(stderr, "REPLAY: ERROR: cannot open %s: %s\n", path, strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    /* Single-quote the path and escape any embedded quote, so a filename with a space or a
+     * shell metacharacter cannot turn into a command. */
+    char quoted[2048];
+    size_t q = 0;
+    quoted[q++] = '\'';
+    for (const char* c = path; *c != '\0' && q + 4 < sizeof(quoted); c++) {
+        if (*c == '\'') {
+            q += (size_t)snprintf(quoted + q, sizeof(quoted) - q, "'\\''");
+        } else {
+            quoted[q++] = *c;
+        }
+    }
+    quoted[q++] = '\'';
+    quoted[q]   = '\0';
+
+    char argv[2304];
+    snprintf(argv, sizeof(argv), "%s -dc -- %s", cmd, quoted);
+    replay_fh = popen(argv, "r");
+    if (replay_fh == NULL) {
+        fprintf(stderr, "REPLAY: ERROR: cannot start '%s': %s\n", argv, strerror(errno));
+        return false;
+    }
+    replay_is_pipe = true;
+    printf("REPLAY: decompressing %s through %s\n", path, cmd);
     return true;
+}
+
+/* Forward skip over a payload the caller has decided not to use. fseek() cannot do this on
+ * a pipe, and silently doing nothing there would leave the next header read landing inside
+ * the IQ samples, from which the stream never recovers. */
+static void replay_skip(long nbytes)
+{
+    if (nbytes <= 0 || replay_fh == NULL) {
+        return;
+    }
+    if (!replay_is_pipe) {
+        fseek(replay_fh, nbytes, SEEK_CUR);
+        return;
+    }
+    char   scratch[64 * 1024];
+    size_t left = (size_t)nbytes;
+    while (left > 0) {
+        const size_t want = left < sizeof(scratch) ? left : sizeof(scratch);
+        const size_t got  = fread(scratch, 1, want, replay_fh);
+        if (got == 0) {
+            return; /* EOF or error; the caller's next read reports it */
+        }
+        left -= got;
+    }
 }
 
 // int srsran_rf_recv_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
@@ -192,14 +372,14 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         if (hdr.nof_samples != nsamples){
             if (debug)
                 printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
-            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
+            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
             return 0;
         }
 
         if (hdr.nof_samples > REPLAY_BUF_NOF_SAMPLES){
             fprintf(stderr, "REPLAY: ERROR: frame of %ld samples exceeds the %d sample replay buffer, skipping\n",
                     hdr.nof_samples, REPLAY_BUF_NOF_SAMPLES);
-            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
+            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
             return 0;
         }
         
@@ -238,7 +418,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
 
         if (debug)
             printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
-        n = fread(replay_buf, sizeof(cf_t), hdr.nof_samples, replay_fh);
+        n = replay_fread(replay_buf, sizeof(cf_t), hdr.nof_samples);
         nreplayed += (n*sizeof(cf_t));
         if (debug)
             printf("Read %ld bytes from file!\n", nreplayed);
@@ -392,14 +572,14 @@ int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uin
         if (hdr.nof_samples != nsamples){
             if (debug)
                 printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
-            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
+            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
             return 0;
         }
 
         if (hdr.nof_samples > REPLAY_BUF_NOF_SAMPLES){
             fprintf(stderr, "REPLAY: ERROR: frame of %ld samples exceeds the %d sample replay buffer, skipping\n",
                     hdr.nof_samples, REPLAY_BUF_NOF_SAMPLES);
-            fseek(replay_fh, (long)(hdr.nof_samples * sizeof(cf_t)), SEEK_CUR);
+            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
             return 0;
         }
         
@@ -438,7 +618,7 @@ int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uin
 
         if (debug)
             printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
-        n = fread(replay_buf, sizeof(cf_t), hdr.nof_samples, replay_fh);
+        n = replay_fread(replay_buf, sizeof(cf_t), hdr.nof_samples);
         nreplayed += (n*sizeof(cf_t));
         if (debug)
             printf("Read %ld bytes from file!\n", nreplayed);
@@ -501,8 +681,28 @@ int stop_replay(){
         printf("DEBUG: closing replay files\n");
 
     if (replay_fh){
-        if (fclose(replay_fh) < 0)
+        /* pclose() on a popen() stream: fclose() would leak the decompressor as a zombie. */
+        const int rc = replay_is_pipe ? pclose(replay_fh) : fclose(replay_fh);
+        replay_fh = NULL;
+        if (rc < 0)
             return -1;
+    }
+    if (replay_start_ns != 0 && replay_bytes > 0) {
+        const double wall    = (double)(replay_now_ns() - replay_start_ns) / 1e9;
+        const double blocked = (double)replay_read_ns / 1e9;
+        const double gb      = (double)replay_bytes / 1e9;
+        printf("\nREPLAY SOURCE: %.2f GB in %.1f s wall; %.1f s (%.0f%%) blocked reading the\n",
+               gb, wall, blocked, wall > 0 ? 100.0 * blocked / wall : 0.0);
+        printf("               recording, i.e. %.0f MB/s from the source.\n",
+               blocked > 0 ? gb * 1000.0 / blocked : 0.0);
+        if (replay_is_pipe) {
+            /* The decompressor runs concurrently with the decoder, so it only costs wall
+             * time when the decoder is left waiting on it. That is what this fraction is. */
+            printf("               %s\n",
+                   (wall > 0 && blocked / wall > 0.25)
+                       ? "The decompressor was the limiter -- a parallel one (lbzip2) would be faster."
+                       : "Decompression kept up: the decoder, not the source, set the pace.");
+        }
     }
     printf("DEBUG: file read %ld times\n", frame_count);
     fflush(stdout);

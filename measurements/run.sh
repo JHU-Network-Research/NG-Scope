@@ -39,3 +39,15 @@ grep -E "^RACH filter|^TBS table probe|^SECURITY|^pcapng:" "$RES/$LABEL.log"
 echo "=============================================================="
 } > "$RES/$LABEL.metrics" 2>&1
 cat "$RES/$LABEL.metrics"
+
+# ngscope reports coverage only now -- it parses nothing, so it has no rate to print. The
+# detection rate comes from dissecting the MAC pcap it wrote. Appended here so
+# <label>.metrics stays a complete record of the run rather than silently losing its
+# security section when detection moved offline.
+if [ -n "$D" ] && ls "$D"/mac-*.pcapng >/dev/null 2>&1; then
+    {
+        echo "--------------------------------------------------------------"
+        echo "offline scan   : tools/security_scan.py"
+        python3 /src/tools/security_scan.py "$D" 2>&1 | sed 's/^/  /'
+    } >> "$RES/$LABEL.metrics"
+fi

@@ -25,15 +25,6 @@ typedef struct {
      * thread picked the subframe up, so in replay it advances at decode speed, not capture
      * speed -- bucketing a run by it silently distorts any rate over time. */
     uint64_t rar_ct;
-
-    bool     have_smc;      /* SecurityModeCommand seen: the boundary */
-    uint64_t smc_us;
-    uint32_t smc_tti;
-    uint64_t smc_ct;
-
-    /* Latest successfully decoded unciphered RRC message. Anything up to here is provably
-     * pre-security even when the SMC itself is never decoded. */
-    uint64_t last_clear_us;
 } sec_rnti_t;
 
 /* Cap on UEs tracked concurrently. Only a backstop against a pathological cell, so it must
@@ -57,11 +48,8 @@ typedef struct {
     uint16_t   active[SEC_MAX_ACTIVE];
     int        nof_active;
     uint64_t   nof_rar;
-    uint64_t   nof_smc;
-    uint64_t   nof_clear_rrc;
     uint64_t   nof_attempt;
     uint64_t   nof_pdsch_ok;
-    uint64_t   nof_rrc_ok;
 
     /* Silent losses. Both drop a UE that was mid-setup, which is indistinguishable in the
      * output from a UE that genuinely never reached security -- so they have to be counted,
@@ -74,20 +62,15 @@ typedef struct {
     /* Why entries left active[]. have_smc is the successful exit; window is the honest
      * timeout. backwards is neither: it means a decoder thread working on an older subframe
      * than the one that anchored the RAR dropped a UE that had only just arrived. */
-    uint64_t   nof_exp_smc;
     uint64_t   nof_exp_window;
     uint64_t   nof_exp_backwards;
-
-    /* What became of each DL-DCCH SDU, by ngscope_dcch_result_t. Anything but OK,
-     * REASSEMBLED and CTRL is an RRC message we could not read, and any of those could have
-     * been a SecurityModeCommand. */
-    uint64_t   nof_dcch[NGSCOPE_DCCH_NOF_RESULTS];
 
     /* Which MCS->TBS table the cell's transport blocks actually needed. nof_tb_retried is the
      * measurement: blocks that only passed CRC on the table enable_256qam did not select. */
     uint64_t   nof_tb_decoded;
     uint64_t   nof_tb_retried;
     uint64_t   nof_tb_retry_tried;
+
 } sec_ctx_t;
 
 static sec_ctx_t       sec_ctx[MAX_NOF_RF_DEV];
@@ -101,18 +84,6 @@ static pthread_mutex_t sec_mutex[MAX_NOF_RF_DEV] = {
 static inline bool rf_idx_valid(int rf_idx)
 {
     return rf_idx >= 0 && rf_idx < MAX_NOF_RF_DEV;
-}
-
-const char* ngscope_sec_phase_str(ngscope_sec_phase_t phase)
-{
-    switch (phase) {
-        case NGSCOPE_SEC_PRE:
-            return "pre";
-        case NGSCOPE_SEC_POST:
-            return "post";
-        default:
-            return "unknown";
-    }
 }
 
 bool ngscope_sec_is_unicast(uint16_t rnti)
@@ -169,200 +140,6 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
-void ngscope_sec_note_unciphered_rrc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us)
-{
-    if (!rf_idx_valid(rf_idx) || !ngscope_sec_is_unicast(rnti)) {
-        return;
-    }
-    sec_ctx_t* q = &sec_ctx[rf_idx];
-
-    pthread_mutex_lock(&sec_mutex[rf_idx]);
-    if (q->rnti[rnti].anchored && ts_us > q->rnti[rnti].last_clear_us) {
-        q->rnti[rnti].last_clear_us = ts_us;
-        q->nof_clear_rrc++;
-    }
-    pthread_mutex_unlock(&sec_mutex[rf_idx]);
-    if (debug) {
-        printf("DEBUG: TTI=%d rnti=%d unciphered RRC decoded\n", tti, rnti);
-    }
-}
-
-/* <out_path>/security_log-<rf_idx>.csv -- the boundary per RNTI, joinable to the DCI logs.
- *
- * The .dciLog label can only ever be best-effort for "pre": labels are stamped as each
- * subframe is decoded, but the boundary is not known until the SecurityModeCommand arrives
- * later, so a DCI that precedes it cannot be recognised at the time it is written. This
- * file closes that gap -- join it on rnti and compare timestamps to place every DCI
- * exactly, including the ones written before their boundary was known. */
-#define SEC_LOG_HEADER \
-    "rnti,rar_tti,rar_timestamp,rar_collection_time,smc_tti,smc_timestamp,smc_collection_time,rar_to_smc_ms\n"
-
-static void sec_log_path(char* dst, size_t dst_len, const char* out_path, int rf_idx)
-{
-    snprintf(dst, dst_len, "%ssecurity_log-%d.csv", out_path, rf_idx);
-}
-
-/* Create the file with its header before any UE is tracked, the way the RAR log does.
- *
- * It used to be created lazily by the first boundary, which made a capture where nobody
- * reached security indistinguishable from one where the feature was off or the directory was
- * wrong -- and for IMSI-catcher detection zero boundaries is the *positive* result, so that
- * is the one case that must not be reported as a missing file. An empty file now means
- * "measured, none found"; an absent one means "not measured". */
-void ngscope_sec_log_init(const char* out_path, int rf_idx)
-{
-    if (out_path == NULL || !rf_idx_valid(rf_idx)) {
-        return;
-    }
-    char path[1024];
-    sec_log_path(path, sizeof(path), out_path, rf_idx);
-
-    pthread_mutex_lock(&sec_mutex[rf_idx]);
-    FILE* f = fopen(path, "w");
-    if (f != NULL) {
-        fprintf(f, SEC_LOG_HEADER);
-        fclose(f);
-    } else {
-        printf("ERROR: cannot create security log %s\n", path);
-    }
-    pthread_mutex_unlock(&sec_mutex[rf_idx]);
-}
-
-static void sec_log_write(const char* out_path,
-                          int         rf_idx,
-                          uint16_t    rnti,
-                          uint32_t    rar_tti,
-                          uint64_t    rar_us,
-                          uint64_t    rar_ct,
-                          uint32_t    smc_tti,
-                          uint64_t    smc_us,
-                          uint64_t    smc_ct)
-{
-    if (out_path == NULL) {
-        return;
-    }
-    char path[1024];
-    sec_log_path(path, sizeof(path), out_path, rf_idx);
-
-    /* Header on creation only, so appending across a rotation stays valid CSV. Normally
-     * ngscope_sec_log_init() has already written it; this covers a rotation, and a run where
-     * the init was somehow skipped. */
-    bool  fresh = access(path, F_OK) != 0;
-    FILE* f     = fopen(path, "a");
-    if (f == NULL) {
-        return;
-    }
-    if (fresh) {
-        fprintf(f, SEC_LOG_HEADER);
-    }
-    /* rar_to_smc_ms comes from the collection times, not the wall clock: they are the radio
-     * domain, so the figure is the real over-the-air delay whether the run was live or a
-     * replay decoding at some other speed. */
-    fprintf(f,
-            "%u,%u,%" PRIu64 ",%" PRIu64 ",%u,%" PRIu64 ",%" PRIu64 ",%.1f\n",
-            rnti,
-            rar_tti,
-            rar_us,
-            rar_ct,
-            smc_tti,
-            smc_us,
-            smc_ct,
-            (smc_ct > rar_ct) ? (double)(smc_ct - rar_ct) / 1000.0
-                              : (double)(smc_us - rar_us) / 1000.0);
-    fclose(f);
-}
-
-void ngscope_sec_note_smc(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
-                          uint64_t collection_time, const char* out_path)
-{
-    if (!rf_idx_valid(rf_idx) || !ngscope_sec_is_unicast(rnti)) {
-        return;
-    }
-    sec_ctx_t* q = &sec_ctx[rf_idx];
-
-    bool     log_it      = false;
-    uint32_t log_rar_tti = 0;
-    uint64_t log_rar_us  = 0;
-    uint64_t log_rar_ct  = 0;
-
-    pthread_mutex_lock(&sec_mutex[rf_idx]);
-    if (q->rnti[rnti].anchored && !q->rnti[rnti].have_smc) {
-        q->rnti[rnti].have_smc = true;
-        q->rnti[rnti].smc_us   = ts_us;
-        q->rnti[rnti].smc_tti  = tti;
-        q->rnti[rnti].smc_ct   = collection_time;
-        q->nof_smc++;
-        for (int i = 0; i < q->nof_active; i++) {
-            if (q->active[i] == rnti) {
-                q->active[i] = q->active[--q->nof_active];
-                break;
-            }
-        }
-        printf("SECURITY: TTI=%d rnti=%d SecurityModeCommand (RAR was TTI=%d, %.0f ms earlier)\n",
-               tti,
-               rnti,
-               q->rnti[rnti].rar_tti,
-               (double)(ts_us - q->rnti[rnti].rar_us) / 1000.0);
-        log_rar_tti = q->rnti[rnti].rar_tti;
-        log_rar_us  = q->rnti[rnti].rar_us;
-        log_rar_ct  = q->rnti[rnti].rar_ct;
-        log_it      = true;
-    }
-    pthread_mutex_unlock(&sec_mutex[rf_idx]);
-
-    /* Outside the lock: this opens a file. */
-    if (log_it) {
-        sec_log_write(out_path, rf_idx, rnti, log_rar_tti, log_rar_us, log_rar_ct, tti, ts_us,
-                      collection_time);
-    }
-}
-
-/* Strong override of the weak default in mac_pcap.c, so a capture written while the tracker
- * is running carries the real phase instead of a permanent "unknown". Deliberately still
- * answers "unknown" for anything unplaced: the boundary is only ever set by an observed
- * SecurityModeCommand, and most packets are written before theirs arrives. The authoritative
- * labelling comes from joining security_log-<rf_idx>.csv afterwards. */
-const char* ngscope_mac_pcap_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us)
-{
-    return ngscope_sec_phase_str(ngscope_sec_phase(rf_idx, rnti, ts_us));
-}
-
-ngscope_sec_phase_t ngscope_sec_phase(int rf_idx, uint16_t rnti, uint64_t ts_us)
-{
-    if (!rf_idx_valid(rf_idx) || !ngscope_sec_is_unicast(rnti)) {
-        return NGSCOPE_SEC_UNKNOWN;
-    }
-    sec_ctx_t*          q     = &sec_ctx[rf_idx];
-    ngscope_sec_phase_t phase = NGSCOPE_SEC_UNKNOWN;
-
-    pthread_mutex_lock(&sec_mutex[rf_idx]);
-    const sec_rnti_t* r = &q->rnti[rnti];
-    if (r->anchored) {
-        if (r->have_smc) {
-            /* The boundary is known, so every DCI for this identity can be placed.
-             *
-             * Strictly greater, not >=: the SecurityModeCommand is the last unciphered
-             * downlink message, so the DCI carrying it is itself pre-security. Security
-             * does not activate until the UE answers with SecurityModeComplete. */
-            phase = (ts_us > r->smc_us) ? NGSCOPE_SEC_POST : NGSCOPE_SEC_PRE;
-        }
-        /* Deliberately no "before the last cleartext RRC we saw" fallback here.
-         *
-         * It looks sound and it is not, because decoder threads process subframes in
-         * parallel and out of order: a clear-RRC sighting from a later subframe can land
-         * before an earlier subframe is stamped, and the earlier DCI then gets called pre
-         * on evidence that post-dates it. Observed exactly that -- rnti 26131 TTI 1098
-         * labelled pre against a boundary at TTI 1094.
-         *
-         * With the fallback gone the in-stream label is derived only from a fixed smc_us,
-         * so it can be incomplete but never wrong. The join against security_log-<n>.csv
-         * is what recovers the rest, and it places the full pre population (1196 records
-         * against the 138 this path could prove in real time). */
-    }
-    pthread_mutex_unlock(&sec_mutex[rf_idx]);
-    return phase;
-}
-
 int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out)
 {
     if (!rf_idx_valid(rf_idx) || out == NULL || max_out <= 0) {
@@ -376,26 +153,30 @@ int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out)
         const uint16_t    rnti = q->active[i];
         const sec_rnti_t* r    = &q->rnti[rnti];
 
-        /* Expiry stops the decode attempts only. It never converts an UNKNOWN into a
-         * label -- the phase still comes from what was actually observed. */
-        /* now_us is the timestamp of the subframe the calling decoder thread happens to be
+        /* The window is now the only exit. There used to be a second one -- a UE left as
+         * soon as its SecurityModeCommand was decoded -- but nothing in this process reads
+         * the payload any more, so every anchored UE is scanned for its full window. That
+         * costs decode time, not slots: the window already dominated the tracked-set size
+         * (high-water 64 of 512 on the busiest capture, against ~61 predicted by RAR
+         * arrival rate x window alone), and the SMC exit was taken via note_smc rather than
+         * here, so nof_exp_smc always read 0.
+         *
+         * now_us is the timestamp of the subframe the calling decoder thread happens to be
          * working on, and threads run subframes out of order -- so it can sit behind a RAR
          * anchored moments ago by a thread that was ahead. That must not expire anything: an
          * entry newer than the current subframe cannot have exceeded the window. It used to,
          * because the guard against unsigned underflow in the subtraction below was written
          * as an expiry condition, and removal from active[] is permanent until the next RAR.
          * Measured over 60 s: 117 of 221 tracking exits were this, against 104 real timeouts. */
-        const bool exp_smc      = r->have_smc;
-        const bool behind       = now_us < r->rar_us;
-        const bool exp_window   = !exp_smc && !behind && r->anchored &&
-                                  (now_us - r->rar_us) > SEC_TRACK_WINDOW_US;
-        bool expired = !r->anchored || exp_smc || exp_window;
+        const bool behind     = now_us < r->rar_us;
+        const bool exp_window = !behind && r->anchored &&
+                                (now_us - r->rar_us) > SEC_TRACK_WINDOW_US;
+        bool expired = !r->anchored || exp_window;
         if (behind && !expired) {
             q->nof_exp_backwards++;   /* counted as an averted drop, not an exit */
         }
         if (expired) {
-            if (exp_smc)         q->nof_exp_smc++;
-            else if (exp_window) q->nof_exp_window++;
+            if (exp_window) q->nof_exp_window++;
             q->active[i] = q->active[--q->nof_active];
             continue;
         }
@@ -417,7 +198,7 @@ int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out)
     return n;
 }
 
-void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok, bool rrc_ok)
+void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok)
 {
     if (!rf_idx_valid(rf_idx)) {
         return;
@@ -428,19 +209,6 @@ void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok, bool rrc_ok)
     if (pdsch_ok) {
         q->nof_pdsch_ok++;
     }
-    if (rrc_ok) {
-        q->nof_rrc_ok++;
-    }
-    pthread_mutex_unlock(&sec_mutex[rf_idx]);
-}
-
-void ngscope_sec_count_dcch(int rf_idx, ngscope_dcch_result_t result)
-{
-    if (!rf_idx_valid(rf_idx) || result < 0 || result >= NGSCOPE_DCCH_NOF_RESULTS) {
-        return;
-    }
-    pthread_mutex_lock(&sec_mutex[rf_idx]);
-    sec_ctx[rf_idx].nof_dcch[result]++;
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
@@ -467,6 +235,13 @@ void ngscope_sec_count_tb_retry(int rf_idx)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+/* Coverage, not conclusions.
+ *
+ * Everything here is a property of the decoder, and every line is a validity condition for
+ * whatever tools/security_scan.py concludes from the pcap: a UE dropped by a cap or a busy
+ * decoder is indistinguishable in that capture from a UE that never reached security. The
+ * detection rate itself is printed by the offline tool, which is the only thing that reads
+ * the payloads. */
 void ngscope_sec_report(int rf_idx)
 {
     if (!rf_idx_valid(rf_idx)) {
@@ -475,30 +250,25 @@ void ngscope_sec_report(int rf_idx)
     sec_ctx_t* q = &sec_ctx[rf_idx];
 
     pthread_mutex_lock(&sec_mutex[rf_idx]);
-    int anchored = 0, bounded = 0;
+    int anchored = 0;
     for (int rnti = 1; rnti < 65536; rnti++) {
         if (q->rnti[rnti].anchored) {
             anchored++;
-            if (q->rnti[rnti].have_smc) {
-                bounded++;
-            }
         }
     }
-    printf("SECURITY (cell %d): %d RNTIs anchored by a RAR, %d with a SecurityModeCommand "
-           "(%.1f%%). PDSCH attempts %llu, decoded %llu (%.1f%%), RRC unpacked %llu (%.1f%%).\n",
+
+    printf("SECURITY (cell %d): %d RNTIs anchored by a RAR. PDSCH attempts %llu, decoded "
+           "%llu (%.1f%%) -- written to the MAC pcap; run tools/security_scan.py over it "
+           "for the detection rate.\n",
            rf_idx,
            anchored,
-           bounded,
-           anchored ? 100.0 * bounded / anchored : 0.0,
            (unsigned long long)q->nof_attempt,
            (unsigned long long)q->nof_pdsch_ok,
-           q->nof_attempt ? 100.0 * q->nof_pdsch_ok / q->nof_attempt : 0.0,
-           (unsigned long long)q->nof_rrc_ok,
-           q->nof_attempt ? 100.0 * q->nof_rrc_ok / q->nof_attempt : 0.0);
+           q->nof_attempt ? 100.0 * q->nof_pdsch_ok / q->nof_attempt : 0.0);
 
-    /* Coverage. A UE dropped by either of these is indistinguishable in the output from one
-     * that genuinely never reached security, so the detection rate above can only be read as
-     * a property of the cell to the extent that both are zero. */
+    /* A UE dropped by either of these is indistinguishable in the pcap from one that
+     * genuinely never reached security, so the offline rate can only be read as a property
+     * of the cell to the extent that both are zero. */
     printf("SECURITY (cell %d): tracking high-water %d of %d slots", rf_idx, q->max_active_seen,
            SEC_MAX_ACTIVE);
     if (q->nof_evicted > 0) {
@@ -515,39 +285,16 @@ void ngscope_sec_report(int rf_idx)
         printf(", no UE dropped for want of a slot");
     }
     printf("\n");
-    printf("SECURITY (cell %d): tracking exits -- %llu on SecurityModeCommand, %llu on the %d s "
-           "window; %llu drops averted where a decoder thread was behind the RAR\n",
+    printf("SECURITY (cell %d): tracking exits -- %llu on the %d s window; %llu drops averted "
+           "where a decoder thread was behind the RAR\n",
            rf_idx,
-           (unsigned long long)q->nof_exp_smc,
            (unsigned long long)q->nof_exp_window,
            (int)(SEC_TRACK_WINDOW_US / 1000000ULL),
            (unsigned long long)q->nof_exp_backwards);
 
-    /* The RRC read rate, broken out. CTRL is an RLC STATUS PDU, which carries no SDU and is
-     * therefore not a loss; ASN1 is overwhelmingly post-security ciphertext, which is
-     * expected. The rest are messages that existed and were not read, so they bound how
-     * much of the boundary evidence went missing. */
-    const uint64_t* d = q->nof_dcch;
-    printf("SECURITY (cell %d): DCCH SDUs -- %llu unpacked (%llu of them reassembled), "
-           "%llu RLC control; unread: %llu segmented, %llu unsupported, %llu short, "
-           "%llu ciphered/unparseable",
-           rf_idx,
-           (unsigned long long)(d[NGSCOPE_DCCH_OK] + d[NGSCOPE_DCCH_REASSEMBLED]),
-           (unsigned long long)d[NGSCOPE_DCCH_REASSEMBLED],
-           (unsigned long long)d[NGSCOPE_DCCH_CTRL],
-           (unsigned long long)d[NGSCOPE_DCCH_SEGMENTED],
-           (unsigned long long)d[NGSCOPE_DCCH_UNSUPPORTED],
-           (unsigned long long)d[NGSCOPE_DCCH_SHORT],
-           (unsigned long long)d[NGSCOPE_DCCH_ASN1]);
-    if (d[NGSCOPE_DCCH_REASM_LOST] > 0) {
-        printf("; %llu partial SDU(s) LOST before completing",
-               (unsigned long long)d[NGSCOPE_DCCH_REASM_LOST]);
-    }
-    printf("\n");
-
-    /* Which MCS->TBS table the traffic actually used. Only populated when the retry is on
-     * (replay), and it is a measurement rather than the probe's inference: a transport block
-     * either passes its CRC on a table or it does not. */
+    /* Which MCS->TBS table the traffic actually used -- a decode measurement, so it stays
+     * here rather than moving offline. A block either passes its CRC on a table or it does
+     * not. */
     if (q->nof_tb_decoded > 0) {
         printf("SECURITY (cell %d): MCS->TBS table -- %llu transport blocks decoded, %llu of them "
                "(%.1f%%) only after falling back to the other table",

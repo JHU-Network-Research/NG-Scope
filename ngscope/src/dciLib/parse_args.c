@@ -17,8 +17,6 @@ void args_default(prog_args_t* args)
   args->disable_plots                      = false;
   args->disable_plots_except_constellation = false;
   args->nof_subframes                      = -1;
-  //args->rnti                               = 0xFFFF; //SRSRAN_SIRNTI;
-  args->rnti                               = 0x1315; //SRSRAN_SIRNTI;
   args->force_N_id_2                       = -1; // Pick the best
   args->tdd_special_sf                     = 2;
   args->sf_config                          = 2;
@@ -38,7 +36,6 @@ void args_default(prog_args_t* args)
   args->rf_freq                            = 2.355e9;
   args->rf_nof_rx_ant                      = 1;
   args->remote_enable                      = false;
-  args->decode_single_ue                   = false;
   args->decode_SIB                   	   = false;
   args->decode_RAR                   	   = false;
   args->rar_seed_tracker             	   = false;
@@ -86,7 +83,6 @@ void usage(prog_args_t* args, char* prog)
   printf("\t-p nof_prb for input file [Default %d]\n", args->file_nof_prb);
   printf("\t-P nof_ports for input file [Default %d]\n", args->file_nof_ports);
   printf("\t-c cell_id for input file [Default %d]\n", args->file_cell_id);
-  printf("\t-r RNTI in Hex [Default 0x%x]\n", args->rnti);
   printf("\t-l Force N_id_2 [Default best]\n");
   printf("\t-C Disable CFO correction [Default %s]\n", args->disable_cfo ? "Disabled" : "Enabled"); 
   printf("\t-F Enable RS-based CFO correction [Default %s]\n", !args->enable_cfo_ref ? "Disabled" : "Enabled");

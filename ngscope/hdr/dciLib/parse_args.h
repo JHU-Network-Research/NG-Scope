@@ -27,7 +27,6 @@ typedef struct {
   bool     disable_cfo;
   uint32_t time_offset;
   int      force_N_id_2;
-  uint16_t rnti;
   int      mode;
   bool     debug;
   bool     silent;
@@ -51,15 +50,14 @@ typedef struct {
   uint32_t rx_nof_rx_ant_vec[MAX_NOF_RF_DEV];
 
   int      remote_enable;
-  int 	   decode_single_ue;
   int 	   decode_SIB;
   int 	   decode_RAR;
   int 	   rar_seed_tracker;
   int 	   rach_filter_only;
   int 	   mark_security_phase;
   int 	   pcap_mac;
+  int 	   probe_blind_dci;
   int 	   pcap_max_mb;
-  int 	   rlc_reassembly;
   int 	   qam_retry;
 
   float    rf_gain;

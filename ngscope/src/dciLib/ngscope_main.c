@@ -92,7 +92,6 @@ int ngscope_main(ngscope_config_t* config)
 
 		prog_args[i].nof_rf_dev       = nof_rf_dev;
 		prog_args[i].remote_enable    = config->remote_enable;
-		prog_args[i].decode_single_ue = config->decode_single_ue;
 		prog_args[i].decode_SIB 	  = config->decode_SIB;
 		prog_args[i].decode_RAR 	  = config->decode_RAR;
 		prog_args[i].rar_seed_tracker = config->rar_seed_tracker;
@@ -100,8 +99,8 @@ int ngscope_main(ngscope_config_t* config)
 		prog_args[i].mark_security_phase = config->mark_security_phase;
 		prog_args[i].enable_256qam    = config->enable_256qam;
 		prog_args[i].pcap_mac         = config->pcap_mac;
+		prog_args[i].probe_blind_dci  = config->probe_blind_dci;
 		prog_args[i].pcap_max_mb      = config->pcap_max_mb;
-		prog_args[i].rlc_reassembly   = config->rlc_reassembly;
 		prog_args[i].qam_retry        = config->qam_retry;
 
         prog_args[i].rf_index      = i;

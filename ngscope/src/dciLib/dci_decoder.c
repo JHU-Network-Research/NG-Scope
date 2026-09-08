@@ -130,7 +130,11 @@ int decoder_idx
         srsran_softbuffer_rx_init(dci_decoder->pdsch_cfg.softbuffers.rx[i], cell->nof_prb);
     }
 
-    // dci_decoder->pdsch_cfg.rnti = -1;
+    /* pdsch_cfg.rnti is left at 0 from the ZERO_OBJECT above. It used to be seeded with the
+     * configured target RNTI, but every path that actually decodes a PDSCH sets it for the
+     * grant at hand and restores it afterwards -- decode_rar.cpp, security_rrc.cpp and
+     * srsran_ngscope_decode_SIB_yx all save/restore around their own assignment -- so the
+     * residual value never drove a decode. */
     dci_decoder->decoder_idx    = decoder_idx;
     return SRSRAN_SUCCESS;
 }
@@ -281,10 +285,8 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
     bool decode_pdsch = false;
 
-	bool decode_single_ue 	= dci_decoder->prog_args.decode_single_ue;
 	bool decode_SIB 		= dci_decoder->prog_args.decode_SIB;
 	bool decode_RAR 		= dci_decoder->prog_args.decode_RAR;
-    uint16_t targetRNTI 	= dci_decoder->prog_args.rnti;
 
 	int rf_idx 				= dci_decoder->prog_args.rf_index;
 	bool acks[SRSRAN_MAX_CODEWORDS] = {false};
@@ -380,16 +382,16 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 	fclose(rsrpoutfile);
 	pthread_mutex_unlock(&token_mutex[0]);
 
-    // Shall we decode the PDSCH of the current subframe?
-    if (dci_decoder->prog_args.rnti != SRSRAN_SIRNTI) {
-		// dci_decoder->pdsch_cfg.rnti = dci_decoder->prog_args.rnti;
-        decode_pdsch = true;
-        if (dci_decoder->cell.frame_type == SRSRAN_TDD) {
-			if (srsran_sfidx_tdd_type(dci_decoder->dl_sf.tdd_config, sf_idx) == SRSRAN_TDD_SF_U) {
-				decode_pdsch = false;
-			} else {
-				decode_pdsch = true;
-			}
+    /* Shall we decode the PDSCH of the current subframe?
+     *
+     * This used to be gated on the configured target RNTI differing from SRSRAN_SIRNTI,
+     * which every shipped config satisfied, so the blind search ran unconditionally in
+     * practice. With no target RNTI the gate has nothing left to test and the TDD uplink
+     * subframe exclusion is the only real condition. */
+	decode_pdsch = true;
+	if (dci_decoder->cell.frame_type == SRSRAN_TDD) {
+		if (srsran_sfidx_tdd_type(dci_decoder->dl_sf.tdd_config, sf_idx) == SRSRAN_TDD_SF_U) {
+			decode_pdsch = false;
 		}
 	}
 
@@ -446,12 +448,16 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
          * does not change silently. */
         dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = dci_decoder->prog_args.enable_256qam;
 
-		if(decode_single_ue){
-			n = srsran_ngscope_decode_dci_singleUE_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, targetRNTI);
-		}else{
+		/* The single-UE path (srsran_ngscope_decode_dci_singleUE_yx) used to be selected here
+		 * by decode_single_ue. It decoded only the configured target RNTI; with no target
+		 * there is nothing for it to decode, so the blind search is the only path. The
+		 * function itself is still in lib/src/phy/ue/ngscope.c -- see the note there. */
+		{
     		ngscope_tree_t tree;
 
+			/* 0 == no preferred RNTI. The tree search treats a non-zero value as exempt from
+			 * the child-parent agreement check that every other candidate must pass; passing
+			 * 0 disables that shortcut. See srsran_ngscope_tree_CP_match(). */
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
 								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL);
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
@@ -584,23 +590,23 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
 									rf_idx, tti, dci_per_sub->timestamp,
 									dci_per_sub->collection_time,
-									dci_decoder->prog_args.out_path, sec_scan_cap);
+									sec_scan_cap);
 		}
 
-		// Stamp every message with where it sits relative to its UE's security context.
-		// Broadcast RNTIs and any UE we could not place both come out UNKNOWN -- the
-		// boundary is only ever set by an observed SecurityModeCommand.
-		if (dci_decoder->prog_args.mark_security_phase) {
-			for (int i = 0; i < dci_per_sub->nof_dl_dci; i++) {
-				dci_per_sub->dl_msg[i].sec_phase =
-					(uint8_t)ngscope_sec_phase(rf_idx, dci_per_sub->dl_msg[i].rnti,
-												dci_per_sub->timestamp);
-			}
-			for (int i = 0; i < dci_per_sub->nof_ul_dci; i++) {
-				dci_per_sub->ul_msg[i].sec_phase =
-					(uint8_t)ngscope_sec_phase(rf_idx, dci_per_sub->ul_msg[i].rnti,
-												dci_per_sub->timestamp);
-			}
+		// sec_phase is no longer stamped here. Nothing in this process knows a UE's
+		// security state any more, so every record leaves as NGSCOPE_SEC_UNKNOWN (0) and
+		// tools/security_phase_join.py fills it in from the offline scan. The field stays
+		// in ngscope_dci_msg_t because it is part of the remote-sink wire struct.
+
+		/* Blind-DCI probe. Runs BEFORE the RACH filter below, deliberately: the population
+		 * being measured is what the blind search reported, and the filter is the thing
+		 * whose necessity this is testing. Confirming DCIs after filtering them would only
+		 * ever confirm the filter's own output. */
+		if (dci_decoder->prog_args.probe_blind_dci) {
+			ngscope_sec_probe_blind(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
+									dci_per_sub, rf_idx, tti, dci_per_sub->timestamp,
+									dci_per_sub->collection_time);
 		}
 
 		// Restrict the reported DCIs to RNTIs that were seen completing RACH. Applied after
@@ -628,12 +634,36 @@ int get_target_dci(ngscope_dci_msg_t* msg, int nof_msg, uint16_t targetRNTI){
 }
 
 
+/* PHICH decoding. RETAINED BUT UNREACHABLE -- nothing calls this.
+ *
+ * PHICH carries the eNB's HARQ feedback for a UE's PUSCH transmission, and it is the only
+ * way a downlink sniffer can see a *non-adaptive* uplink retransmission: on a NACK the UE
+ * retransmits on the same resources with no new grant, so nothing appears on the PDCCH.
+ * (Adaptive retransmissions issue a fresh grant and are already logged for every UE via
+ * TB1_rv / TB1_ndi.)
+ *
+ * It was removed from the decode path along with the configured target RNTI, because it
+ * could only ever follow that one UE and it wrote fabricated records into the DCI stream:
+ *   - pend_ack_list (phich_decoder.h) holds exactly one (I_lowest, n_dmrs) per TTI, so it
+ *     is structurally single-UE. Following every UE needs a per-RNTI pending-ack list.
+ *   - on a NACK the caller synthesised a UL DCI -- rnti = target, rv = 4, prb = 0, tbs = 0,
+ *     decode_prob = 100 -- and pushed it into dci_per_sub, so it reached the .dciLog
+ *     indistinguishable from a real grant except by that signature. In one recorded
+ *     capture 34 of the 63 UL records for the target RNTI were synthetic.
+ *   - ACKs were decoded and discarded; only NACKs produced output.
+ *   - ack_list is a single global shared by every decoder thread and every RF device, and
+ *     the read and reset below do not hold ack_mutex. That is a live race at nof_thread > 1.
+ *
+ * Reviving it usefully means fixing all four: a per-RNTI pending-ack list, a separate
+ * PHICH log rather than injection into the DCI stream, recording ACKs as well as NACKs,
+ * and per-device state. targetRNTI is now a parameter rather than a config read so the
+ * function still compiles and can be called from a future per-UE loop. */
 bool dci_decoder_phich_decode(ngscope_dci_decoder_t*      dci_decoder,
                                   uint32_t                tti,
                                   ngscope_dci_per_sub_t*  dci_per_sub,
-        						  srsran_phich_res_t*  	  phich_res)
+        						  srsran_phich_res_t*  	  phich_res,
+                                  uint16_t                targetRNTI)
 {
-    uint16_t targetRNTI = dci_decoder->prog_args.rnti;
     bool ack_available = false;
     if(targetRNTI > 0){
         if(dci_per_sub->nof_ul_dci > 0){
@@ -711,8 +741,6 @@ void* dci_decoder_thread(void* p){
 
 	int decoder_idx = dci_decoder->decoder_idx;
     int rf_idx     	= dci_decoder->prog_args.rf_index;
-    uint16_t targetRNTI 	= dci_decoder->prog_args.rnti;
-
 
 	printf("decoder idx :%d \n", decoder_idx);
 
@@ -841,22 +869,10 @@ void* dci_decoder_thread(void* p){
 		// 	printf("after:: frequency hopping: %d\n", dci_per_sub.ul_msg[0].phich.freq_hopping);
 		// }
 
-		uint32_t sf_config 	= dci_decoder->dl_sf.tdd_config.sf_config;
-		bool tdd_configured = dci_decoder->dl_sf.tdd_config.configured;
-		if(dci_decoder->cell.frame_type == SRSRAN_FDD || (subframe_is_ulgrant_tdd(tti, sf_config) && tdd_configured)){
-			srsran_phich_res_t  	  phich_res;
-			bool ack_available = dci_decoder_phich_decode(dci_decoder, tti, &dci_per_sub, &phich_res);
-			if(ack_available && phich_res.ack_value==0){
-				if(ngscope_rnti_inside_dci_per_sub_ul(&dci_per_sub,targetRNTI) >= 0){
-					printf("Conflict we have both ul dci and ul ack!\n");
-				}else{
-					printf("TTI:%d We insert one ul reTx dci msg: before: %d, ", tti, dci_per_sub.nof_ul_dci);
-					ngscope_enqueue_ul_reTx_dci_msg(&dci_per_sub, targetRNTI);
-					printf("after: %d | \n", dci_per_sub.nof_ul_dci);
-				}
-				//ngscope_push_dci_to_per_sub(dci_per_sub, &tree->dci_array[i][loc_idx]);
-			}
-		}
+		/* PHICH decoding ran here. It followed the configured target RNTI and, on a NACK,
+		 * synthesised a UL DCI for it into dci_per_sub -- so the .dciLog carried records
+		 * that never appeared in any grant. Removed with the target RNTI itself;
+		 * dci_decoder_phich_decode() above documents what a per-UE revival would need. */
 
         dci_ret.dci_per_sub  = dci_per_sub;
         dci_ret.tti          = sfn *10 + sf_idx;

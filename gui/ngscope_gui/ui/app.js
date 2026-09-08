@@ -17,7 +17,7 @@ const MODE_NORMAL = 0, MODE_RECORD = 1, MODE_REPLAY = 2;
 const FIELD_GROUPS = {
   cellPrimary: ['mode', 'rf_freq', 'rf_args', 'N_id_2', 'nof_thread'],
   cellToggles: ['decode_pdcch', 'log_dl', 'log_ul', 'log_phich', 'disable_plot', 'debug', 'silent'],
-  topNumbers: ['rnti'],
+  topNumbers: [],
   /* Promoted out of the Decoding list into their own card: these two decide what reaches
      the logs at all, and rach_filter_only silently forces decode_RAR on. */
   rachPrimary: ['decode_RAR', 'rach_filter_only'],
@@ -27,8 +27,8 @@ const FIELD_GROUPS = {
   securityPrimary: ['mark_security_phase'],
   /* Sub-options of the security scan that the C side ANDs with mode == REPLAY, so they are
      shown only when a cell is actually replaying. */
-  securityReplay: ['rlc_reassembly', 'qam_retry'],
-  topToggles: ['decode_single_ue', 'decode_SIB', 'remote_enable'],
+  securityReplay: ['qam_retry'],
+  topToggles: ['decode_SIB', 'remote_enable'],
 };
 
 /* Chips carry the one fact about a setting that is not obvious from its name -- a cost, or
@@ -72,6 +72,29 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+/* A setting the C side refuses or ignores outside replay must not be offerable: the form
+   would be asking for a choice that cannot take effect, and for mark_security_phase a stale
+   value would abort the run at config time over a control the user could not see. Hidden
+   rather than disabled, and config_io emits the schema default for these while nothing is
+   replaying, so no one has to set them back. */
+function replaying() {
+  return ((S && S.config && S.config.cells) || []).some((c) => c.mode === MODE_REPLAY);
+}
+
+function availableFields(fields) {
+  const supported = fields.filter((f) => !f.unsupported);
+  return replaying() ? supported : supported.filter((f) => !f.replay_only);
+}
+
+/* Per-cell version: a mode_locked field has exactly one valid value in this cell's mode, so
+   the form must not offer a choice. config_io emits that value regardless of what state
+   holds. */
+function availableCellFields(fields, cell) {
+  return availableFields(fields)
+    .filter((f) => !(f.mode_locked && Object.prototype.hasOwnProperty.call(
+      f.mode_locked, String(cell.mode))));
 }
 
 function fieldByKey(fields, key) {
@@ -431,7 +454,10 @@ function renderCells() {
   body.appendChild(segmentedField(modeField, cell.mode, (value) => {
     cell.mode = value;
     renderCells();
-    renderSecurity();   /* the replay-only sub-options turn on and off with this */
+    /* Replay-only settings appear and disappear with this, in the Security card and in the
+       "More options" leftovers, so both have to re-render. */
+    renderSecurity();
+    renderTopLevel();
     scheduleSave();
   }, SCHEMA.modes));
 
@@ -445,6 +471,11 @@ function renderCells() {
     body.appendChild(note);
   }
   if (cell.mode === MODE_REPLAY) {
+    const note = el('div', 'callout info');
+    note.innerHTML = 'Nothing tunes in Replay. ngscope reads the frequency from the '
+      + 'recording\u2019s own <code>cell_type.json</code> or DCI log filename and ignores '
+      + 'the value below; it is only used as a label when the recording does not say.';
+    body.appendChild(note);
     const replay = fieldByKey(SCHEMA.rf_dev, 'replay_fname');
     body.appendChild(pathField(replay, cell.replay_fname, set('replay_fname'),
       `cells.${index}.replay_fname`, (cur) => api.pick_replay_file(cur)));
@@ -477,13 +508,13 @@ function renderCells() {
   });
   body.appendChild(toggles);
 
-  appendLeftovers(body, rest, cell, set, `cells.${index}`);
+  appendLeftovers(body, availableCellFields(rest, cell), cell, set, `cells.${index}`);
 }
 
 /* Anything the layout above does not name still has to appear, or a new schema key
    would silently become un-settable. */
 function appendLeftovers(parent, fields, values, setFactory, prefix) {
-  const extra = fields.filter((f) => f.key !== 'mode');
+  const extra = availableFields(fields).filter((f) => f.key !== 'mode');
   if (!extra.length) return;
 
   const details = el('details', 'advanced');
@@ -564,6 +595,19 @@ function renderSecurity() {
   const field = fieldByKey(SCHEMA.top_level, 'mark_security_phase');
   if (!field) return;
 
+  if (!replaying()) {
+    /* Say why rather than leaving an empty panel: an unexplained blank card reads as a bug,
+       and the reason is worth knowing -- detection is offline now, over the pcap. */
+    const note = el('div', 'callout info');
+    note.innerHTML = 'Replay only. Set a cell to <b>Replay</b> to configure this &mdash; '
+      + 'ngscope decodes each tracked UE\u2019s transport blocks into the MAC capture, and '
+      + '<code>tools/security_scan.py</code> finds the security context in it afterwards. '
+      + 'Scanning every UE for its full window costs decode time that live capture would '
+      + 'pay for in dropped subframes.';
+    body.appendChild(note);
+    return;
+  }
+
   const toggles = el('div', 'toggles');
   toggles.appendChild(toggleRow(field, top.mark_security_phase, (value) => {
     top.mark_security_phase = value;
@@ -586,10 +630,13 @@ function renderSecurity() {
   /* What it actually produces, and the one thing a user has to know to read it correctly:
      the per-DCI label understates the pre-security population. */
   const out = el('div', 'callout good');
-  out.innerHTML = 'Writes <code>security_log-&lt;rf&gt;.csv</code>, one row per observed '
-    + 'boundary. Join it with <code>security_phase_join.py</code> rather than reading '
-    + 'the per-DCI <code>security_phase</code> directly &mdash; the live label is stamped '
-    + 'before the boundary is known, so it marks only a fraction of the pre-security DCIs.';
+  out.innerHTML = 'Writes every tracked UE\u2019s transport blocks to '
+    + '<code>mac-&lt;rf&gt;.pcapng</code>. Detection happens afterwards: '
+    + '<code>tools/security_scan.py</code> dissects that capture with Wireshark and writes '
+    + '<code>security_sessions-&lt;rf&gt;.csv</code>, and the join labels the '
+    + '<code>.dciLog</code> files from it. ngscope itself makes no claim about what the '
+    + 'bytes mean, so the per-DCI <code>security_phase</code> is always '
+    + '<code>unknown</code> until the join runs.';
   body.appendChild(out);
 
   const caveat = el('p', 'help');
@@ -603,7 +650,6 @@ function renderSecurity() {
      that vanishes looks like it was never there, whereas a disabled one with a reason tells
      the user what to change. The C side enforces this independently -- task_scheduler.c ANDs
      each with mode == REPLAY -- so the gate here is guidance, not the guarantee. */
-  const replaying = (S.config.cells || []).some((c) => c.mode === MODE_REPLAY);
   const replayOpts = el('div', 'sub-options');
   FIELD_GROUPS.securityReplay.forEach((key) => {
     const f = fieldByKey(SCHEMA.top_level, key);
@@ -611,12 +657,6 @@ function renderSecurity() {
     replayOpts.appendChild(toggleRow(f, top[key], (value) => {
       top[key] = value;
       scheduleSave();
-    }, {
-      disabled: !replaying,
-      help: replaying ? f.help
-                      : 'Replay only \u2014 set a cell to Replay mode to use this. Holding '
-                        + 'partial RLC state, or spending a second decode, is sound only '
-                        + 'where the scheduler blocks instead of dropping subframes.',
     }));
   });
   body.appendChild(replayOpts);

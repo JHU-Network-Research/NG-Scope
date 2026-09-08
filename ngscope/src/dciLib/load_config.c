@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <unistd.h>
 #include <string.h>
 #include <dirent.h>
 #include <libconfig.h>
@@ -301,10 +303,25 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
         config->decode_RAR = true;
     }
 
-    /* rlc_reassembly and qam_retry are replay-only by construction (task_scheduler.c ANDs them
-     * with mode == REPLAY), so say so rather than letting a live run look as though it had
-     * them. Not an error: they default on, so every live config would otherwise trip it. */
-    if (config->rlc_reassembly || config->qam_retry) {
+    /* Detection is offline now: ngscope decodes each tracked UE's transport blocks into the
+     * MAC pcapng and makes no claim about what they contain. tools/security_scan.py reads
+     * that pcapng. So the setting is worthless without a pcap to write into -- it would pay
+     * for a second PDSCH decode per grant and discard the result. */
+    if (config->mark_security_phase && !config->pcap_mac) {
+        printf("config: WARNING: mark_security_phase decodes each tracked UE's transport "
+               "blocks so they reach mac-<rf>.pcapng, which is what tools/security_scan.py "
+               "reads; with pcap_mac off the decode would be thrown away. Forcing pcap_mac "
+               "on.\n");
+        config->pcap_mac = true;
+    }
+
+    /* mark_security_phase is replay-only. Without in-process parsing a UE never leaves the
+     * tracked set early, so every one is scanned for the full window -- in replay that is
+     * only wall time, because the scheduler blocks on a busy decoder, but live capture
+     * discards subframes instead and the extra work would turn into silent loss. Refused
+     * rather than warned about: a live run would produce a pcap that looks analysable and a
+     * detection rate quietly biased by dropped subframes. */
+    if (config->mark_security_phase) {
         bool any_replay = false;
         for (int i = 0; i < config->nof_rf_dev; i++) {
             if (config->rf_config[i].mode == REPLAY) {
@@ -313,12 +330,74 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
             }
         }
         if (!any_replay) {
-            printf("config: note: rlc_reassembly and qam_retry apply to replay only; no "
-                   "rf_config is in mode=2, so both are inert this run\n");
+            printf("config: ERROR: mark_security_phase requires a replay (mode=2) rf_config. "
+                   "Detection runs offline over the pcapng, and scanning every tracked UE for "
+                   "the full window costs decode time that live capture pays for in dropped "
+                   "subframes. Record first, then replay.\n");
+            nof_missing_required++;
+        }
+    }
+
+    /* probe_blind_dci is a measurement instrument, not part of a capture run. It costs a
+     * targeted PDCCH search plus a PDSCH decode for every distinct RNTI in every subframe --
+     * with rach_filter_only off that is the whole manufactured population, which is the
+     * point. Live capture would pay for it in discarded subframes, and those losses would
+     * bias the very rate it is measuring, so it is refused rather than warned about. */
+    if (config->probe_blind_dci) {
+        bool any_replay = false;
+        for (int i = 0; i < config->nof_rf_dev; i++) {
+            if (config->rf_config[i].mode == REPLAY) {
+                any_replay = true;
+                break;
+            }
+        }
+        if (!any_replay) {
+            printf("config: ERROR: probe_blind_dci requires a replay (mode=2) rf_config. It "
+                   "decodes a transport block for every DCI in every subframe; live capture "
+                   "would drop subframes and bias the measurement. Record first, then "
+                   "replay.\n");
+            nof_missing_required++;
+        }
+        if (config->rach_filter_only) {
+            printf("config: note: probe_blind_dci with rach_filter_only on -- the blind "
+                   "search is already restricted to RACH-confirmed RNTIs, so the "
+                   "'not confirmed' column will be near-empty. Turn rach_filter_only off to "
+                   "compare the two populations.\n");
+        }
+    }
+
+    /* qam_retry is replay-only by construction (task_scheduler.c ANDs it with
+     * mode == REPLAY), so say so rather than letting a live run look as though it had it.
+     * Not an error: it defaults on, so every live config would otherwise trip it. */
+    if (config->qam_retry) {
+        bool any_replay = false;
+        for (int i = 0; i < config->nof_rf_dev; i++) {
+            if (config->rf_config[i].mode == REPLAY) {
+                any_replay = true;
+                break;
+            }
+        }
+        if (!any_replay) {
+            printf("config: note: qam_retry applies to replay only; no rf_config is in "
+                   "mode=2, so it is inert this run\n");
         }
     }
 
     for (int i = 0; i < config->nof_rf_dev; i++) {
+        /* PHICH decoding is gone. It could only ever follow the one configured target RNTI,
+         * whose config key has been removed, and on a NACK it synthesised a UL DCI into the
+         * output rather than logging separately -- see dci_decoder_phich_decode(), which is
+         * kept but has no caller. Nothing now writes a record with rv == 4, which is the
+         * only thing log_phich_subframe() reports, so leaving the key enabled would produce
+         * a phich log holding one empty filler record per subframe and nothing else. Forced
+         * off rather than left as a silent no-op that looks like a measurement. */
+        if (config->rf_config[i].log_phich) {
+            printf("config: WARNING: rf_config%d log_phich is no longer supported -- PHICH "
+                   "decoding followed a single configured target RNTI, which no longer "
+                   "exists. The log would contain only empty records. Forcing it off.\n", i);
+            config->rf_config[i].log_phich = false;
+        }
+
         /* srsran_ue_dl_init() and the sync buffers are sized from this, and
          * srsran_rf_open_devname() asks the driver for exactly this many channels. */
         if (config->rf_config[i].nof_rx_ant < 1 || config->rf_config[i].nof_rx_ant > SRSRAN_MAX_PORTS) {
@@ -352,6 +431,15 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
 
         if (config->rf_config[i].mode == REPLAY && config->rf_config[i].replay_fname == NULL) {
             printf("config: ERROR: rf_config%d mode=2 (replay) requires replay_fname\n", i);
+            nof_missing_required++;
+        }
+        /* Checked here rather than at open time so a typo'd path fails before the radio,
+         * the decoders and the pcap are set up -- and so a .bz2 that is simply absent is not
+         * mistaken for a decompressor problem. */
+        if (config->rf_config[i].mode == REPLAY && config->rf_config[i].replay_fname != NULL &&
+            access(config->rf_config[i].replay_fname, R_OK) != 0) {
+            printf("config: ERROR: rf_config%d replay_fname '%s' is not readable: %s\n", i,
+                   config->rf_config[i].replay_fname, strerror(errno));
             nof_missing_required++;
         }
     }

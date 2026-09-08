@@ -11,7 +11,6 @@
 #include <unistd.h>
 #include <stdint.h>
 
-#include "ngscope/hdr/dciLib/security_ctx.h"
 #include "ngscope/hdr/dciLib/dci_log.h"
 #include "ngscope/hdr/dciLib/cell_status.h"
 #include "ngscope/hdr/dciLib/socket.h"
@@ -65,8 +64,10 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 			// TTI RNTI
 			fprintf(fd_dl,"\"tti\": \"%d\",\n", q->tti);
 			fprintf(fd_dl,"\"rnti\": \"%d\",\n", q->dl_msg[i].rnti);
-			fprintf(fd_dl,"\"security_phase\": \"%s\",\n",
-					ngscope_sec_phase_str((ngscope_sec_phase_t)q->dl_msg[i].sec_phase));
+			/* Always "unknown" now: nothing in this process reads a payload, so no DCI can be
+			 * placed relative to a security context here. tools/security_phase_join.py
+			 * fills the field in from the offline scan of the MAC pcap. */
+			fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", q->cell_dl_prb);
@@ -116,8 +117,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 		fprintf(fd_dl,"\"tti\": \"%d\",\n", q->tti);
 		fprintf(fd_dl,"\"rnti\": \"%d\",\n", 0);
 		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
-		fprintf(fd_dl,"\"security_phase\": \"%s\",\n",
-				ngscope_sec_phase_str(NGSCOPE_SEC_UNKNOWN));
+		fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", 0);
@@ -233,8 +233,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 			// TTI RNTI
 			fprintf(fd_ul,"\"tti\": \"%d\",\n", q->tti);
 			fprintf(fd_ul,"\"rnti\": \"%d\",\n", q->ul_msg[i].rnti);
-			fprintf(fd_ul,"\"security_phase\": \"%s\",\n",
-					ngscope_sec_phase_str((ngscope_sec_phase_t)q->ul_msg[i].sec_phase));
+			fprintf(fd_ul,"\"security_phase\": \"unknown\",\n");
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", q->cell_ul_prb);
@@ -283,8 +282,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 		fprintf(fd_ul,"\"tti\": \"%d\",\n", q->tti);
 		fprintf(fd_ul,"\"rnti\": \"%d\",\n", 0);
 		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
-		fprintf(fd_ul,"\"security_phase\": \"%s\",\n",
-				ngscope_sec_phase_str(NGSCOPE_SEC_UNKNOWN));
+		fprintf(fd_ul,"\"security_phase\": \"unknown\",\n");
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", 0);
@@ -395,8 +393,8 @@ void log_phich_subframe(sf_status_t* q, FILE* fd_phich){
 
 				// PHICH
 				fprintf(fd_phich,"\"rv\": \"%d\",\n", q->ul_msg[i].tb[0].rv);
-				fprintf(fd_phich,"\"timestamp_us\": \"%ld\"\n", q->timestamp_us);
-				fprintf(fd_phich,"\"collection_time\": \"%ld\",\n",q->collection_time);
+				fprintf(fd_phich,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+				fprintf(fd_phich,"\"collection_time\": \"%ld\"\n",q->collection_time);
 				fprintf(fd_phich,"}");
 				if (isFirstCall == true){
 					isFirstCall = false;

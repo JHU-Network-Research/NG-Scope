@@ -35,7 +35,6 @@ is marked, which makes a typo'd key obvious:
 
 ```
 config: nof_rf_dev = 1
-config: rnti = 9185
 config: decode_RAR = true
 config: rach_filter_only = false (default)
 config: rf_config0.rf_freq = 2680000000
@@ -54,7 +53,6 @@ formats cannot drift apart:
 ```c
 #define NGSCOPE_TOP_LEVEL_KEYS(X)                              \
     X(INT,   "nof_rf_dev",      nof_rf_dev,      1,     false) \
-    X(INT,   "rnti",            rnti,            0,     true)  \
     X(BOOL,  "decode_RAR",      decode_RAR,      false, false) \
     ...
 ```
@@ -66,10 +64,13 @@ both formats at once.
 
 Two rules the tables enforce:
 
-- **Required keys have no default.** `rnti` and `rf_config<N>.rf_freq` are required: if
-  either is missing NG-Scope reports it and exits, rather than running on a fabricated
-  value. (`rnti = 0` in particular is not inert — `srsran_ngscope_tree_copy_rnti()` matches
-  zeroed tree slots, so it would flood the output.)
+- **Required keys have no default.** A key marked required in the last column has no usable
+  default: if it is missing NG-Scope reports it and exits, rather than running on a
+  fabricated value. **No key is currently marked required** — `rnti` was the last one and it
+  is gone (see below), and `rf_config<N>.rf_freq` is enforced by
+  `ngscope_config_finalize()` for the modes that actually tune rather than by the table,
+  because replay learns it from the recording. The mechanism is still wired through every
+  backend, so a future required key is one column away.
 - **Every optional key has an explicit default.** `ngscope_config_t` is a stack local in
   `main()`, so a key with neither a value nor a default previously left the field holding
   garbage — not zero.
@@ -84,7 +85,7 @@ The two formats differ only in how repeated RF-device sections are written.
 
 ```
 nof_rf_dev = 1;          // top-level scalars
-rnti = 9185;
+decode_RAR = true;
 
 rf_config0 = { ... };    // one block per RF device, numbered from 0
 rf_config1 = { ... };
@@ -97,7 +98,7 @@ Blocks beyond `nof_rf_dev` are ignored, so the count and the blocks must be kept
 **TOML (`.toml`)** — an array of tables, which needs no count:
 
 ```toml
-rnti = 9185              # top-level scalars
+decode_RAR = true        # top-level scalars
 
 [[rf_config]]            # one table per RF device
 rf_freq = 2680000000
@@ -120,18 +121,16 @@ Note also that `rf_freq` takes no `L` suffix in TOML, since its integers are alr
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `nof_rf_dev` | int | `1` | **libconfig only.** Number of RF devices (cells) to decode simultaneously. Must be 1–4 (`MAX_NOF_RF_DEV`); outside that range NG-Scope exits. Each needs its own `rf_configN` block. In TOML it is derived from the `[[rf_config]]` array and must not be set. |
-| `rnti` | int | **required** | Target RNTI. Used as the single-UE target when `decode_single_ue = true`, for PHICH tracking, and as a preferred RNTI in the blind decoder's candidate selection. |
 | `remote_enable` | bool | `false` | Start the DCI sink server, which streams decoded DCIs to remote subscribers over the network. |
-| `decode_single_ue` | bool | `false` | Decode only `rnti` instead of running the multi-UE blind search. Much cheaper, but reports one UE. |
 | `decode_SIB` | bool | `false` | Decode SIB1/SIB2 and write cell identity (MCC/MNC/TAC/cell ID) and reference signal power to `cellcfg.json`. |
 | `decode_RAR` | bool | `false` | Decode Random Access Responses. See [RACH decoding](#rach-decoding) below. |
 | `rar_seed_tracker` | bool | `false` | Prime the UE tracker with RACH-assigned RNTIs. See [RACH decoding](#rach-decoding). |
 | `rach_filter_only` | bool | `false` | Report only RNTIs observed completing RACH. See [RACH decoding](#rach-decoding). |
-| `mark_security_phase` | bool | `false` | Label each unicast DCI `pre`, `post` or `unknown` relative to the UE establishing an AS security context, and report coverage at teardown. Implies `decode_RAR`, which anchors each UE. In replay it also rejoins RRC split across grants and lets the CRC choose the MCS→TBS table per grant. See [docs/security-measurement.md](security-measurement.md). |
+| `mark_security_phase` | bool | `false` | **Replay only** — refused at config time for live or record, and implies both `decode_RAR` (which anchors each UE) and `pcap_mac` (which is where the result goes). Decodes each RACH-anchored UE's downlink transport blocks into `mac-<rf>.pcapng`. ngscope makes no claim about their contents: `tools/security_scan.py` dissects that capture with Wireshark and writes `security_events`/`security_sessions`/`security_summary`. The name is historical — nothing is marked in-process any more, and the `.dciLog` `security_phase` field stays `unknown` until the join runs. See [docs/security-measurement.md](security-measurement.md). |
 | `pcap_mac` | bool | `false` | Write decoded downlink MAC PDUs to `mac-<rf_idx>.pcapng` in MAC-LTE encapsulation. See [docs/pcap.md](pcap.md) for the Wireshark setup, which is not optional — DLT 147 is `DLT_USER0` and dissects as nothing until configured. |
 | `pcap_max_mb` | int | `0` | Per-file cap in MB, `0` for unlimited. |
-| `rlc_reassembly` | bool | `true` | **Replay only.** Rejoin an RRC message the eNB split across several grants, so a `SecurityModeCommand` that did not fit one transport block is still read. `task_scheduler.c` ANDs it with `mode == 2`, so it does nothing for a live device — holding a partial SDU is sound only where no subframe goes missing, and live capture discards them when every decoder is busy. Very cell-dependent: 8 of 41 DL-DCCH SDUs needed rejoining on one AT&T capture, 2 of 325 on another. |
 | `qam_retry` | bool | `true` | **Replay only.** When a transport block fails its CRC, rebuild the grant on the other MCS→TBS table and decode again, keeping whichever passes. The CRC is ground truth, so this measures the table rather than trusting `enable_256qam`, per grant — the only way to be right, since `altCQI-Table-r12` is per-UE state. Costs a second PDSCH decode per failure, which is affordable exactly where the scheduler blocks instead of dropping subframes. On one capture it recovered 37 `SecurityModeCommand`s (33.8% → 39.2%) for 1 second in 65. |
+| `probe_blind_dci` | bool | `false` | **Replay only** — refused at config time otherwise. A measurement instrument, not part of a capture run: it decodes a transport block for every distinct RNTI the blind search reports and records whether the DL-SCH CRC passes, split by whether that RNTI was RACH-confirmed. Writes `blind_probe-<rf>.csv` and a teardown summary. Pair with `rach_filter_only = false`, or the unconfirmed column is empty by construction. See [Is a blind DCI real?](#is-a-blind-dci-real) below. |
 | `enable_256qam` | bool | `true` | Use the 256QAM MCS→TBS table for C-RNTI Format1/2 grants. Only correct when the cell configures `altCQI-Table-r12`, which is **per-UE** RRC state a downlink sniffer cannot observe — so it is a guess, and on a mixed cell no single value is right for every UE. It selects the MCS→TBS mapping, so it sets the transport block size: a wrong guess gives wrong `tbs` values in the `.dciLog` files *and* a transport block CRC that can never pass. srsRAN forces it off for Format1A and non-user RNTIs, so SIB, RAR and paging are unaffected. Every run prints a verdict at teardown; with `mark_security_phase` in replay, a failed block is retried on the other table, so the setting matters much less there. |
 
 A missing optional key is not fatal: it falls back to the default above and says so. A
@@ -151,9 +150,9 @@ missing **required** key is fatal — NG-Scope lists what is missing and exits.
 | `disable_plot` | bool | `true` | Disable the GUI for this cell. Only effective in builds with `ENABLE_GUI`. |
 | `log_dl` | bool | `true` | Write the downlink `.dciLog` file. **This is the flag that controls DL logging**, not `dci_log_config.log_dl`. |
 | `log_ul` | bool | `true` | Write the uplink `.dciLog` file. |
-| `log_phich` | bool | `false` | Write the PHICH `.dciLog` file. |
+| `log_phich` | bool | `false` | **No longer supported — forced off with a warning.** It wrote the PHICH `.dciLog`, whose only real content was the synthetic `rv = 4` record PHICH decoding injected for the configured target RNTI. Both are gone; see [Removed settings](#removed-settings). |
 | `mode` | int | `0` | `0` normal, `1` record IQ to disk, `2` replay IQ from disk. |
-| `replay_fname` | string | none | Source file for `mode = 2`. Required only in replay mode; NG-Scope exits if it is missing. Recording always writes to `<out_dir>/<timestamp>/recorded-samples.bin` and ignores this key. |
+| `replay_fname` | string | none | Source file for `mode = 2`. Required only in replay mode; NG-Scope exits if it is missing **or unreadable** — checked at config time, before the radio and decoders are set up. May be compressed: a `.bz2`, `.gz` or `.xz` suffix is decompressed on the fly. Recording always writes to `<out_dir>/<timestamp>/recorded-samples.bin` and ignores this key. |
 | `debug` | bool | `false` | Verbose per-subframe tracing. Extremely noisy — thousands of lines per second. |
 | `silent` | bool | `false` | Suppress the per-subframe summary lines. |
 | `decode_pdcch` | bool | `true` | Decode the control channel. Setting it `false` synchronises and records without decoding, which is what you want for a pure IQ capture. |
@@ -168,6 +167,49 @@ takes about 60 seconds to replay.
 Replay is a faithful re-run of the decode path, which makes it the right way to A/B a
 configuration change: run twice on the same file, changing one flag.
 
+#### Compressed recordings
+
+`replay_fname` may point at a compressed recording. The suffix selects the decompressor, a
+parallel one preferred and the serial one used if that is absent:
+
+| suffix | preferred | fallback |
+|---|---|---|
+| `.bz2` | `lbzip2` | `bzip2` |
+| `.gz` | `pigz` | `gzip` |
+| `.xz` | `xz` | — |
+
+It runs as a subprocess on a pipe, concurrently with the decoder, so it costs wall time only
+when the decoder is left waiting on it. In-process decompression via `libbz2` was rejected on
+measurement: it is the same single-threaded algorithm as `bzip2 -dc` (and as `bzcat`, which is
+a symlink to the same binary), so it buys nothing over the subprocess and gives up the
+concurrency.
+
+**It never changes the result, only the wall time.** The replay reads strictly forward, and
+the one place it seeks — skipping a payload it has rejected — reads and discards on a pipe
+instead. Verified on a 3.14 GB capture: uncompressed, `lbzip2` and `bzip2` all produced
+17,072 frames read and the same 3,167 downlink DCIs, with identical RAR sets. The pcap
+differed by one packet, which is **baseline nondeterminism** — two identical uncompressed runs
+differ by the same one packet, because which tracked UEs a subframe's decoder gets to scan
+depends on thread timing.
+
+**Whether decompression limits the run depends on the cell, so it is measured, not
+predicted.** Every replay prints a `REPLAY SOURCE` line at teardown giving the fraction of
+wall time spent blocked reading the recording and the resulting source throughput. On that
+capture — 100 PRB, 5 decoder threads, so about 115 MB/s consumed:
+
+| source | wall | blocked | source rate | verdict |
+|---|---|---|---|---|
+| plain file | 27.2 s | 1% | 9,499 MB/s (page cache) | — |
+| `lbzip2` | 36.8 s | 13% | 642 MB/s | decompression kept up |
+| `bzip2` | 115.2 s | 79% | 34 MB/s | the decompressor was the limiter |
+
+So on a wide cell serial `bzip2` costs roughly 4× the wall time, while on a narrower one — or
+with heavier decode settings such as `probe_blind_dci`, which slow the consumer — it has room
+to keep up. Read the teardown line rather than assuming either way.
+
+Compression buys less than it costs on IQ: `bzip2` gets a recording to about 46% of its
+original size. Worth it for an archive, rarely for a capture being iterated on.
+
 ---
 
 ## Logging parameters (`dci_log_config`)
@@ -178,8 +220,206 @@ configuration change: run twice on the same file, changing one flag.
 
 This block used to also accept `log_dl` and `log_ul`. They were parsed and stored but never
 read, so setting them had no effect; they have been removed. Which `.dciLog` files get
-written is controlled per cell by `rf_configN.log_dl` / `log_ul` / `log_phich`. Older configs
-that still set them keep working — libconfig ignores keys the program does not ask for.
+written is controlled per cell by `rf_configN.log_dl` / `log_ul`. Older configs that still
+set them keep working — libconfig ignores keys the program does not ask for.
+
+---
+
+## Is a blind DCI real?
+
+With `rach_filter_only = false` the blind decoder reports far more RNTIs than exist — 6,369
+in 60 s against 188 real, on one capture. They come out of the PDCCH blind search, which
+*descrambles* the DCI CRC to recover an RNTI rather than checking it against a known one, so
+the CRC cannot reject anything: whatever 16 bits fall out become an RNTI.
+
+`probe_blind_dci = true` answers the question the DCI CRC cannot, using the **transport-block
+CRC** as the oracle:
+
+- PDSCH descrambling is seeded with the RNTI — `(rnti << 14) + (q << 13) + ((nslot/2) << 9) +
+  cell_id`, `lib/src/phy/phch/sequences.c`.
+- The DL-SCH CRC is an unmasked CRC24A that the RNTI never touches, `lib/src/phy/phch/sch.c`.
+
+So a transport block that passes CRC was descrambled with the right RNTI *and* rate-matched
+to the right size. The `(RNTI, grant)` pair is real, with a false-pass probability around
+2⁻²⁴. That is a much stronger test than asking whether the payload parses — and a real block
+often will *not* parse, because it is ciphered, or a DRB carrying IP, or an RLC segment.
+
+**The test is one-sided, and the output keeps that visible.** Every probe lands in one of
+three buckets, never collapsed into real-versus-spurious:
+
+| bucket | meaning |
+|---|---|
+| `no_dci` | a targeted search for that RNTI found no DCI at all |
+| `crc_fail` | DCI found, transport block did not decode — **inconclusive** |
+| `crc_pass` | decoded: the DCI is real |
+
+`crc_fail` proves nothing on its own. srsRAN cannot predecode spatial multiplexing on a
+4-port cell, the MCS→TBS table is per-UE state a sniffer cannot see (which is why the probe
+honours `qam_retry`), the signal may be weak, and an `rv > 0` retransmission needs HARQ
+combining across TTIs that this does not do.
+
+**What to read from it.** Not a per-DCI verdict but the *difference in pass rate* between the
+two populations. The RACH-confirmed column is the baseline for known-real UEs on that
+capture, which is well below 100% for the reasons above. The unconfirmed column is then a
+**lower bound** on real UEs the RAR anchor missed — UEs already connected before capture
+started, and handover-in, which
+[docs/security-measurement.md](security-measurement.md) records as invisible from the target
+cell alone. Those are missing from every denominator the security measurement reports.
+
+Results are **not** written to the MAC pcapng, deliberately: those frames would be attributed
+to RAR-anchored sessions by `tools/security_scan.py` and would change `n_pdus` and possibly an
+outcome, contaminating the measurement this is meant to inform.
+
+### Measured: `att_850_office`, 30 s, `rach_filter_only = false`
+
+| | RACH-confirmed | not confirmed |
+|---|---|---|
+| distinct RNTIs probed | 47 | 5,114 |
+| RNTIs with ≥1 CRC-passing block | **45 (95.7%)** | **54 (1.1%)** |
+| RNTIs with ≥3 passing blocks | 43 | 43 |
+| passing blocks | 331 | 446 |
+| passing-block TBS, median / mean | 88 / 278 | 144 / 603 |
+| appear in `rar_log` | 45 | **0** |
+
+Read per **RNTI**, not per block: the block-level pass rates (24.3% vs 1.5%) are depressed on
+both sides by `rv > 0`, MIMO and weak signal, and are not the interesting quantity.
+
+**Blind mode is overwhelmingly noise — and not entirely.** 5,060 of 5,114 unconfirmed RNTIs
+produced no decodable block at all, which is what `rach_filter_only` exists to remove. But 54
+did, and 43 of those produced three or more. Three independent CRC24A passes under one RNTI is
+a 2⁻⁷² coincidence, so those are real UEs, and **none of them appears in `rar_log`**.
+
+They are real UEs the RAR anchor structurally cannot see — already connected when the capture
+started, or handed over in. Their traffic profile says the same thing: larger transport blocks
+than the RACH-confirmed population, which is what an established session in data transfer looks
+like next to a UE still doing signalling. The clearest case on this capture is RNTI 10649, with
+81 passing blocks spanning 17.8 s — the same RNTI ngscope's own teardown names as the busiest
+downlink UE on the cell, and it is absent from every denominator the security measurement
+reports.
+
+### These UEs are positive evidence, not missing failures
+
+A first reading is that they are unobservable — no RAR, so no anchor, so nothing to measure.
+That is wrong, and the `ch` column shows why. The probe walks the DL-SCH subheaders of every
+passing block (36.321 6.1.2) and classifies the logical channel:
+
+| passing blocks by channel | RACH-confirmed | not confirmed |
+|---|---|---|
+| `ccch` | 44 | 17 |
+| `srb` | 152 | 158 |
+| **`drb`** | **23** | **168** |
+| `other` (MAC CE, padding) | 112 | 103 |
+| **RNTIs with ≥1 DRB block** | **11** | **15** |
+
+**A DRB cannot exist without AS security.** It is configured by an
+`RRCConnectionReconfiguration`, which the eNB may only send after a completed
+`SecurityModeCommand` — including the unauthenticated-emergency case, which still runs
+security mode establishment, just with the null algorithms. So a CRC-passing DRB block is
+itself proof that that UE established an AS security context *with this cell*. The boundary
+happened before the capture started; the consequence of it is still on the air.
+
+So on this capture 15 UEs have **demonstrated** AS security with the cell and appear in no
+denominator the security measurement reports. The published figure was 22/68 = 32.4%. Counting
+what is actually observable gives 37 UEs with demonstrated security, against 83 seen at all.
+
+This is the same error as counting `outcome=reused` as a failure, which
+[security-measurement.md](security-measurement.md) already warns is backwards:
+`SecurityModeCommand` is *one* observation of security establishment, not the only one.
+Reestablishment and resume are a second. DRB traffic is a third.
+
+The remaining honest caveat is the one-sidedness above: absence of a DRB block is not absence
+of security, so 15 is a floor on this population, not a count.
+
+Cost on the same capture: 40.6 s → 42.6 s of replay, about **+5%**. Lower than the ~8×
+decode-attempt figure suggests, because two thirds of probes end at the targeted PDCCH search
+without ever reaching a PDSCH decode.
+
+---
+
+## Removed settings
+
+**Old configs keep working.** Both backends look up only the keys in the schema, so a key
+the program no longer asks for is ignored rather than rejected. Nothing has to be edited out
+of an existing `.cfg` or `.toml`.
+
+### `rnti` and `decode_single_ue`
+
+`rnti` named one UE — the "target RNTI" — and `decode_single_ue` decoded only that UE. Both
+are gone, along with everything that treated the named UE differently from any other. It was
+the last key marked required, so no key is required today.
+
+Three decode paths gave the target RNTI preferential treatment, and all three are now
+disabled by passing 0 rather than deleted, so a future per-UE feature can reuse them:
+
+| site | what it did |
+|---|---|
+| `match_two_dci_vec()` (`ngscope_tree.c`) | accepted a candidate on an RNTI match alone, skipping the child-parent agreement check every other candidate has to pass |
+| `srsran_ngscope_tree_prune_node()` | short-circuited format selection for that RNTI |
+| `srsran_ngscope_tree_copy_rnti()` | lifted its DCIs straight into the output, bypassing pruning entirely |
+
+Each is now guarded on `targetRNTI > 0`, which is **required rather than defensive**: an
+unfilled tree slot has `rnti == 0`, so an unguarded zero target would match every empty node.
+That is the hazard the old "`rnti = 0` is not inert" warning described.
+
+`srsran_ngscope_decode_dci_singleUE_yx()` (`lib/src/phy/ue/ngscope.c`) is likewise kept and
+uncalled; `srsran_ue_decode_dci_yx()` beneath it already returns 0 for a zero RNTI.
+
+**What it changed, measured.** Same 20 s prefix of the Verizon reference capture
+(`verizon_66636/…/2026_08_13_15_31_42`, PCI 56, 100 PRB), same config, one build before the
+removal and one after:
+
+| | before | after |
+|---|---|---|
+| DL records, non-zero RNTI | 25,214 | 25,205 |
+| UL records, non-zero RNTI | 5,815 | 5,815 |
+| records for `rnti = 9185` | 12 | 0 |
+| replay wall time | 23.66 s | 23.66 s |
+
+Diffed on `(tti, rnti)`, the *only* records the old build had and the new one does not are
+those 12 — nothing else was lost, and the uplink is identical. The new build gained three
+records, for RNTIs 12379, 26160 and 38195. That is the shortcut's real cost: at TTI 1716 the
+old build reported 9185 on 60 PRB where the new one reports 12379 on 100 PRB, so the
+preference was not merely adding a phantom UE, it was displacing a candidate that passed the
+child-parent check.
+
+9185 appears in **none** of that run's 30 RARs — it is a stale value carried in every shipped
+config from a T-Mobile capture, and the cell it was being reported on had never assigned it.
+
+Two consumers of the target elsewhere are guarded the same way and stay in place:
+`push_dci_to_remote()`, which fed one named UE to the DCI sink, and the `ue_dl_prb` /
+`ue_ul_prb` fields in the ring buffer, which nothing read.
+
+### `log_phich`
+
+Still accepted, but `ngscope_config_finalize()` forces it off with a warning.
+
+PHICH carries the eNB's HARQ feedback for a UE's PUSCH, and it is the only way a downlink
+sniffer can observe a *non-adaptive* uplink retransmission — on a NACK the UE retransmits on
+the same resources with no new grant, so nothing appears on the PDCCH. Adaptive
+retransmissions do carry a fresh grant and are still logged for every UE via `TB1_rv` /
+`TB1_ndi`; none of that changed.
+
+It went with the target RNTI because it could only ever follow that one UE, and because of
+what it wrote:
+
+- `pend_ack_list` (`phich_decoder.h`) holds exactly one `(I_lowest, n_dmrs)` per TTI, so it
+  is structurally single-UE.
+- On a NACK the caller **synthesised** a UL DCI — `rnti = target, rv = 4, prb = 0, tbs = 0,
+  decode_prob = 100` — and pushed it into `dci_per_sub`, so it reached the `.dciLog`
+  indistinguishable from a real grant except by that signature. In one recorded capture 34
+  of the 63 UL records for the target RNTI were synthetic.
+- ACKs were decoded and discarded. Only NACKs produced output.
+- `ack_list` is a single global shared by every decoder thread and every RF device, and the
+  read and reset in `decode_phich()` do not hold `ack_mutex` — a live race at
+  `nof_thread > 1`.
+
+`dci_decoder_phich_decode()` and `phich_decoder.c` are kept intact and uncalled, with
+`targetRNTI` now a parameter rather than a config read so the function still compiles. A
+useful revival needs all four fixed: a per-RNTI pending-ack list, a separate PHICH log
+instead of injection into the DCI stream, ACKs recorded as well as NACKs, and per-device
+state. Since nothing writes an `rv == 4` record any more, and that is the only thing
+`log_phich_subframe()` reports, leaving the key enabled would produce a log of empty filler
+records — which is why it is forced off rather than left as a silent no-op.
 
 ---
 
@@ -198,7 +438,7 @@ timestamp,collection_time,tti,rf_idx,ra_rnti,rapid,temp_crnti,ta_cmd,grant_rba,g
 1786685439584262,3893822,1755,0,8,56,15098,25,293,1,0x24a2c,56,1
 ```
 
-`security_log-<rf_idx>.csv` carries both clocks for each boundary: `rar_timestamp` /
+`security_sessions-<rf_idx>.csv` carries the radio clock throughout: `rar_ct` /
 `smc_timestamp` are host wall-clock at decode, while `rar_collection_time` /
 `smc_collection_time` are the radio domain. `rar_to_smc_ms` is derived from the latter, so
 it is the real over-the-air delay whether the run was live or a replay decoding at some
@@ -340,9 +580,6 @@ These are surprising but current behaviour, listed so you do not lose time to th
   only symptom is the setting you meant reporting `(default)` at startup. Top-level
   `disable_plot` is a live example: it is never parsed (only `rf_configN.disable_plot` is)
   yet still appears in three of the four shipped configs, where it does nothing.
-- **A phich-only configuration never starts the logger.** The check that decides whether to
-  spawn the logging thread tests only `log_dl` and `log_ul`, so `log_phich = true` with both
-  others `false` produces no output at all.
 - **`.dciLog` files contain a zero-filled placeholder record for every TTI with no DCIs**, so
   the record count is not the DCI count. Filter on `"rnti"` ≠ 0.
 - **Long `-o` paths are silently truncated** at 128 characters.

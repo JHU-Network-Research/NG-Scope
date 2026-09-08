@@ -268,8 +268,16 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
  
         if (prog_args.mode == 1)
             init_record(prog_args.output_file_name, 8);
-        else if (prog_args.mode == 2)
-            init_replay(prog_args.input_file_name);
+        else if (prog_args.mode == 2) {
+            /* Return value checked: init_replay() leaves replay_fh NULL on failure, and the
+             * read loop would then fread() from it. A missing decompressor or an unreadable
+             * recording has to stop the run, not corrupt it. */
+            if (!init_replay(prog_args.input_file_name)) {
+                fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
+                        prog_args.input_file_name);
+                exit(EXIT_FAILURE);
+            }
+        }
         // First of all, start the radio and get the cell information
         radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args, 
                                                     &cell_detect_config, &search_cell_cfo);
@@ -618,12 +626,6 @@ void* task_scheduler_thread(void* p){
         ngscope_rar_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
     }
 
-    /* Same reasoning as the RAR log: the file has to exist before the first boundary, so that
-     * "nobody reached security" is an empty file rather than a missing one. */
-    if(task_scheduler->prog_args.mark_security_phase){
-        ngscope_sec_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
-    }
-
     // Cell-config files from the SIB decoder land in the run's output directory rather than
     // the working directory. Set before any decoder thread starts.
     ngscope_sib_set_out_path(task_scheduler->prog_args.out_path);
@@ -637,6 +639,13 @@ void* task_scheduler_thread(void* p){
                               task_scheduler->prog_args.pcap_max_mb);
     }
 
+    /* Blind-DCI probe. Same lifetime rule as the pcap above: opened before any decoder
+     * thread exists, so none sees a half-initialised handle. */
+    if(task_scheduler->prog_args.probe_blind_dci){
+        ngscope_sec_probe_blind_init(task_scheduler->prog_args.out_path,
+                                     task_scheduler->prog_args.rf_index);
+    }
+
     /* Tell the blind search whether this device wants RNTIs restricted to the RACH-observed
      * set. Set before any decoder thread for this device is created, below, so the threads
      * never observe it half-configured. */
@@ -646,19 +655,12 @@ void* task_scheduler_thread(void* p){
      * PDCCH candidate loop. Bind it too. */
     ngscope_rach_filter_bind_thread(rf_idx);
 
-    /* Two replay-only decode aids, both requested by config and both gated on this device
-     * actually replaying. Rejoining RRC split across grants means holding a partial SDU until
-     * the rest arrives, and letting the CRC choose the MCS->TBS table costs a second PDSCH
-     * decode per failure; each is sound exactly where no subframe goes missing, and live
-     * capture drops them when every decoder is busy. The AND is what makes the settings
-     * unselectable outside replay rather than merely inadvisable. Set before any decoder
-     * thread for this device. */
-    {
-        const bool replaying = (task_scheduler->prog_args.mode == REPLAY);
-        ngscope_sec_rrc_set_reassembly(rf_idx, replaying && task_scheduler->prog_args.rlc_reassembly);
-        ngscope_sec_rrc_set_qam_retry(rf_idx, replaying && task_scheduler->prog_args.qam_retry);
-    }
-
+    /* Let the CRC decide which MCS->TBS table each grant uses, rather than trusting
+     * enable_256qam. Replay only: it costs a second PDSCH decode per failure, affordable
+     * exactly where the scheduler blocks instead of dropping subframes. Set before any
+     * decoder thread for this device. */
+    ngscope_sec_rrc_set_qam_retry(rf_idx, (task_scheduler->prog_args.mode == REPLAY) &&
+                                              task_scheduler->prog_args.qam_retry);
 
     for(int i = 0; i < nof_decoder; i++){
         // init the subframe buffer 
@@ -858,9 +860,6 @@ void* task_scheduler_thread(void* p){
 		ngscope_rach_filter_report(rf_idx);
 	}
 	if(prog_args->mark_security_phase){
-		/* Partial SDUs still held are RRC messages that were seen and never read; count
-		 * them before the report rather than letting them vanish. */
-		ngscope_sec_rrc_reasm_flush();
 		ngscope_sec_report(rf_idx);
 	}
 
@@ -891,6 +890,10 @@ void* task_scheduler_thread(void* p){
     // into a closed FILE*.
     if(task_scheduler->prog_args.pcap_mac){
         ngscope_mac_pcap_close(rf_idx);
+    }
+    if(task_scheduler->prog_args.probe_blind_dci){
+        ngscope_sec_probe_blind_report(rf_idx);
+        ngscope_sec_probe_blind_close(rf_idx);
     }
 
 	// free the ue dl and the related buffer

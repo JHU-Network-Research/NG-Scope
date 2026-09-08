@@ -7,3 +7,4 @@ measurements/*
 !measurements/*.sh
 !measurements/*.toml
 !measurements/README.md
+__pycache__/

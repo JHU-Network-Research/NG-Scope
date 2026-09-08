@@ -150,10 +150,14 @@ class Api:
             return
 
         top = (self.state.get("config") or {}).get("top") or {}
-        if not top.get("mark_security_phase"):
+        if not top.get("pcap_mac"):
+            # The scan reads mac-<rf>.pcapng, not anything ngscope concluded -- detection
+            # moved offline. mark_security_phase is what fills that pcap with per-UE
+            # traffic, and ngscope_config_finalize() forces pcap_mac on when it is set, so
+            # this only trips on a run that captured nothing to analyse.
             self._push_lines(
-                ["[gui] security phase join skipped: mark_security_phase was off, so there "
-                 "is no security_log to join"]
+                ["[gui] security phase join skipped: pcap_mac was off, so there is no MAC "
+                 "capture for tools/security_scan.py to read"]
             )
             return
 

@@ -76,6 +76,12 @@ static int match_two_dci_vec(ngscope_dci_msg_t dci_array[][MAX_CANDIDATES_ALL],
 								int*  		matched_format,
 								int* 		matched_root){
     int nof_matched = 0;
+    /* targetRNTI == 0 means "no preferred RNTI", which is the only value NG-Scope passes
+     * now -- the configured target RNTI is gone. The two branches below accept a candidate
+     * on an RNTI match alone, WITHOUT the child-parent agreement that every other candidate
+     * has to pass, so they are a false-positive path for whichever RNTI is named. They are
+     * kept for a future per-UE use and are guarded off: an empty dci_array slot also has
+     * rnti == 0, so without the guard a zero target would match every empty node. */
     for(int i=0;i<MAX_NOF_FORMAT+1;i++){
         //printf("ROOT-RNTI:%d Child-RNTI:%d ",dci_array[i][root].rnti, dci_array[i][child].rnti);
 		if( (dci_array[i][root].rnti > 0) && (dci_array[i][child].rnti > 0)){
@@ -537,6 +543,15 @@ int srsran_ngscope_tree_copy_rnti(ngscope_tree_t*   		q,
 	int ret = 0;
     // if (rnti == 2)
     //     printf("DEBUG: COPYING TREE FOR RNTI %d\n",rnti);
+
+	/* Lifts every tree node carrying this RNTI straight into the output, bypassing the
+	 * pruning the rest of the subframe goes through -- the strongest form of the target-RNTI
+	 * preference that used to exist. NG-Scope no longer calls it with a non-zero value.
+	 * The guard is required, not defensive: an unfilled dci_array slot has rnti == 0, so a
+	 * zero argument would copy every empty node in the tree into dci_per_sub. */
+	if(rnti == 0){
+		return 0;
+	}
 
     for(int i=0; i<q->nof_location; i++){
     	for(int j=0; j<MAX_NOF_FORMAT+1; j++){

@@ -86,208 +86,145 @@ def load_dcilog(path):
         return [json.loads(m.group(0)) for m in re.finditer(r"\{[^{}]*\}", text)]
 
 
-def load_boundaries(run_dir):
-    """rnti -> sorted list of (rar_us, smc_us, rar_tti, smc_tti, rf_idx, rar_ct, smc_ct).
+def load_sessions(run_dir):
+    """rnti -> sessions, from security_sessions-<rf>.csv written by tools/security_scan.py.
 
-    rar_ct/smc_ct are the radio-domain collection times of the same two instants. The
-    matching still uses the wall-clock values, because those are what the .dciLog and pcapng
-    records carry, but every elapsed time reported below is computed from the collection
-    times: wall clock advances at decode speed, so in a replay it stretches or compresses
-    real intervals and any rate plotted against it is wrong.
+    That file replaced security_log-<rf>.csv when detection moved offline. It carries one row
+    per RAR-anchored session rather than one per boundary, so a UE that reached no boundary
+    still has a row -- which is what lets "no evidence" be a value rather than a missing
+    record.
 
-    A list rather than a single value because an RNTI can be handed out again later in a
-    long capture; ngscope re-arms on each RAR, so the same identity can carry several
-    sessions with different boundaries.
+    Keyed on collection_time throughout: the radio clock. The old join matched on
+    timestamp_us, the host wall clock, which in a replay advances at decode speed -- measured
+    overstating RAR-to-SMC by 26.5 ms at the median and up to 1046 ms.
     """
     by_rnti = defaultdict(list)
-    files = sorted(glob.glob(os.path.join(run_dir, "security_log-*.csv")))
+    files = sorted(glob.glob(os.path.join(run_dir, "security_sessions-*.csv")))
     if not files:
         return by_rnti, files
-
     for path in files:
-        m = re.search(r"security_log-(\d+)\.csv$", path)
+        m = re.search(r"security_sessions-(\d+)\.csv$", path)
         rf_idx = int(m.group(1)) if m else 0
         with open(path) as fh:
             for row in csv.DictReader(fh):
-                # Older runs have no collection_time columns; fall back to the wall clock so
-                # the tool still works on them, at the cost of the distortion above.
-                by_rnti[int(row["rnti"])].append((
-                    int(row["rar_timestamp"]),
-                    int(row["smc_timestamp"]),
-                    int(row["rar_tti"]),
-                    int(row["smc_tti"]),
-                    rf_idx,
-                    int(row.get("rar_collection_time") or row["rar_timestamp"]),
-                    int(row.get("smc_collection_time") or row["smc_timestamp"]),
-                ))
-    for sessions in by_rnti.values():
-        sessions.sort()
+                try:
+                    by_rnti[int(row["rnti"])].append({
+                        "rar_ct": int(row["rar_ct"]),
+                        "end_ct": int(row["session_end_ct"]) if row["session_end_ct"] else None,
+                        "outcome": row["outcome"],
+                        "outcome_ct": int(row["outcome_ct"]) if row["outcome_ct"] else None,
+                        "rar_tti": int(row["rar_tti"]),
+                        "rf_idx": rf_idx,
+                    })
+                except (KeyError, ValueError):
+                    continue
+    for v in by_rnti.values():
+        v.sort(key=lambda x: x["rar_ct"])
     return by_rnti, files
 
 
-def session_for(sessions, ts_us):
-    """The session a DCI at ts_us belongs to: the latest one whose RAR precedes it.
+def load_identity_events(run_dir):
+    """(rnti, ct) -> exposure label, from security_events-<rf>.csv.
 
-    None when the DCI predates every RAR for this RNTI -- it belongs to an earlier use of
-    the identity that was never anchored, so it cannot be placed.
+    Marks the individual DCI that carried an identity-revealing message, which is a
+    different question from the per-UE column in security_sessions: this says "this grant
+    is the one", so a reader can go from a rate straight to the subframe.
+
+    Only the strongest exposure is kept per (rnti, ct) -- one transport block can hold
+    several messages, and a summary field must not depend on emission order.
     """
-    idx = bisect.bisect_right([s[0] for s in sessions], ts_us) - 1
-    return sessions[idx] if idx >= 0 else None
+    rank = {"imsi_in_clear": 4, "imsi_requested": 3, "imeisv_requested": 2,
+            "imei_requested": 1, "tmsi_requested": 0}
+    signal_to_label = {
+        "identity_imsi_clear": "imsi_in_clear",
+        "identity_imsi":       "imsi_requested",
+        "identity_imei":       "imei_requested",
+        "identity_tmsi":       "tmsi_requested",
+    }
+    by_key = {}
+    files = sorted(glob.glob(os.path.join(run_dir, "security_events-*.csv")))
+    for path in files:
+        with open(path) as fh:
+            for row in csv.DictReader(fh):
+                label = signal_to_label.get(row.get("signal", ""))
+                if label is None:
+                    continue
+                try:
+                    key = (int(row["rnti"]), int(row["ct"]))
+                except (KeyError, ValueError, TypeError):
+                    continue
+                cur = by_key.get(key)
+                if cur is None or rank[label] > rank[cur]:
+                    by_key[key] = label
+    # The file list comes back too: no events and no file are different claims, and the
+    # summary has to be able to tell them apart.
+    return by_key, files
 
 
-def phase_for(rnti, ts_us, boundaries):
-    """(phase, session). 'pre' up to and including the boundary: the SecurityModeCommand is
-    itself the last unciphered downlink message, and security only activates once the UE
-    answers with SecurityModeComplete."""
+# The seven values a record can carry. `none` and `unknown` are different claims: `none`
+# means the UE was watched, with decoded traffic, and showed no security evidence -- the
+# signal an IMSI-catcher produces -- while `unknown` means it could not be watched.
+VERDICT_FROM_OUTCOME = {
+    "reused": "reused",
+    "refused": "noctx",
+    "released": "none",
+    "none": "none",
+    "in_progress": "unknown",
+    "no_traffic": "unknown",
+}
+
+
+def session_for(sessions, ct):
+    best = None
+    for s in sessions:
+        if ct is None or ct < s["rar_ct"]:
+            continue
+        if s["end_ct"] is not None and ct >= s["end_ct"]:
+            continue
+        best = s
+    return best
+
+
+def verdict_for(rnti, ct, sessions_by_rnti):
+    """(verdict, session). 'pre' up to and including the boundary: the SecurityModeCommand
+    is itself the last unciphered downlink message, and security only activates once the UE
+    answers with SecurityModeComplete, which is uplink and invisible here."""
     if not is_unicast(rnti):
         return "n/a", None
-    sessions = boundaries.get(rnti)
+    sessions = sessions_by_rnti.get(rnti)
     if not sessions:
         return "unknown", None
-    session = session_for(sessions, ts_us)
-    if session is None:
+    s = session_for(sessions, ct)
+    if s is None:
         return "unknown", None
-    return ("pre" if ts_us <= session[1] else "post"), session
+    if s["outcome"] == "established":
+        if s["outcome_ct"] is None or ct is None:
+            return "unknown", s
+        return ("pre" if ct <= s["outcome_ct"] else "post"), s
+    return VERDICT_FROM_OUTCOME.get(s["outcome"], "unknown"), s
 
 
-# pcapng block and option codes, PCAP Next Generation Dump File Format section 4.
-PCAPNG_SHB = 0x0A0D0D0A
-PCAPNG_EPB = 0x00000006
-PCAPNG_BYTE_ORDER_MAGIC = 0x1A2B3C4D
-OPT_ENDOFOPT = 0
-OPT_COMMENT = 1
-
-# "sec=" plus a field ngscope pads to exactly this width. That padding is what makes this an
-# in-place byte patch: the replacement is the same length as the original, so no option
-# length, no block length and no padding has to be recomputed, and a bug here cannot
-# corrupt the block structure.
-SEC_FIELD_WIDTH = 7
-
-_SEC_RE = re.compile(rb"sec=([a-z/ ]{%d})" % SEC_FIELD_WIDTH)
-_RNTI_RE = re.compile(rb"rnti=0x([0-9a-fA-F]{1,4})")
+# The pcapng sec= patch moved to tools/security_scan.py. It keys on frame number there --
+# an index into the very file it dissected -- which removes the ambiguity this module had
+# when two PDUs for one RNTI landed in the same subframe.
 
 
-def _patch_comment(comment, boundaries, ts_us, stats):
-    """Rewrite the sec= field of one packet comment. Returns the new bytes, same length.
+def _ms_since(rec, session, key):
+    """Milliseconds from a session instant to this record, in capture time.
 
-    The RNTI is read from the comment rather than by dissecting the MAC PDU, which keeps
-    this script free of any LTE knowledge -- it stays a join on (rnti, timestamp), exactly
-    as the .dciLog path is.
+    Both sides are collection_time now -- the radio clock -- so there is no wall-clock
+    fallback left to get wrong. Blank when the session has no such instant, which is the
+    honest answer for a UE that never reached a boundary.
     """
-    m_sec = _SEC_RE.search(comment)
-    if not m_sec:
-        stats["no_sec_field"] += 1
-        return comment
-    m_rnti = _RNTI_RE.search(comment)
-    if not m_rnti:
-        stats["no_rnti_field"] += 1
-        return comment
-
-    rnti = int(m_rnti.group(1), 16)
-    phase, _ = phase_for(rnti, ts_us, boundaries)
-    stats[phase] += 1
-    if b"src=blind" in comment:
-        stats["blind"] += 1
-
-    was = m_sec.group(1).strip().decode()
-    if was in ("pre", "post") and phase in ("pre", "post") and was != phase:
-        stats["disagree"] += 1
-
-    new = phase.encode().ljust(SEC_FIELD_WIDTH)
-    if len(new) != SEC_FIELD_WIDTH:
-        stats["too_long"] += 1
-        return comment
-    return comment[:m_sec.start(1)] + new + comment[m_sec.end(1):]
-
-
-def _patch_epb(body, endian, boundaries, stats):
-    """Patch the comment option of one Enhanced Packet Block body, in place.
-
-    body excludes the 8-byte block header but includes the trailing block-total-length.
-    Layout: interface id, timestamp high, timestamp low, captured length, original length,
-    packet data padded to 4, then options.
-    """
-    if len(body) < 24:
-        return body
-    _if_id, ts_hi, ts_lo, caplen, _origlen = struct.unpack(endian + "IIIII", body[:20])
-    ts_us = (ts_hi << 32) | ts_lo
-
-    off = 20 + ((caplen + 3) & ~3)
-    end = len(body) - 4          # trailing block total length
-    out = bytearray(body)
-    while off + 4 <= end:
-        code, length = struct.unpack(endian + "HH", body[off:off + 4])
-        if code == OPT_ENDOFOPT:
-            break
-        val_start = off + 4
-        val_end = val_start + length
-        if val_end > end:
-            break
-        if code == OPT_COMMENT:
-            patched = _patch_comment(bytes(body[val_start:val_end]), boundaries, ts_us, stats)
-            if len(patched) == length:
-                out[val_start:val_end] = patched
-        off = val_start + ((length + 3) & ~3)
-    return bytes(out)
-
-
-def rewrite_pcapng(src, dst, boundaries, stats):
-    """Copy src to dst, rewriting the sec= field of every packet comment.
-
-    Streamed a block at a time rather than loading the file, since a busy cell can produce
-    a capture far larger than memory. Endianness is taken from the section header's
-    byte-order magic and applied to every block after it, as the format requires.
-    """
-    with open(src, "rb") as fh, open(dst, "wb") as out:
-        head = fh.read(12)
-        if len(head) < 12 or struct.unpack("<I", head[:4])[0] != PCAPNG_SHB:
-            raise ValueError(f"{src}: not a pcapng file (no section header block)")
-        if struct.unpack("<I", head[8:12])[0] == PCAPNG_BYTE_ORDER_MAGIC:
-            endian = "<"
-        elif struct.unpack(">I", head[8:12])[0] == PCAPNG_BYTE_ORDER_MAGIC:
-            endian = ">"
-        else:
-            raise ValueError(f"{src}: bad byte-order magic in section header")
-
-        total = struct.unpack(endian + "I", head[4:8])[0]
-        if total < 12:
-            raise ValueError(f"{src}: implausible section header length {total}")
-        out.write(head)
-        out.write(fh.read(total - 12))
-
-        while True:
-            hdr = fh.read(8)
-            if len(hdr) < 8:
-                break            # clean end, or a truncated trailing block
-            btype, total = struct.unpack(endian + "II", hdr)
-            if total < 12:
-                raise ValueError(f"{src}: implausible block length {total} for type {btype:#x}")
-            body = fh.read(total - 8)
-            if len(body) < total - 8:
-                break            # truncated final block: stop rather than emit a bad one
-            if btype == PCAPNG_EPB:
-                body = _patch_epb(body, endian, boundaries, stats)
-                stats["packets"] += 1
-            out.write(hdr)
-            out.write(body)
-
-
-def _ms_since(rec, ts_us, session, ct_idx, us_idx):
-    """Milliseconds from a boundary to this record, in capture time when both ends have it.
-
-    Falls back to the wall clock only when the record or the boundary predates the
-    collection_time columns, so a mixed or older run still produces a number rather than a
-    blank -- but a run made with current ngscope is measured in the radio domain throughout.
-    """
-    if session is None:
+    if session is None or session.get(key) is None:
         return ""
     ct = rec.get("collection_time")
-    if ct not in (None, ""):
-        try:
-            return round((int(ct) - session[ct_idx]) / 1000.0, 3)
-        except (TypeError, ValueError):
-            pass
-    return round((ts_us - session[us_idx]) / 1000.0, 3)
+    if ct in (None, ""):
+        return ""
+    try:
+        return round((int(ct) - int(session[key])) / 1000.0, 3)
+    except (TypeError, ValueError):
+        return ""
 
 
 def write_dcilog(path, records):
@@ -385,17 +322,33 @@ def main():
     if not os.path.isdir(run_dir):
         sys.exit(f"error: {run_dir} is not a directory")
 
-    boundaries, sec_files = load_boundaries(run_dir)
+    boundaries, sec_files = load_sessions(run_dir)
+
+    if not sec_files:
+        # security_sessions is produced by the scan, and the scan needs Wireshark. Run it
+        # rather than refusing, so `security_phase_join.py . -f all` stays the one command
+        # anyone has to remember -- but keep this module usable on a box without tshark,
+        # which is its current de facto property.
+        scan = os.path.join(os.path.dirname(os.path.abspath(__file__)), "security_scan.py")
+        if os.path.isfile(scan) and shutil.which("tshark") and \
+                glob.glob(os.path.join(run_dir, "mac-*.pcapng")):
+            print("no security_sessions-*.csv yet; running security_scan.py first\n",
+                  flush=True)
+            rc = subprocess.run([sys.executable, scan, run_dir]).returncode
+            if rc == 0:
+                boundaries, sec_files = load_sessions(run_dir)
+            print()
+
     if not sec_files:
         # Easy to be one level up: an output directory holds timestamped run directories,
         # and a sweep nests them another level under earfcn-<n>/. Point at them rather than
         # just refusing.
         candidates = sorted(
             os.path.dirname(p) for p in
-            glob.glob(os.path.join(run_dir, "*", "security_log-*.csv")) +
-            glob.glob(os.path.join(run_dir, "*", "*", "security_log-*.csv"))
+            glob.glob(os.path.join(run_dir, "*", "security_sessions-*.csv")) +
+            glob.glob(os.path.join(run_dir, "*", "*", "security_sessions-*.csv"))
         )
-        msg = ["error: no security_log-*.csv in " + run_dir]
+        msg = ["error: no security_sessions-*.csv in " + run_dir]
         if candidates:
             msg.append("")
             one = len(candidates) == 1
@@ -405,22 +358,21 @@ def main():
             if len(candidates) > 10:
                 msg.append(f"    ... and {len(candidates) - 10} more")
         else:
-            # Deliberately not asserting the cause. Since ngscope creates this file up front
-            # when mark_security_phase is on, an absent one means the setting was off, the
-            # run predates that change, or this is not a run directory -- and guessing wrong
-            # sends the reader after the wrong thing. Note what it does NOT mean, because
-            # that is the reading that matters.
-            msg.append("The file is created at startup when mark_security_phase = true, so an")
-            msg.append("absent one means the run did not measure security -- it does not mean")
-            msg.append("no UE reached it. Either the setting was off, or the run predates that")
-            msg.append("behaviour, or this is not a run directory.")
+            # Deliberately not asserting the cause. An absent file means this run was never
+            # scanned -- it does NOT mean no UE reached security, which is what a
+            # header-only security_sessions-<rf>.csv would mean. That is the reading that
+            # matters, so state it rather than guessing at the configuration.
+            msg.append("tools/security_scan.py writes it, from mac-<rf>.pcapng. An absent file")
+            msg.append("means this run was never scanned -- it does not mean no UE reached")
+            msg.append("security; that would be a file with a header and no rows. Either the")
+            msg.append("run had pcap_mac off, or tshark is missing, or this is not a run dir.")
         sys.exit("\n".join(msg))
 
     dci_files = sorted(glob.glob(os.path.join(run_dir, "dci_output", "*.dciLog")))
     if not dci_files:
         sys.exit(f"error: no .dciLog files under {os.path.join(run_dir, 'dci_output')}")
 
-    rf_indices = {s[4] for sessions in boundaries.values() for s in sessions}
+    rf_indices = {s["rf_idx"] for sessions in boundaries.values() for s in sessions}
     if len(rf_indices) > 1:
         # .dciLog files are named by frequency, not rf_idx, so records cannot be attributed
         # to a cell from the filename alone. Say so rather than guess.
@@ -428,6 +380,8 @@ def main():
               "An RNTI reused by two cells in one run could be mis-joined.", file=sys.stderr)
 
     rows = []
+    identity_by_key, identity_files = load_identity_events(run_dir)
+    identity_counts = Counter()
     counts = Counter()
     disagree = 0
     per_rnti = defaultdict(Counter)
@@ -452,29 +406,46 @@ def main():
             except (KeyError, ValueError):
                 continue
 
-            phase, session = phase_for(rnti, ts, boundaries)
+            # collection_time is the radio clock and is on both sides; timestamp_us is the
+            # host wall clock, which in a replay advances at decode speed. Fall back only
+            # for runs that predate the ct columns.
+            try:
+                ct = int(rec.get("collection_time") or 0) or None
+            except ValueError:
+                ct = None
+            phase, session = verdict_for(rnti, ct if ct is not None else ts, boundaries)
             counts[phase] += 1
             if phase in ("pre", "post"):
                 per_rnti[rnti][phase] += 1
 
+            # Identity exposure is per-DCI, not per-UE: the value marks the grant that
+            # actually carried the message. `none` is watched-and-clean, matching the
+            # convention everywhere else here.
+            identity = identity_by_key.get((rnti, ct), "none") if ct is not None else "unknown"
+            if identity != "none":
+                identity_counts[identity] += 1
+
             streamed = rec.get("security_phase", "")
             if want_dcilog and direction in ("dl", "ul"):
-                # ngscope only ever writes pre|post|unknown, so collapse the CSV's richer
-                # "n/a" back to "unknown" here. A drop-in replacement must not introduce a
-                # fourth value that existing readers have never had to handle; the
-                # distinction stays available in the CSV output.
-                dcilog_phase = "unknown" if phase == "n/a" else phase
+                # The full seven-value domain goes in. ngscope now writes one constant
+                # ("unknown") into every record, so there is no in-stream vocabulary left to
+                # stay compatible with, and collapsing values here would discard exactly the
+                # distinctions the offline scan exists to make.
+                dcilog_phase = phase
                 # Mutating the parsed record preserves key order and the string values, so
                 # the field lands exactly where ngscope put it rather than appended.
                 if "security_phase" in rec:
                     rec["security_phase"] = dcilog_phase
+                    # A new key, appended rather than replacing anything: the joined
+                    # .dciLog is a derived artefact, and ngscope writes no such field.
+                    rec["identity_exposure"] = identity
                 else:
                     rec = {"tti": rec.get("tti"), "rnti": rec.get("rnti"),
                            "security_phase": dcilog_phase,
                            **{k: v for k, v in rec.items() if k not in ("tti", "rnti")}}
                 rewritten[path].append(rec)
-            # The live label may be unknown where this join is decisive, but it must never
-            # say the opposite. If it does, the two disagree about the same instant.
+            # No in-stream label survives to disagree with: ngscope writes "unknown" on
+            # every record now. Kept as a tripwire in case an old run is re-joined.
             if streamed in ("pre", "post") and phase in ("pre", "post") and streamed != phase:
                 disagree += 1
 
@@ -487,14 +458,16 @@ def main():
                     "collection_time": rec.get("collection_time", ""),
                     "security_phase": phase,
                     "security_phase_in_stream": streamed,
-                    "rar_tti": session[2] if session else "",
-                    "smc_tti": session[3] if session else "",
-                    "rar_collection_time": session[5] if session else "",
-                    "smc_collection_time": session[6] if session else "",
-                    # Capture time where the record carries it, so these are real elapsed
-                    # milliseconds over the air rather than decode-clock milliseconds.
-                    "ms_since_rar": _ms_since(rec, ts, session, 5, 0),
-                    "ms_to_boundary": _ms_since(rec, ts, session, 6, 1),
+                    "identity_exposure": identity,
+                    "rar_tti": session["rar_tti"] if session else "",
+                    "outcome": session["outcome"] if session else "",
+                    "rar_collection_time": session["rar_ct"] if session else "",
+                    "outcome_collection_time": (session["outcome_ct"] if session and
+                                                session["outcome_ct"] is not None else ""),
+                    # Radio-domain elapsed times: real milliseconds over the air, not
+                    # decode-clock milliseconds.
+                    "ms_since_rar": _ms_since(rec, session, "rar_ct"),
+                    "ms_to_outcome": _ms_since(rec, session, "outcome_ct"),
                     "prb": rec.get("prb", ""),
                     "harq": rec.get("harq", ""),
                     "tbs": rec.get("TB1_tbs", ""),
@@ -502,9 +475,11 @@ def main():
 
     total = sum(counts.values())
     print(f"run            : {run_dir}")
-    nof_boundaries = sum(len(v) for v in boundaries.values())
-    print(f"boundaries     : {nof_boundaries} "
-          f"over {len(boundaries)} RNTIs, from {len(sec_files)} security_log file(s)")
+    nof_boundaries = sum(1 for v in boundaries.values() for s in v
+                         if s["outcome"] == "established")
+    nof_sessions = sum(len(v) for v in boundaries.values())
+    print(f"sessions       : {nof_sessions} over {len(boundaries)} RNTIs, from "
+          f"{len(sec_files)} security_sessions file(s); {nof_boundaries} established")
     if nof_boundaries == 0:
         # An empty-but-present security_log is a measurement, not a failure: the run tracked
         # UEs and none of them reached security. For IMSI-catcher detection that is the
@@ -516,8 +491,29 @@ def main():
         print("                 check the RAR count and the teardown coverage lines before "
               "reading that as a cell with no security.")
     print(f"dci records    : {total:,} from {len(dci_files)} .dciLog file(s)")
+    # Always reported, including when clean. A silent line would make "checked, found no
+    # identity exposure" -- the good result -- indistinguishable from a join that does not
+    # look for it at all, which is the same mistake the zero-boundary rule exists to prevent.
+    if not identity_files:
+        print("identity       : NOT CHECKED -- no security_events-*.csv. Run "
+              "tools/security_scan.py.")
+    elif identity_by_key:
+        print(f"identity       : {sum(identity_counts.values()):,} DCI record(s) carried an "
+              f"identity-revealing message -- " +
+              ", ".join(f"{k}={v}" for k, v in sorted(identity_counts.items())))
+        print("                 marked per record as identity_exposure; the per-UE view is "
+              "the identity_exposure")
+        print("                 column of security_sessions.")
+    else:
+        print(f"identity       : none. Checked {len(identity_files)} security_events file(s); "
+              f"no UE was asked")
+        print("                 for a permanent identity and none appeared in clear. Paging "
+              "is not decoded,")
+        print("                 so paging by IMSI would not have been seen.")
     print()
-    for phase in ("pre", "post", "unknown", "n/a"):
+    # All seven, in the order they tell a story: placed relative to a boundary, then the
+    # outcomes that mean no boundary was ever going to exist, then the two absences.
+    for phase in ("pre", "post", "reused", "noctx", "none", "unknown", "n/a"):
         n = counts.get(phase, 0)
         print(f"  {phase:<8} {n:>10,}  {100 * n / total if total else 0:5.1f}%")
     both = sum(1 for c in per_rnti.values() if c["pre"] and c["post"])
@@ -560,41 +556,18 @@ def main():
             print(f"copied {os.path.basename(src)} unchanged (no security_phase field)")
 
     if args.format in ("pcapng", "all"):
-        caps = sorted(glob.glob(os.path.join(run_dir, "mac-*.pcapng")))
-        if not caps:
-            print("\nno mac-*.pcapng in this run (was it made with pcap_mac = true?)")
+        # The pcapng is written by tools/security_scan.py, which reorders it, dissects that
+        # same file and patches sec= by frame number. Doing it again here would be a second
+        # source of truth for the same field.
+        joined = sorted(glob.glob(os.path.join(run_dir, "pcap_joined", "mac-*.pcapng")))
+        print()
+        if joined:
+            print(f"pcapng         : {len(joined)} file(s) already written by "
+                  f"security_scan.py in pcap_joined/ -- reordered and sec=-patched there")
         else:
-            out_dir = (args.out if args.format == "pcapng" and args.out
-                       else os.path.join(run_dir, "pcap_joined"))
-            os.makedirs(out_dir, exist_ok=True)
-            pstats = Counter()
-            print()
-            for src in caps:
-                dst = os.path.join(out_dir, os.path.basename(src))
-                try:
-                    rewrite_pcapng(src, dst, boundaries, pstats)
-                except (ValueError, struct.error) as exc:
-                    print(f"error: {exc}", file=sys.stderr)
-                    continue
-                status = ("left in decode-completion order (--no-reorder)"
-                          if args.no_reorder else reorder_pcapng(dst))
-                print(f"wrote {os.path.basename(dst)} to {out_dir} -- {status}")
-
-            placed = pstats["pre"] + pstats["post"]
-            print(f"\npcapng packets : {pstats['packets']:,}")
-            for phase in ("pre", "post", "unknown", "n/a"):
-                n = pstats.get(phase, 0)
-                pct = 100 * n / pstats["packets"] if pstats["packets"] else 0
-                print(f"  {phase:<8} {n:>10,}  {pct:5.1f}%")
-            if pstats["blind"]:
-                # These carry an RNTI recovered from a descrambled PDCCH CRC rather than
-                # checked against a known one, so the identity may be fictional -- and any
-                # phase joined onto it inherits that. Counted separately so a reader does
-                # not treat them as equally attributed.
-                print(f"  {'blind':<8} {pstats['blind']:>10,}         "
-                      f"(rnti unverified; joined phase inherits that)")
-            if placed:
-                print(f"\n  {placed:,} packets placed by the join")
+            print("pcapng         : none in pcap_joined/. Run tools/security_scan.py over "
+                  "this run to produce it;")
+            print("                 this tool only labels the .dciLog files.")
             for key, note in (("no_sec_field", "no sec= field"),
                               ("no_rnti_field", "no rnti= field"),
                               ("too_long", "phase longer than the padded field")):

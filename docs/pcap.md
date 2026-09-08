@@ -14,38 +14,162 @@ cells' captures would silently misattribute them.
 
 ---
 
-## Wireshark setup — required
+## What tshark needs
+
+Two audiences, and they need different things. `tools/security_scan.py` is **self-contained**
+— it passes everything it depends on and reads no saved Wireshark configuration. Opening the
+same file in the Wireshark GUI is not, because there is no command line to put the mapping on.
+
+| | the automated scan | the GUI, by hand |
+|---|---|---|
+| `tshark` on `PATH` | required | — |
+| `reordercap` on `PATH` | **recommended** — absence degrades, see below | only if sorting manually |
+| DLT 147 → `mac-lte-framed` | passed with `-o`, nothing to configure | **must be set once**, below |
+| LTE dissector preferences | Wireshark defaults are correct | same |
+| AppArmor allowance for `$HOME` | **required on Ubuntu**, below | required |
+| Python | 3, standard library only | — |
+
+Verified against **tshark 4.6.4**. No minimum version has been established; every scan records
+the version it ran under in `security_summary.json` (`tshark_version`), so a result can be
+attributed after the fact.
+
+`reordercap` is recommended rather than required: without it `security_scan.py` copies the
+capture unsorted and says so in the `reorder` status, both on the console and in the summary
+JSON. That is a real cost, not a cosmetic one — the rlc-lte and pdcp-lte dissectors reassemble
+statefully and in order, so an unsorted file can lose RRC messages. It is reported rather than
+fatal because the loss is silent otherwise, and on the captures here it measured as zero
+(see [Reorder before analysing](#reorder-before-analysing)).
+
+**Check the whole chain in one command.** If the protocol chain ends in `mac-lte`, everything
+below is already in place:
+
+```bash
+tshark -r mac-0.pcapng -c 1 -T fields -e frame.protocols \
+  -o 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""'
+```
+
+| output | meaning |
+|---|---|
+| `user_dlt:mac-lte-framed:mac-lte` | correct — dissecting as LTE MAC |
+| `user_dlt:data` | the mapping did not take effect; frames read, nothing decoded |
+| `You don't have permission to read the file` | AppArmor, not the filesystem — see below |
+
+### DLT 147 — the one thing that is not a default
 
 DLT 147 is `DLT_USER0`. It has **no registered link type**, so a fresh Wireshark shows the
-packets as opaque data until told what they are. This is a one-time setting.
+packets as opaque data until told what they are.
 
-**GUI:** Edit → Preferences → Protocols → DLT_USER → Encapsulations Table → **Edit** → **+**
-
-| field | value |
-|---|---|
-| DLT | `User 0 (DLT=147)` |
-| Payload protocol | `mac-lte-framed` |
-
-**CLI**, no configuration needed:
+**CLI** — no configuration needed, and this is what `security_scan.py` does:
 
 ```bash
 tshark -r mac-0.pcapng \
   -o 'uat:user_dlts:"User 0 (DLT=147)","mac-lte-framed","0","","0",""'
 ```
 
-The same `-o` works with `wireshark`.
+**GUI** — a one-time setting, since there is no command line:
+Edit → Preferences → Protocols → DLT_USER → Encapsulations Table → **Edit** → **+**
+
+| field | value |
+|---|---|
+| DLT | `User 0 (DLT=147)` |
+| Payload protocol | `mac-lte-framed` |
+
+That writes `~/.config/wireshark/user_dlts`. The same `-o` works with `wireshark` too, if you
+would rather not persist it.
+
+### The LTE dissector preferences are already correct
+
+`tshark -G defaultprefs` on 4.6.4 shows the whole MAC → RLC → PDCP → RRC chain enabled out of
+the box, so **there is nothing to turn on**:
+
+| preference | default | what it gives you |
+|---|---|---|
+| `mac-lte.attempt_rrc_decode` | `TRUE` | SIBs, paging and Msg4 from BCCH/PCCH/CCCH |
+| `mac-lte.attempt_to_dissect_srb_sdus` | `TRUE` | LCID 1&2 handed to rlc-lte |
+| `rlc-lte.call_pdcp_for_srb` | `TRUE` | SRB traffic reaches pdcp-lte |
+| `rlc-lte.call_rrc_for_ccch` | `TRUE` | CCCH reaches the RRC dissector |
+| `pdcp-lte.show_signalling_plane_as_rrc` | `TRUE` | `SecurityModeCommand` by name |
+| `rlc-lte.do_sequence_analysis_am` | `Only-MAC-frames` | the reassembly and skipped-frame counts the scan reads back as a coverage check |
+
+Worth stating because it is easy to assume otherwise and then to "fix" a scan by changing
+preferences, which makes the result depend on one machine's saved config.
+
+Measured, not assumed: the same capture scanned under the normal `HOME` and under a pristine
+one with no Wireshark configuration at all gives **byte-identical** `security_events-0.csv`
+and `security_sessions-0.csv`, and a `security_summary.json` identical apart from `run_dir`.
+
+If a future Wireshark changes a default, `assert_dissected()` catches the MAC layer going away
+but not a quieter change further up the chain — `fields_queried` and `tshark_version` in the
+summary are what make that diagnosable after the fact.
+
+### AppArmor: tshark may be refused files under `$HOME`
+
+Ubuntu ships `/etc/apparmor.d/tshark`, a Canonical profile confining `/usr/bin/tshark`. It
+grants read access to `/tmp` (via `abstractions/user-tmp`) and `/usr/share/wireshark`, and
+nothing under `$HOME`. The profile does contain `file r /**.pcap{,ng}{,.gz}` — but inside the
+nested `dumpcap` subprofile, which covers live capture, not `tshark -r`.
+
+The symptom is misleading, because it is not a filesystem problem:
+
+```
+tshark: You don't have permission to read the file ".../pcap_joined/mac-0.pcapng"
+tshark: Error loading table 'User DLTs Table': Permission denied
+```
+
+while `ls -l` shows the file owned by you and mode `rw-rw-r--`, and `cat` reads it fine. The
+give-away is that the *same bytes* dissect when copied to `/tmp`.
+
+The profile ends with `include if exists <local/tshark>`, which is the supported place to
+widen it:
+
+```bash
+sudo tee /etc/apparmor.d/local/tshark >/dev/null <<'EOF'
+file r @{HOME}/**.pcap{,ng}{,.gz},
+file r @{HOME}/.config/wireshark/{,**},
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/tshark
+```
+
+The second rule fixes the `User DLTs Table` denial, which otherwise appears on *every* run.
+It is harmless only because `security_scan.py` passes the mapping with `-o` — but it means
+the GUI-configured mapping is unavailable, so anything relying on saved preferences silently
+gets no dissection.
+
+Note the first rule matches by **extension**: a capture named anything other than
+`.pcap`/`.pcapng`/`.gz` is still refused. `security_scan.py` detects a confinement denial,
+distinguishes it from an ordinary POSIX one, and prints the existing override's contents when
+there is one.
+
+**Only `tshark` is confined.** `reordercap`, `editcap`, `capinfos`, `mergecap`, `rawshark` and
+`sharkd` have no profile, which is why the reorder step succeeds and only the dissection
+fails.
+
+### Do not switch to `sharkd` to dodge this
+
+It is a tempting fix — `sharkd` is the same libwireshark and reads `$HOME` fine — but it
+trades a loud failure for a silent one. `sharkd` has **no `-o`**; its only preference control
+is `-C <config profile>`, so the DLT 147 mapping can only come from config on disk. Measured
+with a pristine `HOME`:
+
+| | result |
+|---|---|
+| `sharkd`, no `user_dlts` | `{"status":"OK"}`, all frames loaded, protocol `Packet`, **no dissection and no error** |
+| `tshark`, no `-o` | undissected too, but `-o` is passed on every invocation so it cannot happen |
+| `tshark`, with `-o` | MAC-LTE / RLC-LTE / RRC |
+
+A scan that dissects nothing finds no RRC events, and zero events across a populated capture
+is this project's *positive* result. `sharkd` would report "no UE reached AS security" with
+nothing distinguishing it from the real thing. `assert_dissected()` in `security_scan.py`
+exists to make that impossible whichever tool is used: frames present and none dissecting as
+`mac-lte` is a hard error.
 
 ### Getting RRC out of it
 
-MAC alone is rarely what you want. Two dissector preferences do most of the work:
-
-- **MAC-LTE** → *Attempt to decode BCCH, PCCH and CCCH data using LTE RRC dissector* — gives
-  you SIBs, paging and Msg4.
-- **MAC-LTE** → *Attempt to dissect LCID 1&2 as srb1&2* — hands SRB traffic to rlc-lte, which
-  passes it to pdcp-lte and then the RRC dissector.
-
-With both on, a readable `RRCConnectionSetup` or `SecurityModeCommand` shows up by name in the
-packet list.
+MAC alone is rarely what you want, but the two preferences that do the work —
+*Attempt to decode BCCH, PCCH and CCCH data using LTE RRC dissector* and *Attempt to dissect
+LCID 1&2 as srb1&2* — are both on by default (see the table above). A readable
+`RRCConnectionSetup` or `SecurityModeCommand` shows up by name in the packet list as soon as
+the DLT mapping is set. If it does not, check the mapping before touching anything else.
 
 ---
 
@@ -141,9 +265,9 @@ lte_rrc.securityModeCommand_element
 
 ## Known limitations
 
-- **`sec` is almost always `unknown` in the raw file.** The boundary is the
+- **`sec` is always `unknown` in the raw file, by construction.** The boundary is the
   SecurityModeCommand, which arrives *after* the packets it bounds, so most records cannot be
-  placed at the time they are written. Join against `security_log-<rf_idx>.csv` afterwards for
+  placed at the time they are written. Run `tools/security_scan.py` afterwards for
   the authoritative labelling.
 - **A gap in the capture and a UE that never received a message look identical.** Under live
   capture the scheduler discards subframes when every decoder is busy, leaving holes with no

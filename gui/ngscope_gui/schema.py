@@ -15,10 +15,23 @@ load_config.h -- no widget code to touch.
 [[rf_config]] array (load_config_toml.c:174-183), and emitting the key would be ignored at
 best and misleading at worst.
 
-A field may carry `replay_only`: the C side ANDs that setting with `mode == REPLAY`
-(task_scheduler.c), so it does nothing for a live run. The frontend disables such fields
-unless some cell is replaying, which makes the constraint visible instead of leaving the
-user to wonder why the setting had no effect.
+Three markers express settings that are not the user's to make. All of them hide the control
+and emit a fixed value, so nobody has to set something back after switching modes:
+
+* `replay_only` -- the C side refuses or ignores it outside `mode == REPLAY`. Hidden while no
+  cell is replaying, and `config_io` emits the schema default instead of whatever the user
+  last chose, which stays in GUI state and returns when they switch back.
+* `mode_locked` -- `{mode: value}`. In that mode the setting has exactly one valid value, so
+  the form should not offer a choice. `nof_rx_ant` in Record is the case: the IQ recorder
+  writes channel 0 only, and ngscope refuses anything else outright (load_config.c).
+
+* `unsupported` -- the key is still accepted by the C schema but can no longer do anything,
+  and `ngscope_config_finalize()` forces it to its default. `log_phich` is the case: PHICH
+  decoding followed a single configured target RNTI, which no longer exists. Kept in this
+  table rather than deleted so it still mirrors `load_config.h` key for key.
+
+They exist because a rejected config -- or a log file full of empty records -- is a bad way
+to learn about a constraint, especially for a control the form did not show.
 """
 
 # Compile-time limits from ngscope/hdr/dciLib/ngscope_def.h
@@ -50,19 +63,8 @@ def _f(key, type_, default, label, help_, required=False, **extra):
 
 TOP_LEVEL = [
     _f(
-        "rnti", "int", 0, "Target RNTI",
-        "Required: there is no safe default. 0 is not inert -- it matches empty "
-        "decoder-tree slots and floods the output.",
-        required=True, min=0, max=65535,
-    ),
-    _f(
         "remote_enable", "bool", False, "Remote sink",
         "Stream decoded DCIs to remote subscribers over the network (the DCI sink server).",
-    ),
-    _f(
-        "decode_single_ue", "bool", False, "Single-UE decode",
-        "Decode only the target RNTI instead of running the multi-UE blind search. "
-        "Much cheaper.",
     ),
     _f(
         "decode_SIB", "bool", False, "Decode SIB",
@@ -91,8 +93,12 @@ TOP_LEVEL = [
         "place stays unknown. Also turns on the coverage reporting at teardown -- how many "
         "UEs were tracked, why each left the tracked set, and what became of every DL-DCCH "
         "SDU -- which is what makes the detection rate readable as a property of the cell "
-        "rather than of the receiver. In Replay mode it also unlocks the two decode aids below; "
-        "neither is safe live, where the scheduler discards subframes.",
+        "rather than of the receiver. Implies MAC pcap: ngscope writes each tracked UE's "
+        "transport blocks to mac-<rf>.pcapng and makes no claim about their contents. "
+        "tools/security_scan.py dissects that capture with Wireshark -- which reassembles "
+        "RLC and reads NAS, neither of which ngscope ever did -- and writes security_events "
+        "/ security_sessions / security_summary beside the run.",
+        replay_only=True,
     ),
     _f(
         "rach_filter_only", "bool", False, "RACH filter only",
@@ -112,17 +118,6 @@ TOP_LEVEL = [
         min=0,
     ),
     _f(
-        "rlc_reassembly", "bool", True, "Rejoin split RRC",
-        "Rejoin an RRC message the eNB split across several grants, so a SecurityModeCommand "
-        "that did not fit one transport block is still read. Replay only: it holds a partial "
-        "SDU until the rest arrives, which is sound only where no subframe goes missing. Live "
-        "capture discards subframes when every decoder is busy, and a discarded middle segment "
-        "would leave a partial that never completes -- indistinguishable from a UE that never "
-        "reached security. How much it matters is very cell-dependent: 8 of 41 DL-DCCH SDUs "
-        "needed rejoining on one AT&T capture, 2 of 325 on another.",
-        replay_only=True,
-    ),
-    _f(
         "qam_retry", "bool", True, "Test the MCS→TBS table",
         "When a transport block fails its CRC, rebuild the grant on the other MCS->TBS table "
         "and decode again, keeping whichever passes. The CRC is ground truth, so this measures "
@@ -131,6 +126,15 @@ TOP_LEVEL = [
         "costs a second PDSCH decode per failure, affordable exactly where the scheduler blocks "
         "instead of dropping subframes. On one capture it recovered 37 SecurityModeCommands "
         "(33.8% to 39.2%) for 1 second in 65.",
+        replay_only=True,
+    ),
+    _f(
+        "probe_blind_dci", "bool", False, "Probe blind DCIs",
+        "Measurement instrument, not part of a capture. Decodes a transport block for every "
+        "DCI the blind search reports and records whether the DL-SCH CRC passes, split by "
+        "whether the RNTI was RACH-confirmed -- a pass proves the DCI real. Pair it with "
+        "Single-UE/RACH filtering OFF, or the unconfirmed column is empty. Writes "
+        "blind_probe-<rf>.csv. Costs a PDSCH decode per RNTI per subframe.",
         replay_only=True,
     ),
     _f(
@@ -179,6 +183,9 @@ RF_DEV = [
         "two daughterboards). No help on a 4-port cell, where srsRAN cannot predecode spatial "
         "multiplexing at all.",
         min=1, max=4,
+        # The recorder writes channel 0 only and rx_frame_header_t has no channel count, so
+        # ngscope refuses nof_rx_ant > 1 with mode=1 rather than silently losing a channel.
+        mode_locked={MODE_RECORD: 1},
     ),
     _f(
         "mode", "mode", MODE_NORMAL, "Mode",
@@ -197,7 +204,12 @@ RF_DEV = [
     ),
     _f("log_dl", "bool", True, "Log downlink", "Write the downlink .dciLog file."),
     _f("log_ul", "bool", True, "Log uplink", "Write the uplink .dciLog file."),
-    _f("log_phich", "bool", False, "Log PHICH", "Write the PHICH .dciLog file."),
+    _f(
+        "log_phich", "bool", False, "Log PHICH",
+        "No longer supported: ngscope forces it off. PHICH decoding followed the one "
+        "configured target RNTI, and that setting is gone.",
+        unsupported=True,
+    ),
     _f(
         "disable_plot", "bool", True, "Disable plot",
         "Disable the GUI plot for this cell. Only meaningful in builds with ENABLE_GUI.",

@@ -27,7 +27,7 @@ def _scalar(value, type_):
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _emit_fields(lines, fields, values):
+def _emit_fields(lines, fields, values, replaying=True):
     for field in fields:
         key = field["key"]
         value = values.get(key, field["default"])
@@ -35,6 +35,22 @@ def _emit_fields(lines, fields, values):
         # empty string is not the same thing, so omit the key entirely when unset.
         if field["type"] == "path" and not value:
             continue
+        # A replay-only setting is emitted at its schema default when nothing is replaying.
+        # The user's replay-time choice stays in GUI state, but it must not reach a live
+        # config: ngscope refuses mark_security_phase outside mode 2, so a value left over
+        # from an earlier replay session would abort the run over a setting the form does
+        # not even show in that mode.
+        if field.get("replay_only") and not replaying:
+            value = field["default"]
+        # An unsupported setting can no longer do anything; ngscope_config_finalize() forces
+        # it back to its default anyway, so emit that rather than a value the startup echo
+        # would then contradict.
+        if field.get("unsupported"):
+            value = field["default"]
+        # mode_locked is per cell, so it is applied against this table's own mode value.
+        locked = field.get("mode_locked")
+        if locked and values.get("mode") in locked:
+            value = locked[values["mode"]]
         lines.append(f"{key} = {_scalar(value, field['type'])}")
 
 
@@ -47,16 +63,17 @@ def dumps(model):
         "",
     ]
 
-    _emit_fields(lines, schema.TOP_LEVEL, model.get("top", {}))
+    replaying = any(c.get("mode") == schema.MODE_REPLAY for c in model.get("cells", []))
+    _emit_fields(lines, schema.TOP_LEVEL, model.get("top", {}), replaying)
 
     # nof_rf_dev is intentionally not emitted: the TOML backend derives it from the
     # number of [[rf_config]] tables (load_config_toml.c:174-183).
     for cell in model.get("cells", []):
         lines += ["", "[[rf_config]]"]
-        _emit_fields(lines, schema.RF_DEV, cell)
+        _emit_fields(lines, schema.RF_DEV, cell, replaying)
 
     lines += ["", "[dci_log_config]"]
-    _emit_fields(lines, schema.LOG, model.get("log", {}))
+    _emit_fields(lines, schema.LOG, model.get("log", {}), replaying)
 
     lines.append("")
     return "\n".join(lines)
@@ -143,16 +160,6 @@ def validate(model, out_dir):
     cells = model.get("cells", [])
 
     # -- top level
-    rnti = top.get("rnti", 0)
-    if not isinstance(rnti, int) or not 0 <= rnti <= 65535:
-        err("top.rnti", "RNTI must be between 0 and 65535.")
-    elif rnti == 0:
-        warn(
-            "top.rnti",
-            "RNTI 0 is not inert: it matches empty decoder-tree slots and floods the "
-            "output.",
-        )
-
     if top.get("rach_filter_only") and not top.get("decode_RAR"):
         warn(
             "top.decode_RAR",
