@@ -167,7 +167,7 @@ static bool replay_ends_with(const char* s, const char* suffix)
     return ls >= lx && strcasecmp(s + ls - lx, suffix) == 0;
 }
 
-bool init_replay(const char* path, int nof_ports)
+bool init_replay(const char* path)
 {
     replay_path     = path;
     mode            = REPLAY;
@@ -176,7 +176,6 @@ bool init_replay(const char* path, int nof_ports)
     replay_read_ns  = 0;
     replay_bytes    = 0;
     replay_start_ns = replay_now_ns();
-    sdr_nof_ports = nof_ports;
 
     const char* cmd = NULL;
     for (size_t i = 0; i < sizeof(REPLAY_CODECS) / sizeof(REPLAY_CODECS[0]); i++) {
@@ -313,6 +312,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             hdr.nof_samples         = nsamples;
             hdr.timestamp_full_secs = (uint64_t) t->full_secs;
             hdr.timestamp_frac_secs = t->frac_secs;
+            hdr.nof_ports           = sdr_nof_ports;
             if (debug)
                 printf("DEBUG: size of hdr: %ld, size of uint32_t: %ld, size of uint64_t: %ld, size of double: %ld\n", sizeof(rx_frame_header_t), sizeof(uint32_t), sizeof(uint64_t), sizeof(double));
             // uint64_t frame_size = sizeof(hdr) + hdr.nof_samples * sizeof(cf_t);
@@ -364,6 +364,11 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
                 raise(SIGINT);
                 return 0;
             }
+        }
+        if (hdr.nof_ports < 1 || hdr.nof_ports > SRSRAN_MAX_PORTS){
+            if (debug)
+                printf("REPLAY: invalid number of ports: %d\n", hdr.nof_ports);
+            return 0;
         }
         nreplayed += (n*sizeof(rx_frame_header_t));
 
@@ -423,7 +428,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         t->full_secs = hdr.timestamp_full_secs;
         t->frac_secs = hdr.timestamp_frac_secs;
 
-        for (int i = 0; i < sdr_nof_ports; i++){
+        for (int i = 0; i < hdr.nof_ports; i++){
 
             if (debug)
                 printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);

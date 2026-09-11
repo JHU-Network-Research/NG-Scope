@@ -272,7 +272,7 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
             /* Return value checked: init_replay() leaves replay_fh NULL on failure, and the
              * read loop would then fread() from it. A missing decompressor or an unreadable
              * recording has to stop the run, not corrupt it. */
-            if (!init_replay(prog_args.input_file_name, prog_args.rf_nof_rx_ant)) {
+            if (!init_replay(prog_args.input_file_name)) {
                 fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
                         prog_args.input_file_name);
                 exit(EXIT_FAILURE);
