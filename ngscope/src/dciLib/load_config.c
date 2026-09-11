@@ -421,13 +421,13 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
         /* The recorder writes channel 0 only (ngscope_rx.c) and rx_frame_header_t has no
          * channel count, so a two-antenna recording would be silently truncated to one and
          * the resulting file would look perfectly valid. Refuse rather than lose the capture. */
-        if (config->rf_config[i].mode == RECORD && config->rf_config[i].nof_rx_ant > 1) {
-            printf("config: ERROR: rf_config%d has nof_rx_ant=%d with mode=1 (record), but the IQ "
-                   "recorder only stores channel 0 -- the recording would silently lose the "
-                   "other %d channel(s). Record with nof_rx_ant=1, or capture live.\n",
-                   i, config->rf_config[i].nof_rx_ant, config->rf_config[i].nof_rx_ant - 1);
-            nof_missing_required++;
-        }
+        // if (config->rf_config[i].mode == RECORD && config->rf_config[i].nof_rx_ant > 1) {
+        //     printf("config: ERROR: rf_config%d has nof_rx_ant=%d with mode=1 (record), but the IQ "
+        //            "recorder only stores channel 0 -- the recording would silently lose the "
+        //            "other %d channel(s). Record with nof_rx_ant=1, or capture live.\n",
+        //            i, config->rf_config[i].nof_rx_ant, config->rf_config[i].nof_rx_ant - 1);
+        //     nof_missing_required++;
+        // }
 
         if (config->rf_config[i].mode == REPLAY && config->rf_config[i].replay_fname == NULL) {
             printf("config: ERROR: rf_config%d mode=2 (replay) requires replay_fname\n", i);

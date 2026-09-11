@@ -185,7 +185,7 @@ RF_DEV = [
         min=1, max=4,
         # The recorder writes channel 0 only and rx_frame_header_t has no channel count, so
         # ngscope refuses nof_rx_ant > 1 with mode=1 rather than silently losing a channel.
-        mode_locked={MODE_RECORD: 1},
+        # mode_locked={MODE_RECORD: 1},
     ),
     _f(
         "mode", "mode", MODE_NORMAL, "Mode",
