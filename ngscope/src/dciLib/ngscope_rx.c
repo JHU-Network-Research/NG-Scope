@@ -242,6 +242,42 @@ bool init_replay(const char* path)
     return true;
 }
 
+
+int replay_get_nof_antenna(){
+    if (mode != REPLAY){
+        fprintf(stderr, "ERROR: Invalid call to replay_get_nof_antenna: must be in replay mode\n");
+        return -1;
+    }
+
+    if (feof(replay_fh)){
+        fprintf(stderr, "ERROR: At end of replay file\n");
+        return -1;
+    }
+
+    long pos = ftell(replay_fh);
+    if (pos > 0){
+        fprintf(stderr, "ERROR: Replay file not at start, replay_get_nof_antenna must be called before any reads\n");
+        return -1;
+    }else if (pos < 0) {
+        fprintf(stderr, "ERROR: Cannot find current position of replay file\n");
+        return -1;
+    }
+
+    rx_frame_header_t hdr;
+    int n = fread(&hdr, sizeof(rx_frame_header_t), 1, replay_fh);
+    if (n != 1){
+        fprintf(stderr, "ERROR: error: short read loading header, read %d items instead of 1\n", n);
+        return -1;
+    }
+    if (hdr.nof_ports < 1 || hdr.nof_ports > SRSRAN_MAX_PORTS){
+
+        fprintf(stderr, "REPLAY: invalid number of ports: %d\n", hdr.nof_ports);
+        return -1;
+    }
+    rewind(replay_fh);
+    return hdr.nof_ports;
+}
+
 /* Forward skip over a payload the caller has decided not to use. fseek() cannot do this on
  * a pipe, and silently doing nothing there would leave the next header read landing inside
  * the IQ samples, from which the stream never recovers. */
@@ -453,6 +489,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             else
                 if (debug)
                     printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
+            // if (i == 0) // JH TODO: This is for testing the difference between 1 and 2 channels on the same recording. We skip channels >=1 to simulate only having data from channel 0.
             memcpy(ptr[i], replay_buf, n*sizeof(cf_t));
             if (debug)
                 printf("REPLAY: Copied %d samples to ptr channel %d\n", n, i);

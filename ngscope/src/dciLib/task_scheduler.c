@@ -263,41 +263,49 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
                                         .init_agc             = 0,
                                         .force_tdd            = false};
 
+    if (prog_args.mode == 1)
+        init_record(prog_args.output_file_name, 8, prog_args.rf_nof_rx_ant);
+    else if (prog_args.mode == 2) {
+        /* Return value checked: init_replay() leaves replay_fh NULL on failure, and the
+            * read loop would then fread() from it. A missing decompressor or an unreadable
+            * recording has to stop the run, not corrupt it. */
+        if (!init_replay(prog_args.input_file_name)) {
+            fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
+                    prog_args.input_file_name);
+            exit(EXIT_FAILURE);
+        }
+        int nof_ports = replay_get_nof_antenna();
+        if (nof_ports == -1){
+            fprintf(stderr, "REPLAY: Cannot find # antennas, exiting\n");
+            exit(EXIT_FAILURE);
+        }
+        prog_args.rf_nof_rx_ant = nof_ports;
+
+    }
+
     // Copy the prameters
     task_scheduler->prog_args = prog_args;
 
-        if (prog_args.mode == 1)
-            init_record(prog_args.output_file_name, 8, prog_args.rf_nof_rx_ant);
-        else if (prog_args.mode == 2) {
-            /* Return value checked: init_replay() leaves replay_fh NULL on failure, and the
-             * read loop would then fread() from it. A missing decompressor or an unreadable
-             * recording has to stop the run, not corrupt it. */
-            if (!init_replay(prog_args.input_file_name)) {
-                fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
-                        prog_args.input_file_name);
-                exit(EXIT_FAILURE);
-            }
-        }
-        // First of all, start the radio and get the cell information
-        radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args,
-                                                    &cell_detect_config, &search_cell_cfo);
+    // First of all, start the radio and get the cell information
+    radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args,
+                                                &cell_detect_config, &search_cell_cfo);
 
-        // Copy the cell info to the
-        pthread_mutex_lock(&cell_mutex);
-        memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
-        printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
-        pthread_mutex_unlock(&cell_mutex);
+    // Copy the cell info to the
+    pthread_mutex_lock(&cell_mutex);
+    memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
+    printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
+    pthread_mutex_unlock(&cell_mutex);
 
-        if (debug)
-            printf("DEBUG: SETTING UP UE SYNC\n");
-        // Next, let's get the ue_sync ready
-        ue_sync_init_imp(&task_scheduler->ue_sync, &task_scheduler->rf, &task_scheduler->cell,
-                                            &cell_detect_config, prog_args, search_cell_cfo);
+    if (debug)
+        printf("DEBUG: SETTING UP UE SYNC\n");
+    // Next, let's get the ue_sync ready
+    ue_sync_init_imp(&task_scheduler->ue_sync, &task_scheduler->rf, &task_scheduler->cell,
+                                        &cell_detect_config, prog_args, search_cell_cfo);
 
 
-        pthread_mutex_lock(&ack_mutex);
-        init_pending_ack(&ack_list);
-        pthread_mutex_unlock(&ack_mutex);
+    pthread_mutex_lock(&ack_mutex);
+    init_pending_ack(&ack_list);
+    pthread_mutex_unlock(&ack_mutex);
 
     return SRSRAN_SUCCESS;
 }
@@ -509,7 +517,7 @@ void* task_scheduler_thread(void* p){
     int nof_decoder = task_scheduler->prog_args.nof_decoder;
     int rf_idx      = task_scheduler->prog_args.rf_index;
     uint32_t rf_nof_rx_ant = task_scheduler->prog_args.rf_nof_rx_ant;
-
+    printf("TASK SCHEDULER USING %d ANTENNAS\n", rf_nof_rx_ant);
     ngscope_dci_per_sub_t       dci_per_sub; // empty place hoder for skipped frames
     ngscope_status_buffer_t     dci_ret;
 
