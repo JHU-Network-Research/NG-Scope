@@ -53,6 +53,8 @@ typedef struct{
     const char *        sib_logs_path;
     const char *        out_path;
 
+    int                 exit_on_desync;
+
     dci_log_config_t    dci_log_config;
     rf_dev_config_t     rf_config[MAX_NOF_RF_DEV];
 }ngscope_config_t;
@@ -93,6 +95,7 @@ typedef struct{
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
     X(BOOL,   "qam_retry",         qam_retry,          true,   false)                      \
     X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)                      \
+    X(BOOL,   "exit_on_desync",    exit_on_desync,     false,  false)                      \
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \

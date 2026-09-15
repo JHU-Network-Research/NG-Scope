@@ -79,6 +79,8 @@ typedef struct {
   bool     use_standard_lte_rate;
   char sib_logs[SIB_LOGS_PATH_MAX_LEN];
   char out_path[OUT_PATH_MAX_LEN];
+
+  int      exit_on_desync;
 } prog_args_t;
 
 void args_default(prog_args_t* args);

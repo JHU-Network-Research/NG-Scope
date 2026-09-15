@@ -725,6 +725,7 @@ void* task_scheduler_thread(void* p){
     FILE*       nreadslog = fopen(readspath,"w+");
     int readctr = 0;
 
+    bool found_sync = false;
 	//uint64_t t1=0, t2=0, t3=0;
 	//uint64_t t1_sf_idx =0, t2_sf_idx=0;
     while(!go_exit && (sf_cnt < task_scheduler->prog_args.nof_subframes || task_scheduler->prog_args.nof_subframes == -1)) {
@@ -744,6 +745,7 @@ void* task_scheduler_thread(void* p){
         if (ret < 0) {
             ERROR("Error calling srsran_ue_sync_work()");
         }else if(ret == 1){
+            found_sync = true;
         	//t1_sf_idx = timestamp_us();
             sf_idx = srsran_ue_sync_get_sfidx(&task_scheduler->ue_sync);
             // get actual collection time
@@ -855,6 +857,11 @@ void* task_scheduler_thread(void* p){
                 sfn++;  // we increase the sfn incase MIB decoding failed
                 if(sfn == 1024){ sfn = 0; }
             }// endof if(decode_pdcch)
+        }else if (ret == 0){
+            if (found_sync && task_scheduler->prog_args.exit_on_desync) {
+                fprintf(stderr, "Lost sync with cell, exiting...\n");
+                go_exit = 1;
+            }
         }// end of i(ret)
   		//t3 = timestamp_us();
         //printf("time_spend:%ld (us)\n", t2-t1);

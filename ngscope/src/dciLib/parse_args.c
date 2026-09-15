@@ -41,7 +41,7 @@ void args_default(prog_args_t* args)
   args->decode_RAR                   	   = false;
   args->rar_seed_tracker             	   = false;
   args->rach_filter_only             	   = false;
-
+  args->exit_on_desync                     = false;
   args->enable_cfo_ref                     = false;
   args->estimator_alg                      = (char*)"interpolate";
   args->enable_256qam                      = true;

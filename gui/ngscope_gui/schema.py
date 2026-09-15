@@ -182,6 +182,13 @@ TOP_LEVEL = [
         "test, and with Test the MCS→TBS table on, a replay retries a failed transport block on "
         "the other table -- which makes this setting matter much less there.",
     ),
+    _f(
+        "exit_on_desync",
+        "bool",
+        False,
+        "Exit on desync",
+        "Stop NG-Scope when it loses synchronization with the cell.",
+    ),
 ]
 
 # --------------------------------------------------------------------------- per RF device
