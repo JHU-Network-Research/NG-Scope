@@ -62,7 +62,7 @@
 #define SRSRAN_MAX_CANDIDATES_COM 6 // From 36.213 Table 9.1.1-1
 #define SRSRAN_MAX_CANDIDATES (SRSRAN_MAX_CANDIDATES_UE + SRSRAN_MAX_CANDIDATES_COM)
 
-#define SRSRAN_MAX_FORMATS 4
+#define SRSRAN_MAX_FORMATS 8
 
 #define SRSRAN_MI_NOF_REGS ((q->cell.frame_type == SRSRAN_FDD) ? 1 : 6)
 #define SRSRAN_MI_MAX_REGS 6
@@ -275,7 +275,7 @@ SRSRAN_API int srsran_ue_decode_dci_yx(srsran_ue_dl_t*     q,
                                  srsran_dl_sf_cfg_t* sf,
                                  srsran_ue_dl_cfg_t* cfg,
                                  srsran_pdsch_cfg_t* pdsch_cfg,
-                                 ngscope_dci_per_sub_t* dci_res, 
+                                 ngscope_dci_per_sub_t* dci_res,
 								 uint16_t 				targetRNTI);
 
 SRSRAN_API void srsran_ue_dl_save_signal(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_pdsch_cfg_t* pdsch_cfg);

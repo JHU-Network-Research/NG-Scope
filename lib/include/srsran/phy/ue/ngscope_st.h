@@ -2,7 +2,7 @@
 #define SRSRAN_NGSCOPE_ST_H
 
 #define MAX_CANDIDATES_ALL 180
-#define MAX_NOF_FORMAT 4
+#define MAX_NOF_FORMAT 8
 #define MAX_DCI_PER_SUB 10
 #define LLR_RATIO 0.3f
 
@@ -32,7 +32,7 @@ typedef struct{
     int      nof_tb;
     bool     dl;
     float    decode_prob;
-    float    corr; 
+    float    corr;
 
     srsran_dci_format_t format;
 
