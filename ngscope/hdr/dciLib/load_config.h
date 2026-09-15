@@ -17,6 +17,7 @@ typedef struct{
     int         log_phich;
 
     ngscope_mode_t      mode; // operating mode (0=NORMAL, 1=RECORD, 2=REPLAY)
+    int         use_replay_hdr; // whether the record file has a header (built for backwards compatibility)
     const char *        replay_fname; // record/replay filename
     int         debug;
     int         silent;
@@ -91,7 +92,7 @@ typedef struct{
     X(BOOL,   "pcap_mac",          pcap_mac,           false,  false)                      \
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
     X(BOOL,   "qam_retry",         qam_retry,          true,   false)                      \
-    X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)
+    X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)                      \
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \
@@ -110,7 +111,9 @@ typedef struct{
     X(STRPTR, "replay_fname",      replay_fname,       NULL,   false)                      \
     X(BOOL,   "debug",             debug,              false,  false)                      \
     X(BOOL,   "silent",            silent,             false,  false)                      \
-    X(BOOL,   "decode_pdcch",      decode_pdcch,       true,   false)
+    X(BOOL,   "decode_pdcch",      decode_pdcch,       true,   false)                      \
+    X(BOOL,   "use_replay_hdr",    use_replay_hdr,     true,   false)
+
 
 /* Logging keys, written to ngscope_config_t.dci_log_config, read from "dci_log_config.<key>" */
 #define NGSCOPE_LOG_KEYS(X)                                                                \

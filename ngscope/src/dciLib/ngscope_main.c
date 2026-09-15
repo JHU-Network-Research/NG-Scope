@@ -113,6 +113,7 @@ int ngscope_main(ngscope_config_t* config)
         prog_args[i].disable_plots = config->rf_config[i].disable_plot;
 
         prog_args[i].mode          = config->rf_config[i].mode;
+        prog_args[i].use_replay_hdr= config->rf_config[i].use_replay_hdr;
         if (config->rf_config[i].mode == 1){
             prog_args[i].output_file_name      = (char*) malloc(1024);
             sprintf(prog_args[i].output_file_name,"%s/recorded-samples.bin",config->out_path);

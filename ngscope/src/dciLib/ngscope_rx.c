@@ -48,7 +48,7 @@ ngscope_mode_t  mode       = NORMAL;
 // static struct timespec last_rx_time  = {0, 0};
 static FILE*    replay_fh  = NULL;  // used only for REPLAY
 // static FILE*    outfp = NULL;
-static int sdr_nof_ports = SRSRAN_MAX_PORTS;
+static uint32_t sdr_nof_ports = SRSRAN_MAX_PORTS;
 
 static uint64_t         last_replay_ts_full = 0;
 static double           last_replay_ts_frac = 0.0;
@@ -61,7 +61,7 @@ bool __attribute__((weak)) go_exit = false;
 bool __attribute__((weak)) debug = false;
 
 
-bool init_record(const char* path, uint32_t buf_size_gb, int nof_ports)
+bool init_record(const char* path, uint32_t buf_size_gb, uint32_t nof_ports, double rf_freq)
 {
   record_path = path;
   mode = RECORD;
@@ -71,6 +71,12 @@ bool init_record(const char* path, uint32_t buf_size_gb, int nof_ports)
     printf("FLUSH: ONE_GB: %d, requested capacity GB: %d, TOTAL SIZE: %ld\n", ONE_GB, buf_size_gb, buf_size);
 
   record_ring_buffer_init(&record_buf, buf_size, path);
+
+  rx_record_header_t hdr;
+  hdr.nof_rx_antenna = nof_ports;
+  hdr.rf_freq = rf_freq;
+
+  record_ring_buffer_insert(&record_buf, &hdr, sizeof(hdr));
 
 //   outfp = fopen(path, "wb");
 
@@ -167,7 +173,7 @@ static bool replay_ends_with(const char* s, const char* suffix)
     return ls >= lx && strcasecmp(s + ls - lx, suffix) == 0;
 }
 
-bool init_replay(const char* path)
+bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
 {
     replay_path     = path;
     mode            = REPLAY;
@@ -212,70 +218,62 @@ bool init_replay(const char* path)
             fprintf(stderr, "REPLAY: ERROR: cannot open %s: %s\n", path, strerror(errno));
             return false;
         }
-        return true;
-    }
 
-    /* Single-quote the path and escape any embedded quote, so a filename with a space or a
-     * shell metacharacter cannot turn into a command. */
-    char quoted[2048];
-    size_t q = 0;
-    quoted[q++] = '\'';
-    for (const char* c = path; *c != '\0' && q + 4 < sizeof(quoted); c++) {
-        if (*c == '\'') {
-            q += (size_t)snprintf(quoted + q, sizeof(quoted) - q, "'\\''");
-        } else {
-            quoted[q++] = *c;
+    }else {
+        /* Single-quote the path and escape any embedded quote, so a filename with a space or a
+         * shell metacharacter cannot turn into a command. */
+        char quoted[2048];
+        size_t q = 0;
+        quoted[q++] = '\'';
+        for (const char* c = path; *c != '\0' && q + 4 < sizeof(quoted); c++) {
+            if (*c == '\'') {
+                q += (size_t)snprintf(quoted + q, sizeof(quoted) - q, "'\\''");
+            } else {
+                quoted[q++] = *c;
+            }
         }
-    }
-    quoted[q++] = '\'';
-    quoted[q]   = '\0';
+        quoted[q++] = '\'';
+        quoted[q]   = '\0';
 
-    char argv[2304];
-    snprintf(argv, sizeof(argv), "%s -dc -- %s", cmd, quoted);
-    replay_fh = popen(argv, "r");
-    if (replay_fh == NULL) {
-        fprintf(stderr, "REPLAY: ERROR: cannot start '%s': %s\n", argv, strerror(errno));
-        return false;
+        char argv[2304];
+        snprintf(argv, sizeof(argv), "%s -dc -- %s", cmd, quoted);
+        replay_fh = popen(argv, "r");
+        if (replay_fh == NULL) {
+            fprintf(stderr, "REPLAY: ERROR: cannot start '%s': %s\n", argv, strerror(errno));
+            return false;
+        }
+        replay_is_pipe = true;
+        printf("REPLAY: decompressing %s through %s\n", path, cmd);
     }
-    replay_is_pipe = true;
-    printf("REPLAY: decompressing %s through %s\n", path, cmd);
+
+    if (hdr != NULL){
+
+        int n = fread(hdr, sizeof(rx_record_header_t), 1, replay_fh);
+
+        printf("Read replay header with result %d\n", n);
+        printf("\tnof_rx_antenna:\t%d\n", hdr->nof_rx_antenna);
+        printf("\trf_freq:\t%f\n",hdr->rf_freq);
+
+        if (n != 1){
+            if (n < 1)
+                fprintf(stderr, "ERROR: cannot read record file header\n");
+            else if (n > 1)
+                fprintf(stderr, "ERROR: read too large for recording header: %d", n);
+            return false;
+        }
+
+        if (hdr->nof_rx_antenna < 1 || hdr->nof_rx_antenna > SRSRAN_MAX_PORTS){
+            fprintf(stderr, "ERROR: Invalid # rx antenna: %d", hdr->nof_rx_antenna);
+            return false;
+        }
+
+        sdr_nof_ports = hdr->nof_rx_antenna;
+    }else{
+        sdr_nof_ports = nof_ports;
+    }
+
+
     return true;
-}
-
-
-int replay_get_nof_antenna(){
-    if (mode != REPLAY){
-        fprintf(stderr, "ERROR: Invalid call to replay_get_nof_antenna: must be in replay mode\n");
-        return -1;
-    }
-
-    if (feof(replay_fh)){
-        fprintf(stderr, "ERROR: At end of replay file\n");
-        return -1;
-    }
-
-    long pos = ftell(replay_fh);
-    if (pos > 0){
-        fprintf(stderr, "ERROR: Replay file not at start, replay_get_nof_antenna must be called before any reads\n");
-        return -1;
-    }else if (pos < 0) {
-        fprintf(stderr, "ERROR: Cannot find current position of replay file\n");
-        return -1;
-    }
-
-    rx_frame_header_t hdr;
-    int n = fread(&hdr, sizeof(rx_frame_header_t), 1, replay_fh);
-    if (n != 1){
-        fprintf(stderr, "ERROR: error: short read loading header, read %d items instead of 1\n", n);
-        return -1;
-    }
-    if (hdr.nof_ports < 1 || hdr.nof_ports > SRSRAN_MAX_PORTS){
-
-        fprintf(stderr, "REPLAY: invalid number of ports: %d\n", hdr.nof_ports);
-        return -1;
-    }
-    rewind(replay_fh);
-    return hdr.nof_ports;
 }
 
 /* Forward skip over a payload the caller has decided not to use. fseek() cannot do this on
@@ -335,8 +333,8 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         }
 
         if (n < 0) {
-            // if (debug)
-            fprintf(stderr, "Error retrieving samples: recv returned %d\n", n);
+            if (debug)
+                fprintf(stderr, "Error retrieving samples: recv returned %d\n", n);
             return n;
         }
         if (mode == RECORD){
@@ -348,7 +346,6 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             hdr.nof_samples         = nsamples;
             hdr.timestamp_full_secs = (uint64_t) t->full_secs;
             hdr.timestamp_frac_secs = t->frac_secs;
-            hdr.nof_ports           = sdr_nof_ports;
             if (debug)
                 printf("DEBUG: size of hdr: %ld, size of uint32_t: %ld, size of uint64_t: %ld, size of double: %ld\n", sizeof(rx_frame_header_t), sizeof(uint32_t), sizeof(uint64_t), sizeof(double));
             // uint64_t frame_size = sizeof(hdr) + hdr.nof_samples * sizeof(cf_t);
@@ -401,11 +398,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
                 return 0;
             }
         }
-        if (hdr.nof_ports < 1 || hdr.nof_ports > SRSRAN_MAX_PORTS){
-            if (debug)
-                printf("REPLAY: invalid number of ports: %d\n", hdr.nof_ports);
-            return 0;
-        }
+
         nreplayed += (n*sizeof(rx_frame_header_t));
 
         srsran_timestamp_init(t, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
@@ -419,7 +412,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
          * samples and the stream never recovers. */
         if (hdr.nof_samples != nsamples){
             if (debug)
-                printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
+                fprintf(stderr,"REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
             replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
             return 0;
         }
@@ -445,12 +438,10 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         if (debug)
             printf("REPLAY: last_replay_return: %ld.%ld, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, recorded_delta);
 
-        // printf("DEBUG: last_replay_return: %ld.%ld\n", last_replay_return.tv_sec, last_replay_return.tv_nsec);
         do {
           clock_gettime(CLOCK_MONOTONIC, &spin_now);
           system_elapsed = (spin_now.tv_sec  - last_replay_return.tv_sec)
                          + (spin_now.tv_nsec - last_replay_return.tv_nsec) * 1e-9;
-        //   printf("DEBUG: last_replay_return: %ld.%ld, system elapsed: %ld.%ld, elapsed: %.3f, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, spin_now.tv_sec, spin_now.tv_nsec, system_elapsed, recorded_delta);
         } while (system_elapsed < recorded_delta);
 
         if (debug)
@@ -464,7 +455,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         t->full_secs = hdr.timestamp_full_secs;
         t->frac_secs = hdr.timestamp_frac_secs;
 
-        for (int i = 0; i < hdr.nof_ports; i++){
+        for (uint32_t i = 0; i < sdr_nof_ports; i++){
 
             if (debug)
                 printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);

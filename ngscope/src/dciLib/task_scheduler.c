@@ -264,23 +264,30 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
                                         .force_tdd            = false};
 
     if (prog_args.mode == 1)
-        init_record(prog_args.output_file_name, 8, prog_args.rf_nof_rx_ant);
+        init_record(prog_args.output_file_name, 8, prog_args.rf_nof_rx_ant, prog_args.rf_freq);
     else if (prog_args.mode == 2) {
         /* Return value checked: init_replay() leaves replay_fh NULL on failure, and the
             * read loop would then fread() from it. A missing decompressor or an unreadable
             * recording has to stop the run, not corrupt it. */
-        if (!init_replay(prog_args.input_file_name)) {
-            fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
-                    prog_args.input_file_name);
-            exit(EXIT_FAILURE);
-        }
-        int nof_ports = replay_get_nof_antenna();
-        if (nof_ports == -1){
-            fprintf(stderr, "REPLAY: Cannot find # antennas, exiting\n");
-            exit(EXIT_FAILURE);
-        }
-        prog_args.rf_nof_rx_ant = nof_ports;
 
+        if (prog_args.use_replay_hdr){
+            printf("Using replay header!\n");
+            rx_record_header_t replay_hdr;
+            if (!init_replay(prog_args.input_file_name, &replay_hdr, 0)) {
+                fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
+                        prog_args.input_file_name);
+                exit(EXIT_FAILURE);
+            }
+            prog_args.rf_nof_rx_ant = replay_hdr.nof_rx_antenna;
+            prog_args.rf_freq = replay_hdr.rf_freq;
+        }else{
+            printf("Ignoring replay header!\n");
+            if (!init_replay(prog_args.input_file_name, NULL, prog_args.rf_nof_rx_ant)) {
+                fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
+                        prog_args.input_file_name);
+                exit(EXIT_FAILURE);
+            }
+        }
     }
 
     // Copy the prameters

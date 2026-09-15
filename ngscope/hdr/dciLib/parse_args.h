@@ -28,6 +28,7 @@ typedef struct {
   uint32_t time_offset;
   int      force_N_id_2;
   int      mode;
+  bool     use_replay_hdr;
   bool     debug;
   bool     silent;
   bool     decode_pdcch;
