@@ -177,29 +177,40 @@ SESSION_HEADER = ["rnti", "rar_tti", "rar_ct", "session_end_ct", "window_end_ct"
 SESSION_ANCHOR_RAR = "rar"
 SESSION_ANCHOR_CRC = "crc"
 
-# How the UE came to be on this cell, in one column, because that is the question people
-# actually ask of a capture:
+# How the UE came to be on this cell.
 #
 #   rach_here     it RACHed here and we saw the RAR. The ordinary case.
-#   handover_in   it arrived without RACHing here. Either a RAR with a contention-free
-#                 preamble that no PDCCH order explains -- the network named the preamble,
-#                 which on an inbound UE means handover -- or a CRC-confirmed UE whose first
-#                 decoded block is well after the capture started, so it was not here at t=0
-#                 and never RACHed.
-#   pre_existing  CRC-confirmed and already transmitting when the capture opened.
-#   unknown       CRC-confirmed, but the boundary between the two above could not be drawn.
+#   handover_in   a RAR with a contention-free preamble that no PDCCH order explains. The
+#                 network named the preamble for this UE, and for an inbound UE that means a
+#                 handover was prepared for it. This is the ONLY value here that is a
+#                 positive claim about a handover.
+#   pre_existing  no RAR here, and already transmitting when the receiver opened -- so it
+#                 was connected before collection started.
+#   no_rach       no RAR here, first seen later in the capture. It could have handed in, it
+#                 could have been connected and idle, it could have been connected all along
+#                 with nothing of its downlink decoded until now. Nothing observable from
+#                 this cell separates those, so nothing is claimed.
+#   unknown       CRC-confirmed but not placeable in time.
 #
-# The handover_in/pre_existing split is a judgement about *when* a UE first appeared, and it
-# is not airtight: a UE connected but idle for the first minute would land in handover_in.
-# It is kept separate from `outcome` for that reason, and the evidence that produced it --
-# anchor and rach_type -- stays in its own columns so the call can be re-made.
+# `no_rach` exists because an earlier version called it handover_in on the strength of "first
+# seen late", which is not evidence of a handover -- it is evidence of being seen late. The
+# distinction matters for the detector: a handover into this cell is positive evidence that a
+# real network prepared it, and inflating that set with UEs that merely woke up would make
+# the strongest signal here the least trustworthy one.
+#
+# Handover cannot always be seen even when it happens. A cell that sets
+# numberOfRA-Preambles = 64 reserves none, so an inbound UE RACHes contention-based and is
+# indistinguishable from a new connection; both cells measured here do exactly that. And
+# without SIB2 the boundary is unknown, so no RAR can be classified at all.
 PROV_RACH = "rach_here"
 PROV_HANDOVER = "handover_in"
 PROV_PRE_EXISTING = "pre_existing"
+PROV_NO_RACH = "no_rach"
 PROV_UNKNOWN = "unknown"
 
-# A CRC-confirmed UE first seen within this long of the capture's start was plausibly already
-# connected. Beyond it, it arrived during the capture without RACHing here.
+# A UE already transmitting this soon after the receiver opened was connected before it. The
+# claim is only about the start of the capture, which is why it does not run the other way:
+# appearing after this window says nothing about where the UE came from.
 PRE_EXISTING_GRACE_US = 15_000_000
 
 # Outcomes that mean this UE holds an AS security context from here on. `established` is the
@@ -212,12 +223,15 @@ CTX_ACTIVE_OUTCOMES = ("established", "reused")
 
 def classify_provenance(anchor, rach_type, first_ct, capture_start_ct):
     if anchor == SESSION_ANCHOR_RAR:
+        # `ordered` is explicitly not a handover: a PDCCH order accounts for the dedicated
+        # preamble, and `unknown` means the boundary was never learned, so neither can carry
+        # the claim.
         return PROV_HANDOVER if rach_type == "contention_free" else PROV_RACH
     if first_ct is None or capture_start_ct is None:
         return PROV_UNKNOWN
-    return (PROV_PRE_EXISTING
-            if first_ct - capture_start_ct <= PRE_EXISTING_GRACE_US
-            else PROV_HANDOVER)
+    if first_ct - capture_start_ct <= PRE_EXISTING_GRACE_US:
+        return PROV_PRE_EXISTING
+    return PROV_NO_RACH
 
 # A PDCCH order and the RAR answering it are milliseconds apart. Generous, and bounded well
 # below the 10240-subframe TTI wrap so the modular comparison stays unambiguous.
@@ -1230,6 +1244,17 @@ def main():
             if pv:
                 print("  provenance        : " +
                       ", ".join(f"{k}={v}" for k, v in sorted(pv.items())))
+                if pv.get(PROV_NO_RACH):
+                    print(f"                      ({pv[PROV_NO_RACH]} no_rach: served here "
+                          "with no RAR and first seen mid-capture.")
+                    print("                       Could be handover in, could be a UE waking "
+                          "up -- nothing in the")
+                    print("                       downlink separates those, so no handover is "
+                          "claimed.)")
+                if not pv.get(PROV_HANDOVER):
+                    print("                      (no handover_in: that needs a contention-free "
+                          "RAR no PDCCH order")
+                    print("                       explains, which this run saw none of.)")
             rt = prov.get("rach_type") or {}
             if prov.get("preamble_boundary") is None:
                 print("  RACH type         : not classified -- no SIB2 on this run, so the "

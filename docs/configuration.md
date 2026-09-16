@@ -657,8 +657,29 @@ reached `established`** — their SecurityModeCommand was decoded — and all 54
 before. They are reported separately and never folded into the RAR-anchored rate, whose
 denominator means "UEs that RACHed here".
 
-To separate handover from an already-connected UE you need the RACH type, which
-`security_scan.py` puts in `security_sessions` as `rach_type`:
+`security_sessions` turns that into one `provenance` column:
+
+| value | meaning |
+|---|---|
+| `rach_here` | it RACHed on this cell and the RAR was decoded. |
+| `handover_in` | a contention-free RAR that no PDCCH order explains. **The only value that claims a handover.** |
+| `pre_existing` | no RAR here, and already transmitting when the receiver opened, so it was connected before collection started. |
+| `no_rach` | no RAR here, first seen mid-capture. Could have handed in, could have been idle and woken, could have been connected all along with nothing decoded until then. |
+| `unknown` | CRC-confirmed but not placeable in time. |
+
+**`no_rach` is not a soft `handover_in`.** An earlier version labelled exactly that population
+`handover_in` on the strength of "first seen late", which is evidence of being seen late and
+nothing more. The distinction matters for the detector: reaching a handover is positive
+evidence that a real network prepared it, so inflating that set with UEs that merely woke up
+would make the strongest signal here the least trustworthy one.
+
+**Handover is often invisible even when it happens.** A cell that sets
+`numberOfRA-Preambles = 64` reserves none, so an inbound UE RACHes contention-based and looks
+exactly like a new connection -- both cells measured here do that. Without SIB2 the boundary
+is unknown and no RAR can be classified at all. Expect `handover_in = 0` on most captures;
+that means "not observable", not "none happened".
+
+The `rach_type` column carries the evidence the call was made from:
 
 | value | meaning |
 |---|---|
