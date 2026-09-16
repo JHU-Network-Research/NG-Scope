@@ -25,6 +25,9 @@ typedef struct {
      * thread picked the subframe up, so in replay it advances at decode speed, not capture
      * speed -- bucketing a run by it silently distorts any rate over time. */
     uint64_t rar_ct;
+    /* Anchored by a passing DL-SCH CRC rather than by a RAR on this cell: a UE that handed
+     * in, or one already connected when the capture began. */
+    bool     crc_only;
 } sec_rnti_t;
 
 /* Cap on UEs tracked concurrently. Only a backstop against a pathological cell, so it must
@@ -38,6 +41,9 @@ typedef struct {
  * by the caller. Evictions are counted, so a cell that outgrows even this says so. */
 #define SEC_MAX_ACTIVE 512
 
+#define SEC_NOF_FORMATS NGSCOPE_SEC_NOF_FORMATS
+#define SEC_NOF_SCHEMES NGSCOPE_SEC_NOF_SCHEMES
+
 typedef struct {
     sec_rnti_t rnti[65536];
 
@@ -48,6 +54,7 @@ typedef struct {
     uint16_t   active[SEC_MAX_ACTIVE];
     int        nof_active;
     uint64_t   nof_rar;
+    uint64_t   nof_crc_confirmed;  /* tracked without a RAR, on a passing DL-SCH CRC */
     uint64_t   nof_attempt;
     uint64_t   nof_pdsch_ok;
 
@@ -70,6 +77,29 @@ typedef struct {
     uint64_t   nof_tb_decoded;
     uint64_t   nof_tb_retried;
     uint64_t   nof_tb_retry_tried;
+
+    /* What the targeted search actually looked at. nof_scan_no_dci was a bare `continue`
+     * before there was anywhere to count it. */
+    uint64_t   nof_scan_rnti;
+    uint64_t   nof_scan_no_dci;
+
+    /* Per DCI format, so a coverage claim can be checked rather than asserted -- in
+     * particular whether widening the search past {1A, 2} finds anything. Indexed by
+     * srsran_dci_format_t; SEC_NOF_FORMATS is SRSRAN_DCI_NOF_FORMATS, restated here because
+     * this file must not include srsran.h (see security_ctx.h). */
+    uint64_t   nof_dci_fmt[SEC_NOF_FORMATS];
+    uint64_t   nof_attempt_fmt[SEC_NOF_FORMATS];
+    uint64_t   nof_crc_pass_fmt[SEC_NOF_FORMATS];
+
+    /* Per transmission scheme, and why a decode did not land. A grant srsRAN has no
+     * predecoder for on this cell is not the same observation as one the channel beat. */
+    uint64_t   nof_scheme[SEC_NOF_SCHEMES];
+    uint64_t   nof_scheme_unsupported;
+    uint64_t   nof_predecode_err;
+    uint64_t   nof_crc_fail;
+
+    uint32_t   cell_nof_ports;
+    uint32_t   cell_nof_rxant;
 
 } sec_ctx_t;
 
@@ -127,6 +157,56 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
             /* Full: drop whoever has been in setup longest, since they are the least
              * likely to still yield a SecurityModeCommand. Counted, because the dropped UE
              * then looks exactly like one that never reached security. */
+            int oldest = 0;
+            for (int i = 1; i < SEC_MAX_ACTIVE; i++) {
+                if (q->rnti[q->active[i]].rar_us < q->rnti[q->active[oldest]].rar_us) {
+                    oldest = i;
+                }
+            }
+            q->active[oldest] = rnti;
+            q->nof_evicted++;
+        }
+    }
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+/* See the header. Same tracked-set insertion as a RAR, with a weaker claim attached. */
+void ngscope_sec_note_crc_confirmed(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_us,
+                                    uint64_t collection_time)
+{
+    if (!rf_idx_valid(rf_idx) || !ngscope_sec_is_unicast(rnti)) {
+        return;
+    }
+    sec_ctx_t* q = &sec_ctx[rf_idx];
+
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    if (q->rnti[rnti].anchored) {
+        /* Already anchored -- by a RAR, or by an earlier confirmation. Leave it: a RAR is the
+         * stronger claim and carries the TTI the offline tool joins sessions on, and
+         * re-arming on every decoded block would reset the tracking window forever. */
+        pthread_mutex_unlock(&sec_mutex[rf_idx]);
+        return;
+    }
+
+    memset(&q->rnti[rnti], 0, sizeof(sec_rnti_t));
+    q->rnti[rnti].anchored = true;
+    q->rnti[rnti].crc_only = true;
+    q->rnti[rnti].rar_us   = ts_us;
+    q->rnti[rnti].rar_tti  = tti;
+    q->rnti[rnti].rar_ct   = collection_time;
+    q->nof_crc_confirmed++;
+
+    bool listed = false;
+    for (int i = 0; i < q->nof_active; i++) {
+        if (q->active[i] == rnti) {
+            listed = true;
+            break;
+        }
+    }
+    if (!listed) {
+        if (q->nof_active < SEC_MAX_ACTIVE) {
+            q->active[q->nof_active++] = rnti;
+        } else {
             int oldest = 0;
             for (int i = 1; i < SEC_MAX_ACTIVE; i++) {
                 if (q->rnti[q->active[i]].rar_us < q->rnti[q->active[oldest]].rar_us) {
@@ -212,6 +292,63 @@ void ngscope_sec_count_attempt(int rf_idx, bool pdsch_ok)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+void ngscope_sec_set_cell(int rf_idx, uint32_t nof_ports, uint32_t nof_rxant)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].cell_nof_ports = nof_ports;
+    sec_ctx[rf_idx].cell_nof_rxant = nof_rxant;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci)
+{
+    if (!rf_idx_valid(rf_idx) || nof_searched <= 0) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_scan_rnti   += (uint64_t)nof_searched;
+    sec_ctx[rf_idx].nof_scan_no_dci += (uint64_t)(nof_without_dci > 0 ? nof_without_dci : 0);
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_dci(int rf_idx, int fmt)
+{
+    if (!rf_idx_valid(rf_idx) || fmt < 0 || fmt >= SEC_NOF_FORMATS) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_dci_fmt[fmt]++;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    sec_ctx_t* q = &sec_ctx[rf_idx];
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    if (fmt >= 0 && fmt < SEC_NOF_FORMATS) {
+        q->nof_attempt_fmt[fmt]++;
+        if (outcome == NGSCOPE_SEC_GRANT_CRC_PASS) {
+            q->nof_crc_pass_fmt[fmt]++;
+        }
+    }
+    if (scheme >= 0 && scheme < SEC_NOF_SCHEMES) {
+        q->nof_scheme[scheme]++;
+    }
+    switch (outcome) {
+        case NGSCOPE_SEC_GRANT_CRC_FAIL:      q->nof_crc_fail++;           break;
+        case NGSCOPE_SEC_GRANT_PREDECODE_ERR: q->nof_predecode_err++;      break;
+        case NGSCOPE_SEC_GRANT_UNSUPPORTED:   q->nof_scheme_unsupported++; break;
+        default: break;
+    }
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 void ngscope_sec_count_tb_table(int rf_idx, bool retried)
 {
     if (!rf_idx_valid(rf_idx)) {
@@ -235,6 +372,15 @@ void ngscope_sec_count_tb_retry(int rf_idx)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+/* Names for the srsran_dci_format_t domain. Restated rather than calling
+ * srsran_dci_format_string(), because this file deliberately does not include srsran.h. */
+static const char* sec_format_name(int f)
+{
+    static const char* n[SEC_NOF_FORMATS] = {"0",  "1",  "1A", "1B", "1C", "1D", "2",
+                                             "2A", "2B", "N0", "N1", "N2", "RAR"};
+    return (f >= 0 && f < SEC_NOF_FORMATS) ? n[f] : "?";
+}
+
 /* Coverage, not conclusions.
  *
  * Everything here is a property of the decoder, and every line is a validity condition for
@@ -250,18 +396,26 @@ void ngscope_sec_report(int rf_idx)
     sec_ctx_t* q = &sec_ctx[rf_idx];
 
     pthread_mutex_lock(&sec_mutex[rf_idx]);
-    int anchored = 0;
+    /* Distinct identities, not events: nof_rar counts every RAR including the re-arms of an
+     * RNTI handed out twice, so it is the wrong numerator for "how many UEs". */
+    int anchored = 0, anchored_crc = 0;
     for (int rnti = 1; rnti < 65536; rnti++) {
         if (q->rnti[rnti].anchored) {
             anchored++;
+            if (q->rnti[rnti].crc_only) {
+                anchored_crc++;
+            }
         }
     }
 
-    printf("SECURITY (cell %d): %d RNTIs anchored by a RAR. PDSCH attempts %llu, decoded "
-           "%llu (%.1f%%) -- written to the MAC pcap; run tools/security_scan.py over it "
-           "for the detection rate.\n",
+    printf("SECURITY (cell %d): %d RNTIs tracked (%llu anchored by a RAR, %llu by a passing "
+           "DL-SCH CRC with no RAR on this cell -- handed in, or already connected). PDSCH "
+           "attempts %llu, decoded %llu (%.1f%%) -- written to the MAC pcap; run "
+           "tools/security_scan.py over it for the detection rate.\n",
            rf_idx,
            anchored,
+           (unsigned long long)(anchored - anchored_crc),
+           (unsigned long long)anchored_crc,
            (unsigned long long)q->nof_attempt,
            (unsigned long long)q->nof_pdsch_ok,
            q->nof_attempt ? 100.0 * q->nof_pdsch_ok / q->nof_attempt : 0.0);
@@ -308,6 +462,84 @@ void ngscope_sec_report(int rf_idx)
                    (unsigned long long)q->nof_tb_retry_tried);
         } else if (q->nof_tb_retry_tried == 0) {
             printf(" -- no retry ran (qam_retry off, or live capture), so the table is untested");
+        }
+        printf("\n");
+    }
+
+    /* How much of the cell the targeted search actually looked at.
+     *
+     * Read the change between runs, not the level: most tracked UEs have no grant in a given
+     * subframe, so a high no-DCI share is normal and this is an upper bound on loss, never a
+     * loss figure. What it is good for is telling whether widening the searched format set
+     * found anything -- which the per-format table below answers directly. */
+    if (q->nof_scan_rnti > 0) {
+        printf("SECURITY (cell %d): targeted search -- %llu (rnti, subframe) searched, %llu found "
+               "no DCI (%.1f%%). Upper bound on loss, not a loss figure: most tracked UEs simply "
+               "have no grant in a given subframe.\n",
+               rf_idx,
+               (unsigned long long)q->nof_scan_rnti,
+               (unsigned long long)q->nof_scan_no_dci,
+               100.0 * (double)q->nof_scan_no_dci / (double)q->nof_scan_rnti);
+    }
+
+    uint64_t sum_att = 0, sum_pass = 0;
+    for (int f = 0; f < SEC_NOF_FORMATS; f++) {
+        sum_att  += q->nof_attempt_fmt[f];
+        sum_pass += q->nof_crc_pass_fmt[f];
+    }
+    if (sum_att > 0) {
+        printf("SECURITY (cell %d): DCI by format --", rf_idx);
+        for (int f = 0; f < SEC_NOF_FORMATS; f++) {
+            if (q->nof_dci_fmt[f] == 0 && q->nof_attempt_fmt[f] == 0) {
+                continue;
+            }
+            printf(" %s %llu found/%llu built/%llu CRC (%.1f%%);",
+                   sec_format_name(f),
+                   (unsigned long long)q->nof_dci_fmt[f],
+                   (unsigned long long)q->nof_attempt_fmt[f],
+                   (unsigned long long)q->nof_crc_pass_fmt[f],
+                   q->nof_attempt_fmt[f]
+                       ? 100.0 * (double)q->nof_crc_pass_fmt[f] / (double)q->nof_attempt_fmt[f]
+                       : 0.0);
+        }
+        printf("\n");
+
+        /* A counter that does not reconcile with the totals it is supposed to decompose is
+         * the failure this whole family of counters exists to catch, so say so rather than
+         * assuming it. */
+        if (sum_att != q->nof_attempt || sum_pass != q->nof_pdsch_ok) {
+            printf("SECURITY (cell %d): COUNTER MISMATCH -- per-format attempts %llu vs %llu, "
+                   "passes %llu vs %llu. One of the two paths is not counting every grant.\n",
+                   rf_idx,
+                   (unsigned long long)sum_att, (unsigned long long)q->nof_attempt,
+                   (unsigned long long)sum_pass, (unsigned long long)q->nof_pdsch_ok);
+        }
+
+        /* The decodable share, by the condition that actually decides it -- transmission
+         * scheme against the cell's port count and this receiver's antenna count -- rather
+         * than by "single transport block", which is neither necessary nor sufficient:
+         * config_mimo_type() sends a single-TB TM4 grant with pinfo != 0 to spatial
+         * multiplexing, and a 4-port transmit-diversity grant decodes at any antenna count. */
+        const uint64_t built = q->nof_scheme[0] + q->nof_scheme[1] + q->nof_scheme[2] + q->nof_scheme[3];
+        printf("SECURITY (cell %d): tx scheme on a %u-port cell with %u rx antenna%s -- "
+               "PORT0 %llu, DIVERSITY %llu, SPATIALMUX %llu, CDD %llu built; "
+               "%llu structurally undecodable here, %llu predecoding errors, %llu CRC failures.",
+               rf_idx,
+               q->cell_nof_ports,
+               q->cell_nof_rxant,
+               q->cell_nof_rxant == 1 ? "" : "s",
+               (unsigned long long)q->nof_scheme[0],
+               (unsigned long long)q->nof_scheme[1],
+               (unsigned long long)q->nof_scheme[2],
+               (unsigned long long)q->nof_scheme[3],
+               (unsigned long long)q->nof_scheme_unsupported,
+               (unsigned long long)q->nof_predecode_err,
+               (unsigned long long)q->nof_crc_fail);
+        if (built > 0) {
+            printf(" Decodable share of built grants: %.1f%% (%llu/%llu).",
+                   100.0 * (double)(built - q->nof_scheme_unsupported) / (double)built,
+                   (unsigned long long)(built - q->nof_scheme_unsupported),
+                   (unsigned long long)built);
         }
         printf("\n");
     }

@@ -83,8 +83,11 @@ it stands. **Cut prefixes on frame boundaries** — `nof_samples` varies per fra
 must be walked, not strided (`rx_frame_header_t` in `ngscope/hdr/dciLib/ngscope_rx.h`).
 
 Reference cell: band 12, EARFCN 5035, cell 44, FDD, **25 PRB, 4 ports**. The 4-port part
-matters — srsRAN cannot predecode spatial multiplexing there at any antenna count, capping
-what is decodable at ~91% of grants. Current result: **424 of 1318 RACHing UEs reached AS
+matters for *post-security data*: srsRAN cannot predecode spatial multiplexing or CDD there at
+any antenna count. It does not touch pre-security traffic, which is transmit diversity by
+construction and which srsRAN decodes on 4 ports at 1 or 2 antennas. The old "~91% of grants"
+figure was unsourced and used the wrong criterion; the decodable share is now counted per
+transmission scheme at teardown. Current result: **424 of 1318 RACHing UEs reached AS
 security (32.2%)**.
 
 Four more captures, all on this machine and all replayed clean.

@@ -323,13 +323,56 @@ instead of dropping, so only replay yields a coverage figure that means anything
 holding a partial SDU is sound where nothing goes missing, but a discarded middle segment leaves
 a partial that never completes, which looks exactly like a UE that never reached security.
 
-**Cell antenna configuration sets a hard ceiling.** srsRAN cannot predecode spatial
-multiplexing on a 4-port cell at any receive-antenna count — the same gap exists in LTESniffer,
-which builds on a byte-identical `precoding.c`. On the cell measured here (4-port), 91.3% of
-grants are single transport block and decodable with one antenna; the remaining 8.7% are
-unreachable. `cell_type.json` records `nof_ports` for exactly this reason. On a **2-port** cell
-a second receive antenna is transformative, unlocking two-layer traffic entirely; on a 4-port
-cell it only improves SNR on grants already being attempted.
+**Cell antenna configuration sets a ceiling, but a narrower one than this document used to
+claim.** srsRAN cannot predecode spatial multiplexing on a 4-port cell at any receive-antenna
+count — the same gap exists in LTESniffer, which builds on a byte-identical `precoding.c` —
+and it cannot do CDD there either. It *can* do 4-port transmit diversity, at one antenna or
+two.
+
+That distinction decides what the ceiling costs. A UE is in TM1/TM2 until an
+`RRCConnectionReconfiguration` moves it, and that only follows a completed
+SecurityModeCommand, so **every pre-security downlink message is transmit diversity** and none
+of it is behind the gap. What 4 ports costs is post-security data traffic.
+
+The figure is now measured rather than asserted. `ngscope_sec_report()` counts every built
+grant by transmission scheme and reports the share that is decodable on this cell with this
+many antennas — the condition that actually decides it. The old "91.3% of grants are single
+transport block and decodable" had no measurement behind it anywhere in the repo and used the
+wrong criterion in both directions: `config_mimo_type()` sends a single-TB TM4 grant with
+`pinfo != 0` to spatial multiplexing, and a 4-port transmit-diversity grant decodes at any
+antenna count. Measured decodable share of built grants: **88.5%** on att_850_office (4-port,
+1 antenna, before the CRC-anchor work widened the population) and **86.9%** on mt_airy02/5110
+(2-port).
+
+On a **2-port** cell a second receive antenna is an MRC gain, not an unlock: spatial
+multiplexing already works at one antenna (2,238 of 2,580 Format2 grants decoded on
+mt_airy02/5110 at `nof_rx_ant = 1`); only TM3's two-layer CDD strictly requires two. On a
+4-port cell the second antenna improves SNR on the transmit-diversity grants that carry all
+pre-security traffic. `cell_type.json` records `nof_ports` and `nof_rx_ant`, and the security
+teardown line states both alongside the scheme mix.
+
+**What a second antenna is actually worth, measured.** `measurements/two_antenna_ab.sh`
+records one two-channel capture and replays *the same bytes* at `nof_rx_ant = 1` and `2`, so
+the only variable is the receiver. On EARFCN 5330 (PCI 223, 50 PRB, 4 ports), 193 s:
+
+| | 1 antenna | 2 antennas | |
+|---|---|---|---|
+| Format1A CRC rate | 217/510 = 42.5% | 281/571 = **49.2%** | +6.7 pts |
+| Format2 CRC rate | 104/177 = 58.8% | 121/213 = 56.8% | flat |
+| transport blocks decoded | 321 | 402 | +25% |
+| RARs found | 35 | 41 | +17% |
+| SecurityModeCommands | 8 | 9 | +1 |
+
+The gain lands on Format1A -- transmit diversity, the carrier of every pre-security RRC
+message -- and Format2 does not move, which is what the model predicts on a 4-port cell where
+spatial multiplexing cannot be predecoded at any antenna count.
+
+**Do not read this as a better detection rate.** It went 20.0% to 19.5%, because two antennas
+find more UEs *and* more of their traffic, so both numerator and denominator grow. The
+defensible claim is "+25% more blocks decoded and +17% more UEs observable", not a higher
+rate. Two receive channels cannot capture more than one downlink either: `srsran_rf_set_rx_freq()`
+tunes every channel of a device to the same carrier, so a second frequency needs a second
+device (`nof_rf_dev = 2`), not a second channel.
 
 **No HARQ soft combining.** Retransmissions with `rv != 0` are decoded standalone or not at
 all.

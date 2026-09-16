@@ -263,6 +263,10 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
                                         .init_agc             = 0,
                                         .force_tdd            = false};
 
+    /* Set for every mode, before the first receive. Live capture has no init of its own, and
+     * this value bounds every write through the channel array -- see ngscope_rx_set_nof_rx_ant. */
+    ngscope_rx_set_nof_rx_ant((uint32_t)prog_args.rf_nof_rx_ant);
+
     if (prog_args.mode == 1)
         init_record(prog_args.output_file_name, 8, prog_args.rf_nof_rx_ant, prog_args.rf_freq);
     else if (prog_args.mode == 2) {
@@ -278,8 +282,20 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
                         prog_args.input_file_name);
                 exit(EXIT_FAILURE);
             }
-            prog_args.rf_nof_rx_ant = replay_hdr.nof_rx_antenna;
+            /* rf_freq is taken from the recording because downconversion removed it and
+             * nothing else on disk carries it. nof_rx_ant is NOT: the header says how many
+             * channels the file holds, which is a different question from how many the
+             * decoder should combine, and overwriting the configured value made the two
+             * inseparable -- a two-channel recording could then only ever be replayed at two
+             * antennas, so the one measurement that shows what a second antenna buys could
+             * not be run on the same bytes. The read loop reconciles any mismatch: surplus
+             * channels are read and dropped, missing ones zero-filled, both announced. */
             prog_args.rf_freq = replay_hdr.rf_freq;
+            if (replay_hdr.nof_rx_antenna != prog_args.rf_nof_rx_ant) {
+                printf("REPLAY: recording holds %u channel%s, nof_rx_ant is %d -- using %d\n",
+                       replay_hdr.nof_rx_antenna, replay_hdr.nof_rx_antenna == 1 ? "" : "s",
+                       prog_args.rf_nof_rx_ant, prog_args.rf_nof_rx_ant);
+            }
         }else{
             printf("Ignoring replay header!\n");
             if (!init_replay(prog_args.input_file_name, NULL, prog_args.rf_nof_rx_ant)) {
@@ -607,9 +623,11 @@ void* task_scheduler_thread(void* p){
     fprintf(cellcfgfile,"{\n");
     fprintf(cellcfgfile,"\"frame_type\": \"%s\",\n", duplymode);
     fprintf(cellcfgfile,"\"bandwidth\": \"%d\",\n", bw);
-    /* nof_ports decides what is decodable at all: srsRAN has no spatial-multiplexing
-     * predecoder for 4 Tx ports, and the 2-port case needs two RX antennas. Both are
-     * detected here and were previously recorded nowhere. */
+    /* nof_ports and nof_rx_ant together decide which transmission schemes are decodable:
+     * srsRAN has no spatial-multiplexing or CDD predecoder for 4 Tx ports, and CDD needs two
+     * RX antennas even at 2. Transmit diversity, which carries all pre-security traffic,
+     * works at 4 ports and any antenna count. ngscope_sec_report() counts the actual mix at
+     * teardown; this file records the configuration that bounds it. */
     fprintf(cellcfgfile,"\"nof_prb\": \"%d\",\n", task_scheduler->cell.nof_prb);
     fprintf(cellcfgfile,"\"nof_ports\": \"%d\",\n", task_scheduler->cell.nof_ports);
     fprintf(cellcfgfile,"\"cell_id\": \"%d\",\n", task_scheduler->cell.id);
@@ -661,10 +679,21 @@ void* task_scheduler_thread(void* p){
                                      task_scheduler->prog_args.rf_index);
     }
 
+    /* Random-access orders. Always on: it is one line per order on a cell that issues any,
+     * it costs nothing on a cell that issues none, and a missing file cannot be told from a
+     * cell with no orders after the fact. */
+    ngscope_pdcch_order_init(task_scheduler->prog_args.out_path,
+                             task_scheduler->prog_args.rf_index);
+
     /* Tell the blind search whether this device wants RNTIs restricted to the RACH-observed
      * set. Set before any decoder thread for this device is created, below, so the threads
      * never observe it half-configured. */
     ngscope_rach_filter_set_active(rf_idx, task_scheduler->prog_args.rach_filter_only);
+
+    /* With the probe on, let the search report RNTIs the filter has not admitted, so the
+     * probe can adjudicate them against the DL-SCH CRC and promote the ones that pass. The
+     * output filter still runs, so nothing unproven is reported either way. */
+    ngscope_rach_filter_set_search_bypass(rf_idx, task_scheduler->prog_args.probe_blind_dci);
 
     /* The scheduler thread itself drives the SIB and RAR searches, which go through the same
      * PDCCH candidate loop. Bind it too. */
@@ -881,6 +910,8 @@ void* task_scheduler_thread(void* p){
 	if(prog_args->decode_RAR){
 		ngscope_rach_filter_report(rf_idx);
 	}
+	ngscope_pdcch_order_report(rf_idx);
+	ngscope_pdcch_order_close(rf_idx);
 	if(prog_args->mark_security_phase){
 		ngscope_sec_report(rf_idx);
 	}

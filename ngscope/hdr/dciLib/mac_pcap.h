@@ -35,6 +35,11 @@ typedef enum {
     NGSCOPE_MAC_SRC_BLIND,
     NGSCOPE_MAC_SRC_RAR,
     NGSCOPE_MAC_SRC_SIB,
+    /* The blind-DCI probe's confirming block: the targeted search found the DCI, so the
+     * PDCCH CRC was checked against a known RNTI, but that RNTI has no RAR on this cell.
+     * Trustworthy bytes and a trustworthy identity; what is unknown is where the UE came
+     * from, which is exactly the handover-in / already-connected case. */
+    NGSCOPE_MAC_SRC_PROBE,
 } ngscope_mac_src_t;
 
 /* One decoded, CRC-passing downlink transport block. payload is BORROWED: it points into the

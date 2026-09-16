@@ -994,6 +994,75 @@ srsran_dci_dl_t dci_dl[SRSRAN_MAX_DCI_MSG]
   return nof_msg;
 }
 
+/* Search a caller-supplied set of DCI formats in this RNTI's UE-specific search space, and
+ * optionally Format1A in the common search space.
+ *
+ * srsran_ue_dl_find_dl_dci() derives its format set from dl_cfg->cfg.tm via ue_dci_formats[],
+ * which yields exactly two formats -- {1A, 2} for TM4. That is right for a UE whose
+ * transmission mode you know. A downlink sniffer does not: a UE stays in TM1/TM2 until an
+ * RRCConnectionReconfiguration that only follows a completed SecurityModeCommand, so its
+ * pre-security traffic is scheduled with Format1/1A while ngscope, pinning TM4 for the cell's
+ * port count, searched only {1A, 2} and never looked for Format1 at all.
+ *
+ * Common SS is Format1A only, matching find_dl_ul_dci_type_crnti() above and 36.213 Table
+ * 7.1-5: a C-RNTI monitors only Format0/1A there. It is where Msg4 to a temporary C-RNTI
+ * lives, and dl_cfg->cfg.dci_common_ss is false everywhere in ngscope, so that search never
+ * happened either -- hence an explicit flag here rather than reading the config field.
+ *
+ * Bookkeeping matches srsran_ue_dl_find_dl_dci() exactly: pending_ul_dci_count and
+ * nof_allocated_locations are reset per call, so one tracked UE's claimed PDCCH locations
+ * cannot make dci_location_is_allocated() skip candidates for the next UE scanned.
+ */
+int srsran_ue_dl_find_dl_dci_formats(srsran_ue_dl_t*            q,
+                                     srsran_dl_sf_cfg_t*        sf,
+                                     srsran_ue_dl_cfg_t*        dl_cfg,
+                                     uint16_t                   rnti,
+                                     const srsran_dci_format_t* ue_formats,
+                                     uint32_t                   nof_ue_formats,
+                                     bool                       search_common_1a,
+                                     srsran_dci_dl_t            dci_dl[SRSRAN_MAX_DCI_MSG])
+{
+  if (q == NULL || sf == NULL || dl_cfg == NULL || ue_formats == NULL || nof_ue_formats == 0 ||
+      nof_ue_formats > SRSRAN_MAX_FORMATS) {
+    return SRSRAN_ERROR_INVALID_INPUTS;
+  }
+
+  set_mi_value(q, sf, dl_cfg);
+
+  srsran_dci_msg_t dci_msg[SRSRAN_MAX_DCI_MSG] = {};
+
+  q->pending_ul_dci_count    = 0;
+  q->nof_allocated_locations = 0;
+
+  int nof_msg = find_dci_ss(q, sf, dl_cfg, rnti, dci_msg, ue_formats, nof_ue_formats, true);
+  if (nof_msg < 0) {
+    return nof_msg;
+  }
+
+  /* find_dl_ul_dci_type_crnti() writes the common-SS results at &dci_msg[nof_dci_msg] without
+   * checking that room is left; with SRSRAN_MAX_DCI_MSG == 5 a full UE-SS pass overruns the
+   * array. Skip the pass instead, and let the caller see that it was skipped. */
+  if (search_common_1a && nof_msg < SRSRAN_MAX_DCI_MSG) {
+    const int ret = find_dci_ss(q, sf, dl_cfg, rnti, &dci_msg[nof_msg], common_formats, 1, false);
+    if (ret < 0) {
+      return ret;
+    }
+    nof_msg += ret;
+  }
+
+  if (nof_msg > SRSRAN_MAX_DCI_MSG) {
+    nof_msg = SRSRAN_MAX_DCI_MSG;
+  }
+
+  for (int i = 0; i < nof_msg; i++) {
+    if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, &dl_cfg->cfg.dci, &dci_msg[i], &dci_dl[i])) {
+      ERROR("Unpacking DL DCI");
+      return SRSRAN_ERROR;
+    }
+  }
+  return nof_msg;
+}
+
 int srsran_ue_dl_dci_to_pdsch_grant(srsran_ue_dl_t*       q,
                                     srsran_dl_sf_cfg_t*   sf,
                                     srsran_ue_dl_cfg_t*   cfg,

@@ -145,7 +145,7 @@ missing **required** key is fatal — NG-Scope lists what is missing and exits.
 | `rf_freq` | int64 | **required** | Downlink centre frequency in Hz. In libconfig it needs the int64 suffix (`2680000000L`); in TOML it does not. Two devices may not share a frequency — NG-Scope exits if they do, because log files are named by frequency. |
 | `N_id_2` | int | `-1` | Force the PSS sequence (0–2). `-1` searches all three. |
 | `rf_args` | string | `""` | Passed to the SDR driver, e.g. `"type=b200"`, `"type=x300,clock_source=external"`. Max 100 chars. |
-| `nof_rx_ant` | int | `1` | Receive channels to open on this SDR. **Two are required for transmission modes 3 and 4 with two spatial layers** — `srsran_predecoding_ccd_zf()` needs `nof_ports == 2 && nof_rxant == 2`, so with one antenna every such grant fails. Needs two coherent RX channels (B210; X310 with two daughterboards). Useless on a 4-port cell, where srsRAN has no spatial-multiplexing predecoder at any antenna count. Recording only stores channel 0, so a two-antenna capture cannot yet be replayed as two antennas. |
+| `nof_rx_ant` | int | `1` | Receive channels to open on this SDR. **Two are required for TM3's two-layer CDD** — `srsran_predecoding_ccd_zf/mmse()` test `nof_ports == 2 && nof_rxant == 2` and error otherwise, so with one antenna every such grant fails. Spatial multiplexing is *not* in that category: it admits one antenna, and measured on `mt_airy02/5110`, 2,238 of 2,580 Format2 grants decoded at `nof_rx_ant = 1`. **Not useless on a 4-port cell** — srsRAN has no 4-port spatial-multiplexing predecoder, but it does have a 4-port *transmit diversity* one that MRC-combines receive antennas (`precoding.c:465`, `:714`), and transmit diversity carries every pre-security downlink message, because a UE stays in TM1/TM2 until an `RRCConnectionReconfiguration` that only follows a completed SecurityModeCommand. Needs two coherent RX channels (B210; X310 with two daughterboards). Recording stores every channel and the file header carries the count; replay reconciles any mismatch — see *Channel count in replay*. |
 | `nof_thread` | int | `4` | DCI decoder threads for this cell. Must be 1–8 (`MAX_NOF_DCI_DECODER`); a value outside that range is now refused at config time, having previously segfaulted inside `srsran_ue_dl_init()`. Too few and subframes are skipped in live capture, or the replay falls behind real time. |
 | `disable_plot` | bool | `true` | Disable the GUI for this cell. Only effective in builds with `ENABLE_GUI`. |
 | `log_dl` | bool | `true` | Write the downlink `.dciLog` file. **This is the flag that controls DL logging**, not `dci_log_config.log_dl`. |
@@ -584,3 +584,100 @@ These are surprising but current behaviour, listed so you do not lose time to th
   the record count is not the DCI count. Filter on `"rnti"` ≠ 0.
 - **Long `-o` paths are silently truncated** at 128 characters.
 - **Duplicate `rf_freq` across devices is fatal**, because log files are named by frequency.
+
+## Channel count in replay
+
+A recording's header says how many channels the file holds. `nof_rx_ant` says how many the
+decoder should combine. They are independent, and replay reconciles any mismatch:
+
+- **More channels in the file than requested** — the surplus is read (it has to be, to stay
+  aligned with the stream) and dropped.
+- **Fewer** — the missing ones are zero-filled, with a one-time notice saying the run measures
+  the smaller number of antennas. A zero channel estimate contributes zero to both sides of
+  every MRC sum, so the result is exactly the lower-antenna one.
+- **Headerless (legacy) recordings** are assumed to hold one channel, because every one of
+  them predates multi-channel record.
+
+The header no longer overwrites `nof_rx_ant` — only `rf_freq`, which nothing else on disk
+carries. That separation is what makes the antenna A/B possible: replay the same two-channel
+recording at `nof_rx_ant = 1` and at `2` and compare. Before it, the two were the same value,
+so a two-channel recording could only ever be replayed at two antennas.
+
+Getting this wrong used to corrupt the stream rather than degrade it: the read loop consumed
+one channel payload per configured antenna, so a mismatch landed the next frame-header read
+inside the IQ samples and the stream never resynchronised. It surfaced as `Could not find any
+cell in this frequency`, which reads as weak signal.
+
+## Recording hygiene: decode nothing while capturing
+
+`record_ring_buffer_insert()` runs synchronously inside the receive callback, so anything else
+competing for that thread costs samples straight off the radio. Same cell, minutes apart,
+normalised per second of tracked radio time:
+
+| record config | window lost | DCI/s on replay | RAR/s |
+|---|---|---|---|
+| `decode_pdcch = true`, SIB and RAR off | 2.66% | 424 | 0.13 |
+| nothing decoding | 1.05% | **803** | 0.21 |
+
+PDCCH decoding alone roughly halves the yield. With `decode_SIB` and `decode_RAR` on as well
+it is far worse -- about 13 DCI/s, with `srsran_ue_sync` failing on ~76% of subframes. The
+all-off recording matches live reception on the same cell (803 DCI/s recorded against 582
+live), which is the check that says nothing is being lost.
+
+**The failure mode is what makes this worth a section.** UHD's overflow characters never
+appear, because `Fastpath logging disabled at runtime` suppresses them, so a holed capture
+looks exactly like weak signal: sync fails to track, yield collapses, and the natural
+conclusion is "bad location". It was nearly diagnosed that way here.
+
+`tools/check_recording.py` answers it from the file rather than from the yield. Every frame
+header carries `nof_samples` and a timestamp, so on an intact capture the next timestamp is
+the previous one plus exactly that many samples; anything else is samples lost between the
+antenna and the disk. It ignores cell search, the retune and one second of acquisition, all of
+which legitimately break continuity. Calibration against this project's own field captures,
+which all replay usefully: `mt_airy02/5110` 1.2% lost, `mt_airy02/5330` 1.3%, `att_trolley`
+11.5% -- so single-digit percentages are the normal field band, and 25%+ is the flag.
+
+## Who is this cell serving? Anchors and RACH provenance
+
+A UE reaches the output two ways, and the `.dciLog` records which as `anchor`:
+
+- **`rar`** — it RACHed on this cell and the RAR was decoded.
+- **`crc`** — it never RACHed here. It is known only because a transport block addressed to it
+  passed its DL-SCH CRC. Since PDSCH descrambling is RNTI-seeded and CRC24A is not, a pass
+  proves the `(RNTI, grant)` pair real at about 2⁻²⁴ — a *stricter* test than the RAR anchor,
+  not a weaker one, which is why admitting on it does not readmit the thousands of RNTIs blind
+  search manufactures. Those never pass a CRC.
+
+The `crc` case is what a UE that **handed in** to this cell looks like from the target side,
+and also what one already connected when the capture began looks like. Both are positive
+evidence of a UE the cell is really serving. `probe_blind_dci` must be on: it is the path that
+adjudicates them, and it also lifts the search-level RACH suppression so the candidates reach
+it at all. Measured on att_850_office: 54 such UEs against 68 that RACHed, **10 of the 54
+reached `established`** — their SecurityModeCommand was decoded — and all 54 were invisible
+before. They are reported separately and never folded into the RAR-anchored rate, whose
+denominator means "UEs that RACHed here".
+
+To separate handover from an already-connected UE you need the RACH type, which
+`security_scan.py` puts in `security_sessions` as `rach_type`:
+
+| value | meaning |
+|---|---|
+| `contention` | RAPID below `numberOfRA-Preambles`: the UE picked its own preamble. |
+| `contention_free` | RAPID at or above it: the network named the preamble, so a handover in or a PDCCH order. |
+| `ordered` | `contention_free`, and a PDCCH order to a known RNTI carried the same preamble shortly before. |
+| `unknown` | no SIB2 on this run, so the boundary was never learned. |
+
+`unknown` is not a synonym for `contention`. The boundary is only knowable from SIB2's
+`rach-ConfigCommon`, written to `rach_config.json` when `decode_SIB` is on; inferring it from
+the RAPID histogram would manufacture handovers, so the scan refuses to.
+
+Two things to know before reading a result:
+
+- **A cell may reserve no preambles at all.** att_850_office sets `numberOfRA-Preambles = 64`,
+  so every preamble is contention-based and no contention-free RACH can occur on it. Handover
+  in is not observable this way there, and the scan says so rather than reporting zero.
+- **The PDCCH-order pattern attracts false alarms.** It is 1A-shaped, so a false-alarm DCI can
+  match it and carry a manufactured RNTI. `pdcch_order-<rf>.csv` records an `rnti_known`
+  column and the scan ignores orders to unknown RNTIs — measured on att_850_office, all 9
+  orders found were of that kind. Letting one explain away a real contention-free RACH would
+  lose a handover.

@@ -19,6 +19,17 @@
 #include "ngscope/hdr/dciLib/parse_args.h"
 #include "ngscope/hdr/dciLib/thread_exit.h"
 #include "ngscope/hdr/dciLib/time_stamp.h"
+#include "ngscope/hdr/dciLib/rach_filter.h"
+
+/* Names for ngscope_rach_anchor_t. Empty string where there is no RNTI to anchor. */
+static const char* dci_anchor_string(uint8_t a)
+{
+	switch (a) {
+		case NGSCOPE_RACH_ANCHOR_RAR: return "rar";
+		case NGSCOPE_RACH_ANCHOR_CRC: return "crc";
+		default:                      return "";
+	}
+}
 
 extern bool go_exit;
 //extern ngscope_cell_dci_ring_buffer_t 	cell_status[MAX_NOF_RF_DEV];
@@ -71,6 +82,11 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 			 * fills the field in from the offline scan of the MAC pcap. */
 			fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
 			fprintf(fd_dl,"\"format\": \"%s\",\n",srsran_dci_format_string(q->dl_msg[i].format));
+			/* How this RNTI earned its place in the output. "rar" means it RACHed on this
+			 * cell; "crc" means it never did, and was confirmed only by a transport block
+			 * that passed its DL-SCH CRC -- which is what a UE that handed in to this cell,
+			 * or was already connected before the capture, looks like from here. */
+			fprintf(fd_dl,"\"anchor\": \"%s\",\n", dci_anchor_string(q->dl_msg[i].anchor));
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", q->cell_dl_prb);
@@ -122,6 +138,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
 		fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
 		fprintf(fd_dl,"\"format\": \"\",\n");
+		fprintf(fd_dl,"\"anchor\": \"\",\n");
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", 0);

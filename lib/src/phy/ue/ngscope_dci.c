@@ -2,6 +2,7 @@
 #include "srsran/srsran.h"
 #include "srsran/phy/ue/ngscope_dci.h"
 #include "dciLib/tbs_table_probe.h"
+#include "dciLib/rach_filter.h"
 
 bool __attribute__((weak)) debug = false;
 
@@ -17,6 +18,21 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
 {
     if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, &cfg->cfg.dci, dci_msg, dci_dl)) {
         //ERROR("Unpacking DL DCI");
+        return SRSRAN_ERROR;
+    }
+
+    /* A PDCCH order is not a downlink assignment. It is the eNB telling this UE to start a
+     * random access procedure with a named preamble, and it carries no transport block at
+     * all -- srsran_dci_msg_unpack_pdsch() returns as soon as it recognises the pattern,
+     * leaving every resource-allocation field unset.
+     *
+     * Record it and stop. Building a grant from it produced a garbage allocation that was
+     * reported as a DCI and fed to the MCS->TBS probe as if it were a real one; recording it
+     * here means the order is not lost, which matters because it is the only thing that
+     * distinguishes a network-ordered contention-free RACH from a handover into this cell. */
+    if (dci_dl->is_pdcch_order) {
+        ngscope_pdcch_order_note_bound(dci_msg->rnti, sf->tti, dci_dl->preamble_idx,
+                                       dci_dl->prach_mask_idx);
         return SRSRAN_ERROR;
     }
     uint32_t before_crb; 

@@ -195,6 +195,19 @@ SRSRAN_API int srsran_ue_dl_find_dl_dci(srsran_ue_dl_t*     q,
                                         uint16_t            rnti,
                                         srsran_dci_dl_t     dci_msg[SRSRAN_MAX_DCI_MSG]);
 
+/* Like srsran_ue_dl_find_dl_dci(), but with the UE-specific search-space format set supplied
+ * by the caller instead of derived from dl_cfg->cfg.tm, and with the common-SS Format1A pass
+ * requested explicitly rather than through dl_cfg->cfg.dci_common_ss. See the definition in
+ * ue_dl.c for why a sniffer needs both. */
+SRSRAN_API int srsran_ue_dl_find_dl_dci_formats(srsran_ue_dl_t*            q,
+                                                srsran_dl_sf_cfg_t*        sf,
+                                                srsran_ue_dl_cfg_t*        dl_cfg,
+                                                uint16_t                   rnti,
+                                                const srsran_dci_format_t* ue_formats,
+                                                uint32_t                   nof_ue_formats,
+                                                bool                       search_common_1a,
+                                                srsran_dci_dl_t            dci_dl[SRSRAN_MAX_DCI_MSG]);
+
 SRSRAN_API int srsran_ue_dl_dci_to_pdsch_grant(srsran_ue_dl_t*       q,
                                                srsran_dl_sf_cfg_t*   sf,
                                                srsran_ue_dl_cfg_t*   cfg,
