@@ -22,8 +22,9 @@ and emit a fixed value, so nobody has to set something back after switching mode
   cell is replaying, and `config_io` emits the schema default instead of whatever the user
   last chose, which stays in GUI state and returns when they switch back.
 * `mode_locked` -- `{mode: value}`. In that mode the setting has exactly one valid value, so
-  the form should not offer a choice. `nof_rx_ant` in Record is the case: the IQ recorder
-  writes channel 0 only, and ngscope refuses anything else outright (load_config.c).
+  the form should not offer a choice. **Currently unused.** `nof_rx_ant` in Record was the
+  case, until the recorder learned to write every channel and the file header to carry the
+  count; the mechanism is kept because the next such constraint will want it.
 
 * `unsupported` -- the key is still accepted by the C schema but can no longer do anything,
   and `ngscope_config_finalize()` forces it to its default. `log_phich` is the case: PHICH
@@ -75,9 +76,13 @@ TOP_LEVEL = [
         False,
         "Decode SIB",
         "Decode SIB1/SIB2 and write cell identity and reference signal power to "
-        "cellcfg.json. Known hazard: this path can segfault on a weak cell, seemingly on a "
-        "false-positive SI-RNTI grant. If a run dies inside srsran_ue_dl_find_and_decode_sib1, "
-        "turn this off -- nothing else depends on it.",
+        "cellcfg.json, plus the RACH preamble boundary to rach_config.json. Defaults ON in "
+        "Replay whatever this box says, because SIB2 is the only source of that boundary and "
+        "without it no RACH can be classified as contention-free -- every UE's provenance "
+        "silently degrades to unknown. Ticking it off explicitly still wins. Known hazard: "
+        "this path can segfault on a weak cell, seemingly on a false-positive SI-RNTI grant. "
+        "If a run dies inside srsran_ue_dl_find_and_decode_sib1, turn it off -- that opt-out "
+        "is the only way to replay such a capture.",
     ),
     _f(
         "decode_RAR",
@@ -160,11 +165,17 @@ TOP_LEVEL = [
         "bool",
         False,
         "Probe blind DCIs",
-        "Measurement instrument, not part of a capture. Decodes a transport block for every "
-        "DCI the blind search reports and records whether the DL-SCH CRC passes, split by "
-        "whether the RNTI was RACH-confirmed -- a pass proves the DCI real. Pair it with "
-        "Single-UE/RACH filtering OFF, or the unconfirmed column is empty. Writes "
-        "blind_probe-<rf>.csv. Costs a PDSCH decode per RNTI per subframe.",
+        "Decodes a transport block for every DCI the blind search reports and checks the "
+        "DL-SCH CRC -- a pass proves the (RNTI, grant) pair real, since PDSCH descrambling is "
+        "RNTI-seeded and CRC24A is not. No longer only an instrument: an RNTI that passes is "
+        "now ADMITTED, tracked and written to the pcap even though no RAR on this cell ever "
+        "handed it out, which is what a UE that handed in -- or was already connected when "
+        "the capture began -- looks like from here. It also lifts the RACH filter inside the "
+        "PDCCH search so those candidates are visible at all. Measured: 54 such UEs against "
+        "68 that RACHed, 10 of them reaching security. They are reported separately and never "
+        "folded into the RAR-anchored rate. Turning this on therefore changes what a capture "
+        "contains, not just what is measured about it. Writes blind_probe-<rf>.csv; costs a "
+        "PDSCH decode per RNTI per subframe.",
         replay_only=True,
     ),
     _f(
@@ -235,16 +246,22 @@ RF_DEV = [
         "int",
         1,
         "RX antennas",
-        "Receive channels to open on this SDR. Two are required to decode transmission modes "
-        "3 and 4 with two spatial layers -- with one antenna those grants cannot be separated "
-        "and always fail. Needs an SDR with two coherent RX channels (B210, or an X310 with "
-        "two daughterboards). No help on a 4-port cell, where srsRAN cannot predecode spatial "
-        "multiplexing at all.",
+        "Receive channels to open on this SDR. Needs an SDR with two coherent RX channels "
+        "(B210, or an X310 with two daughterboards). Two are required for TM3's two-layer "
+        "CDD, which errors outright at one antenna. Spatial multiplexing is NOT in that "
+        "category despite appearances -- it decodes fine at one antenna (measured: 2,238 of "
+        "2,580 Format2 grants on a 2-port cell). On a 4-port cell a second antenna is still "
+        "worth having: srsRAN has no 4-port spatial-multiplexing predecoder, but it does have "
+        "a 4-port transmit-diversity one, and transmit diversity carries every message a UE "
+        "receives before AS security is established. Measured on a 4-port cell, same bytes at "
+        "1 vs 2 antennas: Format1A CRC 42.5% -> 49.2%, transport blocks decoded +25%, RARs "
+        "found +17%.",
         min=1,
         max=4,
-        # The recorder writes channel 0 only and rx_frame_header_t has no channel count, so
-        # ngscope refuses nof_rx_ant > 1 with mode=1 rather than silently losing a channel.
-        # mode_locked={MODE_RECORD: 1},
+        # Recording writes every channel and the file header carries the count, so there is
+        # nothing to lock: the old mode_locked={MODE_RECORD: 1} is gone with the refusal it
+        # mirrored. Replay reconciles a mismatch by dropping surplus channels and zero-filling
+        # missing ones, which is what makes a 1-vs-2 antenna comparison on one capture possible.
     ),
     _f(
         "mode",

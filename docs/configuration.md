@@ -155,6 +155,8 @@ missing **required** key is fatal — NG-Scope lists what is missing and exits.
 | `replay_fname` | string | none | Source file for `mode = 2`. Required only in replay mode; NG-Scope exits if it is missing **or unreadable** — checked at config time, before the radio and decoders are set up. May be compressed: a `.bz2`, `.gz` or `.xz` suffix is decompressed on the fly. Recording always writes to `<out_dir>/<timestamp>/recorded-samples.bin` and ignores this key. |
 | `debug` | bool | `false` | Verbose per-subframe tracing. Extremely noisy — thousands of lines per second. |
 | `silent` | bool | `false` | Suppress the per-subframe summary lines. |
+| `use_replay_hdr` | bool | `true` | Read the `rx_record_header_t` at the head of the replay file — it carries the channel count and the carrier frequency, neither of which the samples can describe. Set it `false` for a legacy headerless capture: every recording made before multi-channel record has no such header, and reading one where there is none consumes the first frame header instead, so the run fails with `Invalid # rx antenna`. The header supplies `rf_freq`; it does **not** override `nof_rx_ant` — see *Channel count in replay*. |
+| `exit_on_desync` | bool | `false` | Exit the run when synchronisation to the cell is lost, rather than continuing to search. Useful unattended, where a desynced run otherwise fills a disk with samples of nothing. |
 | `decode_pdcch` | bool | `true` | Decode the control channel. Setting it `false` synchronises and records without decoding, which is what you want for a pure IQ capture. |
 
 ### Record and replay
