@@ -150,7 +150,7 @@ EVENT_HEADER = ["frame", "rf_idx", "rnti", "src", "tti", "ct", "ts_us",
                 "rlc_segments", "rlc_skipped", "detail"]
 
 SESSION_HEADER = ["rnti", "rar_tti", "rar_ct", "session_end_ct", "window_end_ct",
-                  "anchor", "rach_type",
+                  "anchor", "rach_type", "provenance", "ctx_active_ct",
                   "outcome", "outcome_event", "outcome_ct", "ms_rar_to_outcome",
                   "nas_outcome", "nas_outcome_event",
                   "identity_exposure", "identity_event", "identity_ct",
@@ -176,6 +176,48 @@ SESSION_HEADER = ["rnti", "rar_tti", "rar_ct", "session_end_ct", "window_end_ct"
 #                      histogram would manufacture handovers.
 SESSION_ANCHOR_RAR = "rar"
 SESSION_ANCHOR_CRC = "crc"
+
+# How the UE came to be on this cell, in one column, because that is the question people
+# actually ask of a capture:
+#
+#   rach_here     it RACHed here and we saw the RAR. The ordinary case.
+#   handover_in   it arrived without RACHing here. Either a RAR with a contention-free
+#                 preamble that no PDCCH order explains -- the network named the preamble,
+#                 which on an inbound UE means handover -- or a CRC-confirmed UE whose first
+#                 decoded block is well after the capture started, so it was not here at t=0
+#                 and never RACHed.
+#   pre_existing  CRC-confirmed and already transmitting when the capture opened.
+#   unknown       CRC-confirmed, but the boundary between the two above could not be drawn.
+#
+# The handover_in/pre_existing split is a judgement about *when* a UE first appeared, and it
+# is not airtight: a UE connected but idle for the first minute would land in handover_in.
+# It is kept separate from `outcome` for that reason, and the evidence that produced it --
+# anchor and rach_type -- stays in its own columns so the call can be re-made.
+PROV_RACH = "rach_here"
+PROV_HANDOVER = "handover_in"
+PROV_PRE_EXISTING = "pre_existing"
+PROV_UNKNOWN = "unknown"
+
+# A CRC-confirmed UE first seen within this long of the capture's start was plausibly already
+# connected. Beyond it, it arrived during the capture without RACHing here.
+PRE_EXISTING_GRACE_US = 15_000_000
+
+# Outcomes that mean this UE holds an AS security context from here on. `established` is the
+# SecurityModeCommand; `reused` is an RRCConnectionReestablishment or Resume, which restores a
+# stored K_eNB -- no SMC follows, and reaching either is positive evidence that a real context
+# already existed. Both give a moment after which the context is active, which is what
+# ctx_active_ct records.
+CTX_ACTIVE_OUTCOMES = ("established", "reused")
+
+
+def classify_provenance(anchor, rach_type, first_ct, capture_start_ct):
+    if anchor == SESSION_ANCHOR_RAR:
+        return PROV_HANDOVER if rach_type == "contention_free" else PROV_RACH
+    if first_ct is None or capture_start_ct is None:
+        return PROV_UNKNOWN
+    return (PROV_PRE_EXISTING
+            if first_ct - capture_start_ct <= PRE_EXISTING_GRACE_US
+            else PROV_HANDOVER)
 
 # A PDCCH order and the RAR answering it are milliseconds apart. Generous, and bounded well
 # below the 10240-subframe TTI wrap so the modular comparison stays unambiguous.
@@ -857,6 +899,13 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
     # UEs the cell served that never RACHed here: handed in, or already connected. Appended
     # after the RAR anchors so the RAR-anchored denominator below can exclude them by anchor.
     crc_anchors = synth_crc_anchors(frames, rar_rntis)
+
+    # When did this capture start watching? Used only to separate a UE that was already
+    # transmitting when we opened the receiver from one that arrived later. Taken from the
+    # earliest decoded block rather than a wall clock, because collection_time is the radio
+    # domain and everything else here is compared in it.
+    _cts = [f["ct"] for f in frames if f["ct"] is not None]
+    capture_start_ct = min(_cts) if _cts else None
     boundary = load_rach_config(run_dir)
     orders = load_pdcch_orders(run_dir, rf_idx)
 
@@ -895,6 +944,7 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
     id_counts = Counter()
     anchor_counts = Counter()
     rach_counts = Counter()
+    prov_counts = Counter()
     crc_out_counts = Counter()
     for s in sessions:
         outcome, ev, nas_outcome, nas_ev = resolve_outcome(s)
@@ -912,13 +962,20 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
             ms = round((ev["ct"] - s["rar_ct"]) / 1000.0, 3)
         anchor = s.get("anchor", SESSION_ANCHOR_RAR)
         rach_type = classify_rach(anchor, s.get("rapid"), s["rar_tti"], boundary, orders)
+        provenance = classify_provenance(anchor, rach_type, s["rar_ct"], capture_start_ct)
+        # The moment this UE's AS security context became active, by either route: the
+        # SecurityModeCommand, or the reestablishment/resume that restored a stored one.
+        # Every DCI after it is covered by that context.
+        ctx_active_ct = (ev["ct"] if outcome in CTX_ACTIVE_OUTCOMES and ev
+                         and ev["ct"] is not None else "")
         anchor_counts[anchor] += 1
+        prov_counts[provenance] += 1
         if rach_type:
             rach_counts[rach_type] += 1
         session_rows.append([
             s["rnti"], s["rar_tti"], s["rar_ct"],
             s["session_end_ct"] if s["session_end_ct"] is not None else "",
-            s["window_end_ct"], anchor, rach_type, outcome,
+            s["window_end_ct"], anchor, rach_type, provenance, ctx_active_ct, outcome,
             ev["event"] if ev else "", ev["ct"] if ev else "", ms,
             nas_outcome, nas_ev["event"] if nas_ev else "",
             identity, id_ev["event"] if id_ev else "",
@@ -928,12 +985,18 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
         ])
 
     # --- sec= verdict per frame, then the in-place splice ------------------------------
+    # By name, not by position. These were row[5] and row[7], which silently became the
+    # anchor and outcome_event columns the moment two were inserted ahead of them -- every
+    # frame then resolved through SEC_FROM_OUTCOME["rar"] and came out "unknown". Nothing
+    # downstream could notice: the splice verifier only checks that the dissection is
+    # unchanged apart from the comment, which a uniformly wrong verdict satisfies.
+    _col = {name: i for i, name in enumerate(SESSION_HEADER)}
     established_ct = {}
     outcome_by_key = {}
     for s_, row in zip(sessions, session_rows):
-        outcome_by_key[id(s_)] = row[5]
-        if row[5] == "established":
-            established_ct[id(s_)] = row[7]
+        outcome_by_key[id(s_)] = row[_col["outcome"]]
+        if row[_col["outcome"]] == "established":
+            established_ct[id(s_)] = row[_col["outcome_ct"]]
 
     def verdict_for_frame(f):
         if not is_unicast(f["rnti"]):
@@ -1006,6 +1069,7 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
         # the same class as `reused`, not a failure to establish one.
         "provenance": {
             "anchors": dict(anchor_counts),
+            "provenance": dict(prov_counts),
             "rach_type": dict(rach_counts),
             "preamble_boundary": boundary,
             "pdcch_orders_to_known_rnti": len(orders),
@@ -1162,6 +1226,10 @@ def main():
                 if crc_out:
                     print("                      their outcomes: " +
                           ", ".join(f"{k}={v}" for k, v in sorted(crc_out.items())))
+            pv = prov.get("provenance") or {}
+            if pv:
+                print("  provenance        : " +
+                      ", ".join(f"{k}={v}" for k, v in sorted(pv.items())))
             rt = prov.get("rach_type") or {}
             if prov.get("preamble_boundary") is None:
                 print("  RACH type         : not classified -- no SIB2 on this run, so the "

@@ -120,6 +120,14 @@ def load_sessions(run_dir):
                             else None,
                             "rar_tti": int(row["rar_tti"]),
                             "rf_idx": rf_idx,
+                            # Written by security_scan.py. Absent when an older run is
+                            # re-joined, which must stay distinguishable from "this UE never
+                            # got a context" -- hence None rather than a default.
+                            "ctx_active_ct": int(row["ctx_active_ct"])
+                            if row.get("ctx_active_ct")
+                            else None,
+                            "provenance": row.get("provenance", ""),
+                            "anchor": row.get("anchor", ""),
                         }
                     )
                 except (KeyError, ValueError):
@@ -218,6 +226,33 @@ def verdict_for(rnti, ct, sessions_by_rnti):
 # The pcapng sec= patch moved to tools/security_scan.py. It keys on frame number there --
 # an index into the very file it dissected -- which removes the ambiguity this module had
 # when two PDUs for one RNTI landed in the same subframe.
+
+
+def ctx_active_for(rec, session):
+    """Is this DCI covered by an AS security context the UE actually holds?
+
+    "after security" usually means "after the SecurityModeCommand", but that misses half the
+    population. A UE that reached RRCConnectionReestablishment or Resume restored a stored
+    K_eNB: no SMC follows, and reaching either is positive evidence that a context already
+    existed. Both give a moment, and every DCI after it is covered.
+
+    Returns "yes", "no", or "" when there is no moment to compare against -- either the UE
+    never reached one, or the session file predates ctx_active_ct. The empty string is not
+    "no": one means unprotected, the other means unknown, and collapsing them is the mistake
+    this file exists to avoid.
+    """
+    if session is None:
+        return ""
+    boundary = session.get("ctx_active_ct")
+    if boundary is None:
+        return ""
+    ct = rec.get("collection_time")
+    try:
+        ct = int(ct)
+    except (TypeError, ValueError):
+        return ""
+    # Exclusive: the boundary message is itself the last one sent in the clear.
+    return "yes" if ct > boundary else "no"
 
 
 def _ms_since(rec, session, key):
@@ -431,6 +466,7 @@ def main():
     rows = []
     identity_by_key, identity_files = load_identity_events(run_dir)
     identity_counts = Counter()
+    ctx_counts = Counter()
     counts = Counter()
     mimo_counts = Counter()
     disagree = 0
@@ -487,6 +523,10 @@ def main():
             if identity != "none":
                 identity_counts[identity] += 1
 
+            ctx_active = ctx_active_for(rec, session)
+            if ctx_active:
+                ctx_counts[ctx_active] += 1
+
             streamed = rec.get("security_phase", "")
             if want_dcilog and direction in ("dl", "ul"):
                 # The full seven-value domain goes in. ngscope now writes one constant
@@ -501,6 +541,11 @@ def main():
                     # A new key, appended rather than replacing anything: the joined
                     # .dciLog is a derived artefact, and ngscope writes no such field.
                     rec["identity_exposure"] = identity
+                    # Whether this DCI falls after the UE's context became active, by
+                    # SecurityModeCommand or by a restored one. Appended for the same reason
+                    # as identity_exposure: it is a joined fact, not something ngscope saw.
+                    rec["ctx_active"] = ctx_active
+                    rec["provenance"] = session["provenance"] if session else ""
                 else:
                     rec = {
                         "tti": rec.get("tti"),
@@ -530,6 +575,14 @@ def main():
                         "security_phase": phase,
                         "security_phase_in_stream": streamed,
                         "identity_exposure": identity,
+                        "ctx_active": ctx_active,
+                        "provenance": session["provenance"] if session else "",
+                        "anchor": session["anchor"] if session else "",
+                        "ctx_active_collection_time": (
+                            session["ctx_active_ct"]
+                            if session and session.get("ctx_active_ct") is not None
+                            else ""
+                        ),
                         "rar_tti": session["rar_tti"] if session else "",
                         "outcome": session["outcome"] if session else "",
                         "rar_collection_time": session["rar_ct"] if session else "",
@@ -622,6 +675,16 @@ def main():
         n = counts.get(phase, 0)
         print(f"  {phase:<8} {n:>10,}  {100 * n / total if total else 0:5.1f}%")
     both = sum(1 for c in per_rnti.values() if c["pre"] and c["post"])
+    if ctx_counts:
+        yes, no = ctx_counts.get("yes", 0), ctx_counts.get("no", 0)
+        print(f"\n  ctx_active: {yes:,} DCIs fall after their UE's AS security context "
+              f"became active,")
+        print(f"              {no:,} before it. Covers both routes -- a SecurityModeCommand "
+              "and a")
+        print("              reestablishment/resume that restored a stored context. A blank "
+              "value is")
+        print("              neither: no boundary was ever observed for that UE.")
+
     print(f"\n  {len(per_rnti):,} RNTIs placed; {both:,} of them span the boundary")
     if disagree:
         print(
