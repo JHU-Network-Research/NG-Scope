@@ -313,6 +313,10 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
     radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args,
                                                 &cell_detect_config, &search_cell_cfo);
 
+    /* Cell found. Only now is anything worth writing -- and only now does writing stop
+     * interfering with finding it. See ngscope_rx_arm_recording(). */
+    ngscope_rx_arm_recording();
+
     // Copy the cell info to the
     pthread_mutex_lock(&cell_mutex);
     memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));

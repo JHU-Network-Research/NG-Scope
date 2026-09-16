@@ -61,9 +61,38 @@ static uint32_t sdr_nof_ports = SRSRAN_MAX_PORTS;
  * writing through it smashes the caller's stack. */
 static uint32_t rx_nof_rx_ant = 1;
 
+/* See ngscope_rx_arm_recording(): false until the cell has been found. */
+static bool     recording_armed = false;
+
 void ngscope_rx_set_nof_rx_ant(uint32_t n)
 {
   rx_nof_rx_ant = (n >= 1 && n <= SRSRAN_MAX_PORTS) ? n : 1;
+}
+
+/* Write nothing until the cell has been found.
+ *
+ * Cell search runs before any of this is useful, and its samples are worthless: they are at
+ * the search rate, from before the receiver retuned, and no replay can do anything with
+ * them. Recording them cost about 185 MB/s for as long as the search took -- 50 GB on a
+ * search that ultimately failed, three times over in one afternoon.
+ *
+ * It may also be breaking the search itself. That part is a hypothesis, not a measurement.
+ * record_ring_buffer_insert() runs synchronously inside the receive callback, and PSS/SSS
+ * correlation needs contiguous samples; latency added there costs exactly the samples the
+ * search depends on. What is observed is the correlation, not the mechanism: across five
+ * attempts at three frequencies (763.0, 739.0 and 731.5 MHz), a record run failed to lock
+ * within 300 s -- twice without srsran_ue_cellsearch returning at all -- while a live run at
+ * the same frequency minutes later locked within seconds. Live and record differ in this
+ * path and little else, which is what makes it the first thing to try.
+ *
+ * The disk saving stands either way, so this is worth keeping even if the acquisition
+ * theory turns out to be wrong.
+ *
+ * So arm recording only once radio_init_and_start() has returned with a cell. A recording
+ * then begins at the first tracked subframe, which is also where it becomes useful. */
+void ngscope_rx_arm_recording(void)
+{
+  recording_armed = true;
 }
 
 static uint64_t         last_replay_ts_full = 0;
@@ -374,7 +403,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
                 fprintf(stderr, "Error retrieving samples: recv returned %d\n", n);
             return n;
         }
-        if (mode == RECORD){
+        if (mode == RECORD && recording_armed){
             if (debug)
                 printf("DEBUG: Recording %d samples\n", n);
 
