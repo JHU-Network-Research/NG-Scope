@@ -179,13 +179,18 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
   //search_space.formats[0] = SRSRAN_DCI_FORMAT0;
   search_space.formats[0] = SRSRAN_DCI_FORMAT1;
   search_space.formats[1] = SRSRAN_DCI_FORMAT1A;
-  search_space.formats[2] = SRSRAN_DCI_FORMAT1C;
-  search_space.formats[3] = SRSRAN_DCI_FORMAT2;
+  search_space.formats[2] = SRSRAN_DCI_FORMAT1B;
+  search_space.formats[3] = SRSRAN_DCI_FORMAT1C;
+  search_space.formats[4] = SRSRAN_DCI_FORMAT1D;
+  search_space.formats[5] = SRSRAN_DCI_FORMAT2;
+  search_space.formats[6] = SRSRAN_DCI_FORMAT2A;
+  search_space.formats[7] = SRSRAN_DCI_FORMAT2B;
+
   search_space.nof_locations = 1;
 
   if(q->cell.nof_ports == 1){
     // if the cell has only 1 antenna, it doesn't support MIMO
-    search_space.nof_formats = 4; // JH this is the same as the max number of formats?
+    search_space.nof_formats = 5; // JH this is the same as the max number of formats?
   }else{
     search_space.nof_formats = MAX_NOF_FORMAT;
   }

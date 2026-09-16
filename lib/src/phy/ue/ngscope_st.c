@@ -28,14 +28,26 @@ int ngscope_format_to_index(srsran_dci_format_t format){
         case SRSRAN_DCI_FORMAT1A:
             return 2;
             break;
-        case SRSRAN_DCI_FORMAT1C:
+        case SRSRAN_DCI_FORMAT1B:
             return 3;
             break;
-        case SRSRAN_DCI_FORMAT2:
+        case SRSRAN_DCI_FORMAT1C:
             return 4;
             break;
+        case SRSRAN_DCI_FORMAT1D:
+            return 5;
+            break;
+        case SRSRAN_DCI_FORMAT2:
+            return 6;
+            break;
+        case SRSRAN_DCI_FORMAT2A:
+            return 7;
+            break;
+        case SRSRAN_DCI_FORMAT2B:
+            return 8;
+            break;
         default:
-            printf("Format not recegnized!\n");
+            printf("Format %d not recegnized!\n", format);
             break;
     }
     return -1;
@@ -79,7 +91,7 @@ int ngscope_rnti_inside_dci_per_sub_dl(ngscope_dci_per_sub_t* q, uint16_t target
 	if(q->nof_dl_dci > 0){
 		for(int	i=0; i<q->nof_dl_dci; i++){
 			if(q->dl_msg[i].rnti == targetRNTI){
-				return i;	
+				return i;
 			}
 		}
 	}
@@ -90,7 +102,7 @@ int ngscope_rnti_inside_dci_per_sub_ul(ngscope_dci_per_sub_t* q, uint16_t target
 	if(q->nof_ul_dci > 0){
 		for(int	i=0; i<q->nof_ul_dci; i++){
 			if(q->ul_msg[i].rnti == targetRNTI){
-				return i;	
+				return i;
 			}
 		}
 	}
@@ -109,13 +121,25 @@ srsran_dci_format_t ngscope_index_to_format(int index){
             return SRSRAN_DCI_FORMAT1A;
             break;
         case 3:
-            return SRSRAN_DCI_FORMAT1C;
+            return SRSRAN_DCI_FORMAT1B;
             break;
         case 4:
+            return SRSRAN_DCI_FORMAT1C;
+            break;
+        case 5:
+            return SRSRAN_DCI_FORMAT1D;
+            break;
+        case 6:
             return SRSRAN_DCI_FORMAT2;
             break;
+        case 7:
+            return SRSRAN_DCI_FORMAT2A;
+            break;
+        case 8:
+            return SRSRAN_DCI_FORMAT2B;
+            break;
         default:
-            printf("Format not recegnized!\n");
+            printf("Format index %d not recegnized!\n", index);
             break;
     }
     return SRSRAN_DCI_FORMAT0;
@@ -137,5 +161,3 @@ void srsran_ngscope_print_dci_per_sub(ngscope_dci_per_sub_t* q){
 
 	return;
 }
-
-

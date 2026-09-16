@@ -63,30 +63,45 @@ def _f(key, type_, default, label, help_, required=False, **extra):
 
 TOP_LEVEL = [
     _f(
-        "remote_enable", "bool", False, "Remote sink",
+        "remote_enable",
+        "bool",
+        False,
+        "Remote sink",
         "Stream decoded DCIs to remote subscribers over the network (the DCI sink server).",
     ),
     _f(
-        "decode_SIB", "bool", False, "Decode SIB",
+        "decode_SIB",
+        "bool",
+        False,
+        "Decode SIB",
         "Decode SIB1/SIB2 and write cell identity and reference signal power to "
         "cellcfg.json. Known hazard: this path can segfault on a weak cell, seemingly on a "
         "false-positive SI-RNTI grant. If a run dies inside srsran_ue_dl_find_and_decode_sib1, "
         "turn this off -- nothing else depends on it.",
     ),
     _f(
-        "decode_RAR", "bool", False, "Decode RAR",
+        "decode_RAR",
+        "bool",
+        False,
+        "Decode RAR",
         "Decode Random Access Responses (Msg2), one row per RAR in rar_log-<rf_idx>.csv. "
         "Gives the TTI at which each RNTI was assigned. Roughly +25% decode time per "
         "subframe; does not change the DCI output.",
     ),
     _f(
-        "rar_seed_tracker", "bool", False, "Seed tracker from RACH",
+        "rar_seed_tracker",
+        "bool",
+        False,
+        "Seed tracker from RACH",
         "Prime the UE tracker with each RACH-assigned RNTI so its next genuine PDCCH "
         "sighting promotes it to active instead of needing two. Measured effect on DCI "
         "yield: none.",
     ),
     _f(
-        "mark_security_phase", "bool", False, "Mark security phase",
+        "mark_security_phase",
+        "bool",
+        False,
+        "Mark security phase",
         "Label each unicast DCI pre, post or unknown relative to the UE establishing an AS "
         "security context. The boundary is observed, not inferred: NG-Scope decodes the "
         "UE's still-unciphered RRC looking for securityModeCommand, and a DCI it cannot "
@@ -101,24 +116,36 @@ TOP_LEVEL = [
         replay_only=True,
     ),
     _f(
-        "rach_filter_only", "bool", False, "RACH filter only",
+        "rach_filter_only",
+        "bool",
+        False,
+        "RACH filter only",
         "Record only DCIs whose RNTI was observed being assigned to a UE that successfully "
         "completed RACH, plus SI-RNTI/P-RNTI/RA-RNTI which never RACH. Implies decode_RAR, "
         "since the RNTI set is built from decoded RARs.",
     ),
     _f(
-        "pcap_mac", "bool", False, "MAC pcap",
+        "pcap_mac",
+        "bool",
+        False,
+        "MAC pcap",
         "Write every decoded downlink MAC PDU to mac-<rf_idx>.pcapng, readable in Wireshark "
         "once DLT_USER0 (147) is mapped to mac-lte-framed. See docs/pcap.md.",
     ),
     _f(
-        "pcap_max_mb", "int", 0, "pcap cap (MB)",
+        "pcap_max_mb",
+        "int",
+        0,
+        "pcap cap (MB)",
         "Per-file size cap in MB; 0 is unlimited. A busy 20 MHz cell can produce around a "
         "gigabyte a minute.",
         min=0,
     ),
     _f(
-        "qam_retry", "bool", True, "Test the MCS→TBS table",
+        "qam_retry",
+        "bool",
+        True,
+        "Test the MCS→TBS table",
         "When a transport block fails its CRC, rebuild the grant on the other MCS->TBS table "
         "and decode again, keeping whichever passes. The CRC is ground truth, so this measures "
         "the table instead of trusting the 256QAM setting -- and it does so per grant, which is "
@@ -129,7 +156,10 @@ TOP_LEVEL = [
         replay_only=True,
     ),
     _f(
-        "probe_blind_dci", "bool", False, "Probe blind DCIs",
+        "probe_blind_dci",
+        "bool",
+        False,
+        "Probe blind DCIs",
         "Measurement instrument, not part of a capture. Decodes a transport block for every "
         "DCI the blind search reports and records whether the DL-SCH CRC passes, split by "
         "whether the RNTI was RACH-confirmed -- a pass proves the DCI real. Pair it with "
@@ -138,7 +168,10 @@ TOP_LEVEL = [
         replay_only=True,
     ),
     _f(
-        "enable_256qam", "bool", True, "256QAM table",
+        "enable_256qam",
+        "bool",
+        True,
+        "256QAM table",
         "Use the 256QAM MCS->TBS table for C-RNTI Format1/2 grants. Only correct when the "
         "cell configures altCQI-Table-r12, which is per-UE RRC state a downlink sniffer "
         "cannot observe -- so this is a guess, and on a cell with a mix of UEs no single "
@@ -149,78 +182,132 @@ TOP_LEVEL = [
         "test, and with Test the MCS→TBS table on, a replay retries a failed transport block on "
         "the other table -- which makes this setting matter much less there.",
     ),
+    _f(
+        "exit_on_desync",
+        "int",
+        1000,
+        "Dropped frames before exit",
+        "The number of frames lost to desynchronization allowed before NG-Scope exits.",
+    ),
 ]
 
 # --------------------------------------------------------------------------- per RF device
 
 RF_DEV = [
     _f(
-        "rf_freq", "int64", 0, "Downlink frequency (Hz)",
+        "rf_freq",
+        "int64",
+        0,
+        "Downlink frequency (Hz)",
         "Downlink centre frequency in Hz. Required. Two devices may not share a frequency.",
-        required=True, min=0,
+        required=True,
+        min=0,
     ),
     _f(
-        "N_id_2", "int", -1, "N_id_2",
+        "N_id_2",
+        "int",
+        -1,
+        "N_id_2",
         "Force the PSS sequence (0-2), or -1 to search all three.",
-        min=-1, max=2,
+        min=-1,
+        max=2,
     ),
     _f(
-        "rf_args", "str", "", "RF args",
+        "rf_args",
+        "str",
+        "",
+        "RF args",
         'Passed straight to the SDR driver, e.g. "type=b200,clock_source=external".',
         maxlen=RF_ARGS_MAX_LEN,
     ),
     _f(
-        "nof_thread", "int", 4, "Decoder threads",
+        "nof_thread",
+        "int",
+        4,
+        "Decoder threads",
         "DCI decoder threads for this cell. Too few and subframes are dropped in live "
         "capture, or replay falls behind real time.",
-        min=1, max=MAX_NOF_DCI_DECODER,
+        min=1,
+        max=MAX_NOF_DCI_DECODER,
     ),
     _f(
-        "nof_rx_ant", "int", 1, "RX antennas",
+        "nof_rx_ant",
+        "int",
+        1,
+        "RX antennas",
         "Receive channels to open on this SDR. Two are required to decode transmission modes "
         "3 and 4 with two spatial layers -- with one antenna those grants cannot be separated "
         "and always fail. Needs an SDR with two coherent RX channels (B210, or an X310 with "
         "two daughterboards). No help on a 4-port cell, where srsRAN cannot predecode spatial "
         "multiplexing at all.",
-        min=1, max=4,
+        min=1,
+        max=4,
         # The recorder writes channel 0 only and rx_frame_header_t has no channel count, so
         # ngscope refuses nof_rx_ant > 1 with mode=1 rather than silently losing a channel.
-        mode_locked={MODE_RECORD: 1},
+        # mode_locked={MODE_RECORD: 1},
     ),
     _f(
-        "mode", "mode", MODE_NORMAL, "Mode",
+        "mode",
+        "mode",
+        MODE_NORMAL,
+        "Mode",
         "Normal decodes live. Record captures IQ to disk alongside the run. Replay reads "
         "IQ back from a file.",
     ),
     _f(
-        "replay_fname", "path", "", "Replay file",
+        "replay_fname",
+        "path",
+        "",
+        "Replay file",
         "Source IQ file for Replay mode. Ignored otherwise: recording always writes to "
         "<out_dir>/<timestamp>/recorded-samples.bin.",
     ),
     _f(
-        "decode_pdcch", "bool", True, "Decode PDCCH",
+        "decode_pdcch",
+        "bool",
+        True,
+        "Decode PDCCH",
         "Decode the control channel. Off synchronises and records without decoding, "
         "which is what you want for a pure IQ capture.",
     ),
     _f("log_dl", "bool", True, "Log downlink", "Write the downlink .dciLog file."),
     _f("log_ul", "bool", True, "Log uplink", "Write the uplink .dciLog file."),
     _f(
-        "log_phich", "bool", False, "Log PHICH",
+        "log_phich",
+        "bool",
+        False,
+        "Log PHICH",
         "No longer supported: ngscope forces it off. PHICH decoding followed the one "
         "configured target RNTI, and that setting is gone.",
         unsupported=True,
     ),
     _f(
-        "disable_plot", "bool", True, "Disable plot",
+        "disable_plot",
+        "bool",
+        True,
+        "Disable plot",
         "Disable the GUI plot for this cell. Only meaningful in builds with ENABLE_GUI.",
     ),
     _f(
-        "debug", "bool", False, "Debug tracing",
+        "debug",
+        "bool",
+        False,
+        "Debug tracing",
         "Verbose per-subframe tracing. Thousands of lines per second.",
     ),
     _f(
-        "silent", "bool", False, "Silent",
+        "silent",
+        "bool",
+        False,
+        "Silent",
         "Suppress the per-subframe summary lines.",
+    ),
+    _f(
+        "use_replay_hdr",
+        "bool",
+        True,
+        "Use Replay Header",
+        "Configure NG-Scope from the header in the recorded file.",
     ),
 ]
 
@@ -228,7 +315,10 @@ RF_DEV = [
 
 LOG = [
     _f(
-        "log_interval", "int", -1, "Log rotation (s)",
+        "log_interval",
+        "int",
+        -1,
+        "Log rotation (s)",
         "Seconds between log file rotations; each rotation opens a new timestamped file. "
         "-1 or 0 disables rotation.",
         min=-1,
@@ -245,7 +335,7 @@ def defaults_for(fields):
 # so reopening the app returns to the same view. config_io only emits schema keys, so
 # these are dropped on the way out by construction.
 GUI_CELL_EXTRAS = {
-    "gui_freq_mode": "hz",   # "hz" | "earfcn"
+    "gui_freq_mode": "hz",  # "hz" | "earfcn"
     "gui_earfcn": "",
 }
 

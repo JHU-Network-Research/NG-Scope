@@ -48,6 +48,7 @@ ngscope_mode_t  mode       = NORMAL;
 // static struct timespec last_rx_time  = {0, 0};
 static FILE*    replay_fh  = NULL;  // used only for REPLAY
 // static FILE*    outfp = NULL;
+static uint32_t sdr_nof_ports = SRSRAN_MAX_PORTS;
 
 static uint64_t         last_replay_ts_full = 0;
 static double           last_replay_ts_frac = 0.0;
@@ -60,15 +61,22 @@ bool __attribute__((weak)) go_exit = false;
 bool __attribute__((weak)) debug = false;
 
 
-bool init_record(const char* path, uint32_t buf_size_gb)
+bool init_record(const char* path, uint32_t buf_size_gb, uint32_t nof_ports, double rf_freq)
 {
   record_path = path;
   mode = RECORD;
+  sdr_nof_ports = nof_ports;
   uint64_t buf_size = (uint64_t) ONE_GB*buf_size_gb;
   if (debug)
     printf("FLUSH: ONE_GB: %d, requested capacity GB: %d, TOTAL SIZE: %ld\n", ONE_GB, buf_size_gb, buf_size);
 
   record_ring_buffer_init(&record_buf, buf_size, path);
+
+  rx_record_header_t hdr;
+  hdr.nof_rx_antenna = nof_ports;
+  hdr.rf_freq = rf_freq;
+
+  record_ring_buffer_insert(&record_buf, &hdr, sizeof(hdr));
 
 //   outfp = fopen(path, "wb");
 
@@ -165,7 +173,7 @@ static bool replay_ends_with(const char* s, const char* suffix)
     return ls >= lx && strcasecmp(s + ls - lx, suffix) == 0;
 }
 
-bool init_replay(const char* path)
+bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
 {
     replay_path     = path;
     mode            = REPLAY;
@@ -210,33 +218,61 @@ bool init_replay(const char* path)
             fprintf(stderr, "REPLAY: ERROR: cannot open %s: %s\n", path, strerror(errno));
             return false;
         }
-        return true;
-    }
 
-    /* Single-quote the path and escape any embedded quote, so a filename with a space or a
-     * shell metacharacter cannot turn into a command. */
-    char quoted[2048];
-    size_t q = 0;
-    quoted[q++] = '\'';
-    for (const char* c = path; *c != '\0' && q + 4 < sizeof(quoted); c++) {
-        if (*c == '\'') {
-            q += (size_t)snprintf(quoted + q, sizeof(quoted) - q, "'\\''");
-        } else {
-            quoted[q++] = *c;
+    }else {
+        /* Single-quote the path and escape any embedded quote, so a filename with a space or a
+         * shell metacharacter cannot turn into a command. */
+        char quoted[2048];
+        size_t q = 0;
+        quoted[q++] = '\'';
+        for (const char* c = path; *c != '\0' && q + 4 < sizeof(quoted); c++) {
+            if (*c == '\'') {
+                q += (size_t)snprintf(quoted + q, sizeof(quoted) - q, "'\\''");
+            } else {
+                quoted[q++] = *c;
+            }
         }
-    }
-    quoted[q++] = '\'';
-    quoted[q]   = '\0';
+        quoted[q++] = '\'';
+        quoted[q]   = '\0';
 
-    char argv[2304];
-    snprintf(argv, sizeof(argv), "%s -dc -- %s", cmd, quoted);
-    replay_fh = popen(argv, "r");
-    if (replay_fh == NULL) {
-        fprintf(stderr, "REPLAY: ERROR: cannot start '%s': %s\n", argv, strerror(errno));
-        return false;
+        char argv[2304];
+        snprintf(argv, sizeof(argv), "%s -dc -- %s", cmd, quoted);
+        replay_fh = popen(argv, "r");
+        if (replay_fh == NULL) {
+            fprintf(stderr, "REPLAY: ERROR: cannot start '%s': %s\n", argv, strerror(errno));
+            return false;
+        }
+        replay_is_pipe = true;
+        printf("REPLAY: decompressing %s through %s\n", path, cmd);
     }
-    replay_is_pipe = true;
-    printf("REPLAY: decompressing %s through %s\n", path, cmd);
+
+    if (hdr != NULL){
+
+        int n = fread(hdr, sizeof(rx_record_header_t), 1, replay_fh);
+
+        printf("Read replay header with result %d\n", n);
+        printf("\tnof_rx_antenna:\t%d\n", hdr->nof_rx_antenna);
+        printf("\trf_freq:\t%f\n",hdr->rf_freq);
+
+        if (n != 1){
+            if (n < 1)
+                fprintf(stderr, "ERROR: cannot read record file header\n");
+            else if (n > 1)
+                fprintf(stderr, "ERROR: read too large for recording header: %d", n);
+            return false;
+        }
+
+        if (hdr->nof_rx_antenna < 1 || hdr->nof_rx_antenna > SRSRAN_MAX_PORTS){
+            fprintf(stderr, "ERROR: Invalid # rx antenna: %d", hdr->nof_rx_antenna);
+            return false;
+        }
+
+        sdr_nof_ports = hdr->nof_rx_antenna;
+    }else{
+        sdr_nof_ports = nof_ports;
+    }
+
+
     return true;
 }
 
@@ -275,9 +311,9 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             printf("DEBUG: Error, timestamp passed to recv samples is NULL\n");
         return 0;
     }
-    
+
     // fprintf(stdout, "[AGC] retrieving normal sample\n");
-    
+
     DEBUG(" ----  Receive %d samples  ----", nsamples);
     void* ptr[SRSRAN_MAX_PORTS];
     for (int i = 0; i < SRSRAN_MAX_PORTS; i++) {
@@ -297,8 +333,8 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         }
 
         if (n < 0) {
-            // if (debug)
-            fprintf(stderr, "Error retrieving samples: recv returned %d\n", n);
+            if (debug)
+                fprintf(stderr, "Error retrieving samples: recv returned %d\n", n);
             return n;
         }
         if (mode == RECORD){
@@ -316,9 +352,13 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
 
 
             record_ring_buffer_insert(&record_buf, &hdr, sizeof(hdr));
-            record_ring_buffer_insert(&record_buf, ptr[0], sizeof(cf_t)*n);
             nrecorded += (sizeof(hdr));
-            nrecorded += (sizeof(cf_t)*n);
+            for (int i = 0; i < sdr_nof_ports; i++){
+                record_ring_buffer_insert(&record_buf, ptr[i], sizeof(cf_t)*n);
+                nrecorded += (sizeof(cf_t)*n);
+            }
+
+
             if (debug)
                 printf("RECORD: Written %ld bytes to the buffer\n", nrecorded);
 
@@ -358,6 +398,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
                 return 0;
             }
         }
+
         nreplayed += (n*sizeof(rx_frame_header_t));
 
         srsran_timestamp_init(t, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
@@ -365,13 +406,13 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
 
         if (debug)
             printf("REPLAY: read header: nof_samples=%ld, sec=%ld, nsec=%f\n", hdr.nof_samples, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
-        
+
         /* Both bail-outs below have already consumed the frame header, so the payload has to
          * be skipped as well -- otherwise the next header read lands in the middle of the IQ
          * samples and the stream never recovers. */
         if (hdr.nof_samples != nsamples){
             if (debug)
-                printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
+                fprintf(stderr,"REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
             replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
             return 0;
         }
@@ -382,7 +423,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
             return 0;
         }
-        
+
         if (last_replay_return.tv_sec == 0){
             struct timespec current;
             clock_gettime(CLOCK_MONOTONIC, &current);
@@ -397,12 +438,10 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         if (debug)
             printf("REPLAY: last_replay_return: %ld.%ld, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, recorded_delta);
 
-        // printf("DEBUG: last_replay_return: %ld.%ld\n", last_replay_return.tv_sec, last_replay_return.tv_nsec);
         do {
           clock_gettime(CLOCK_MONOTONIC, &spin_now);
           system_elapsed = (spin_now.tv_sec  - last_replay_return.tv_sec)
                          + (spin_now.tv_nsec - last_replay_return.tv_nsec) * 1e-9;
-        //   printf("DEBUG: last_replay_return: %ld.%ld, system elapsed: %ld.%ld, elapsed: %.3f, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, spin_now.tv_sec, spin_now.tv_nsec, system_elapsed, recorded_delta);
         } while (system_elapsed < recorded_delta);
 
         if (debug)
@@ -416,239 +455,43 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         t->full_secs = hdr.timestamp_full_secs;
         t->frac_secs = hdr.timestamp_frac_secs;
 
-        if (debug)
-            printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
-        n = replay_fread(replay_buf, sizeof(cf_t), hdr.nof_samples);
-        nreplayed += (n*sizeof(cf_t));
-        if (debug)
-            printf("Read %ld bytes from file!\n", nreplayed);
-        if (n <= 0){
-            if (debug)
-                printf("REPLAY: replay returned %d when reading header, EOF=%d\n", n, feof(replay_fh));
-            if (feof(replay_fh)){
-                if (debug)
-                    printf("REPLAY: reached end of replay file\n");
-                sleep(1); // let decoding finish
-                raise(SIGINT);
-                return 0;
-            }
-        }
+        for (uint32_t i = 0; i < sdr_nof_ports; i++){
 
-        if (n != hdr.nof_samples) 
-            printf("REPLAY: ERROR: Read %d samples but expected %ld\n", n, hdr.nof_samples);
-        else
             if (debug)
-                printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
-        memcpy(ptr[0], replay_buf, n*sizeof(cf_t));
-        if (debug)
-            printf("REPLAY: Copied %d samples to ptr\n", n);
-        memset(replay_buf, 0, sizeof(replay_buf));
+                printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
+            n = replay_fread(replay_buf, sizeof(cf_t), hdr.nof_samples);
+            nreplayed += (n*sizeof(cf_t));
+            if (debug)
+                printf("Read %ld bytes from file!\n", nreplayed);
+            if (n <= 0){
+                if (debug)
+                    printf("REPLAY: replay returned %d when reading header, EOF=%d\n", n, feof(replay_fh));
+                if (feof(replay_fh)){
+                    if (debug)
+                        printf("REPLAY: reached end of replay file\n");
+                    sleep(1); // let decoding finish
+                    raise(SIGINT);
+                    return 0;
+                }
+            }
+
+            if (n != hdr.nof_samples)
+                printf("REPLAY: ERROR: Read %d samples but expected %ld\n", n, hdr.nof_samples);
+            else
+                if (debug)
+                    printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
+            // if (i == 0) // JH TODO: This is for testing the difference between 1 and 2 channels on the same recording. We skip channels >=1 to simulate only having data from channel 0.
+            memcpy(ptr[i], replay_buf, n*sizeof(cf_t));
+            if (debug)
+                printf("REPLAY: Copied %d samples to ptr channel %d\n", n, i);
+            memset(replay_buf, 0, sizeof(replay_buf));
+        }
         clock_gettime(CLOCK_MONOTONIC, &last_replay_return);
     }
     if (debug)
         printf("DEBUG: returning %d samples\n", n);
     if (debug)
-    
-        printf("FRAME %lu: mode=%d nsamples=%d n=%d\n", frame_count, mode, nsamples, n);
-    frame_count++;
-    return n;
-}
 
-int ngscope_recv_samples_wrapper_agc(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t, srsran_agc_t *agc){
-
-    // int nof_channels = 1;
-    if (debug)
-        printf("DEBUG: ngscope_rx receive %d samples\n", nsamples);
-    if (!t){
-        if(debug)
-            printf("DEBUG: Error, timestamp passed to recv samples is NULL\n");
-        return 0;
-    }
-
-    // fprintf(stdout, "[AGC] retrieving AGC sample\n");
-    
-    
-    DEBUG(" ----  Receive %d samples  ----", nsamples);
-    void* ptr[SRSRAN_MAX_PORTS];
-    for (int i = 0; i < SRSRAN_MAX_PORTS; i++) {
-        ptr[i] = data_[i];
-    }
-    int n = 0;
-    if (mode == NORMAL || mode == RECORD){
-        if (debug)
-            printf("DEBUG: MODE is normal or record\n");
-        n = srsran_rf_recv_with_time_multi(h, ptr, nsamples, true, &t->full_secs, &t->frac_secs);
-        // return n;
-        if (debug)
-            printf("DEBUG: got %d samples\n", n);
-        if (n != nsamples){
-            if (debug)
-                printf("DEBUG: Got mismatch in number of samples: actual=%d, expected=%d\n", n, nsamples);
-        }
-
-        if (n < 0) {
-            // if (debug)
-            fprintf(stderr, "Error retrieving samples: recv returned %d\n", n);
-            return n;
-        }
-        if (mode == RECORD){
-            if (debug)
-                printf("DEBUG: Recording %d samples\n", n);
-
-            rx_frame_header_t hdr;
-            memset(&hdr,0,sizeof(rx_frame_header_t));
-            hdr.nof_samples         = nsamples;
-            hdr.timestamp_full_secs = (uint64_t) t->full_secs;
-            hdr.timestamp_frac_secs = t->frac_secs;
-            if (debug)
-                printf("DEBUG: size of hdr: %ld, size of uint32_t: %ld, size of uint64_t: %ld, size of double: %ld\n", sizeof(rx_frame_header_t), sizeof(uint32_t), sizeof(uint64_t), sizeof(double));
-            // uint64_t frame_size = sizeof(hdr) + hdr.nof_samples * sizeof(cf_t);
-
-
-            cf_t *agc_buf = (cf_t*) malloc(sizeof(cf_t)*n);
-            if (agc){
-                // fprintf(stdout, "[AGC] Applying agc to samples at TTI=%d%d, current_gain=%.02f!\n", q->frame_number, q->sf_idx, q->agc.gain_db);
-                // fprintf(stdout, "[AGC 3] applying agc to recorded sample\n");
-                srsran_agc_process(agc, agc_buf, n);
-                // fprintf(stdout, "[AGC] Done applying agc to recorded sample\n");
-            }
-
-
-            record_ring_buffer_insert(&record_buf, &hdr, sizeof(hdr));
-            record_ring_buffer_insert(&record_buf, agc_buf, sizeof(cf_t)*n);
-            free(agc_buf);
-            nrecorded += (sizeof(hdr));
-            nrecorded += (sizeof(cf_t)*n);
-            if (debug)
-                printf("RECORD: Written %ld bytes to the buffer\n", nrecorded);
-
-            if (debug)
-                printf("Done recording %d samples\n", n);
-        }
-    }else if (mode == REPLAY){
-
-        if (!replay_fh){
-            fprintf(stderr, "ERROR: replay file is not open. Please ensure the file exists and is readable\n");
-        }
-
-        if (feof(replay_fh)){
-            if (debug)
-                printf("REPLAY: reached end of replay file\n");
-            sleep(1); // let decoding finish
-            raise(SIGINT);
-            return 0;
-        }
-
-        if (debug)
-            printf("REPLAY: Replaying samples\n");
-        rx_frame_header_t hdr;
-        n = fread(&hdr, sizeof(rx_frame_header_t), 1, replay_fh);
-        if (n != 1){
-            if (debug)
-                printf("REPLAY: error: short read loading header, read %d items instead of 1\n", n);
-        }
-        if (n <= 0){
-            if (debug)
-                printf("REPLAY: replay returned %d when reading header\n", n);
-            if (feof(replay_fh)){
-                // if (debug)
-                printf("REPLAY: reached end of replay file\n");
-                sleep(1); // let decoding finish
-                raise(SIGINT);
-                return 0;
-            }
-        }
-        nreplayed += (n*sizeof(rx_frame_header_t));
-
-        srsran_timestamp_init(t, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
-
-
-        if (debug)
-            printf("REPLAY: read header: nof_samples=%ld, sec=%ld, nsec=%f\n", hdr.nof_samples, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
-        
-        /* Both bail-outs below have already consumed the frame header, so the payload has to
-         * be skipped as well -- otherwise the next header read lands in the middle of the IQ
-         * samples and the stream never recovers. */
-        if (hdr.nof_samples != nsamples){
-            if (debug)
-                printf("REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
-            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
-            return 0;
-        }
-
-        if (hdr.nof_samples > REPLAY_BUF_NOF_SAMPLES){
-            fprintf(stderr, "REPLAY: ERROR: frame of %ld samples exceeds the %d sample replay buffer, skipping\n",
-                    hdr.nof_samples, REPLAY_BUF_NOF_SAMPLES);
-            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
-            return 0;
-        }
-        
-        if (last_replay_return.tv_sec == 0){
-            struct timespec current;
-            clock_gettime(CLOCK_MONOTONIC, &current);
-            last_replay_return.tv_sec = current.tv_sec;
-            last_replay_return.tv_nsec = current.tv_nsec;
-        }
-
-        double recorded_delta = (double)(hdr.timestamp_full_secs - last_replay_ts_full)+ (hdr.timestamp_frac_secs - last_replay_ts_frac);
-        struct timespec spin_now;
-        double system_elapsed;
-
-        if (debug)
-            printf("REPLAY: last_replay_return: %ld.%ld, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, recorded_delta);
-
-        // printf("DEBUG: last_replay_return: %ld.%ld\n", last_replay_return.tv_sec, last_replay_return.tv_nsec);
-        do {
-          clock_gettime(CLOCK_MONOTONIC, &spin_now);
-          system_elapsed = (spin_now.tv_sec  - last_replay_return.tv_sec)
-                         + (spin_now.tv_nsec - last_replay_return.tv_nsec) * 1e-9;
-        //   printf("DEBUG: last_replay_return: %ld.%ld, system elapsed: %ld.%ld, elapsed: %.3f, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, spin_now.tv_sec, spin_now.tv_nsec, system_elapsed, recorded_delta);
-        } while (system_elapsed < recorded_delta);
-
-        if (debug)
-            printf("REPLAY: Done waiting\n");
-
-
-        last_replay_ts_full  = hdr.timestamp_full_secs;
-        last_replay_ts_frac  = hdr.timestamp_frac_secs;
-
-
-        t->full_secs = hdr.timestamp_full_secs;
-        t->frac_secs = hdr.timestamp_frac_secs;
-
-        if (debug)
-            printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
-        n = replay_fread(replay_buf, sizeof(cf_t), hdr.nof_samples);
-        nreplayed += (n*sizeof(cf_t));
-        if (debug)
-            printf("Read %ld bytes from file!\n", nreplayed);
-        if (n <= 0){
-            if (debug)
-                printf("REPLAY: replay returned %d when reading header, EOF=%d\n", n, feof(replay_fh));
-            if (feof(replay_fh)){
-                if (debug)
-                    printf("REPLAY: reached end of replay file\n");
-                sleep(1); // let decoding finish
-                raise(SIGINT);
-                return 0;
-            }
-        }
-
-        if (n != hdr.nof_samples) 
-            printf("REPLAY: ERROR: Read %d samples but expected %ld\n", n, hdr.nof_samples);
-        else
-            if (debug)
-                printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
-        memcpy(ptr[0], replay_buf, n*sizeof(cf_t));
-        if (debug)
-            printf("REPLAY: Copied %d samples to ptr\n", n);
-        memset(replay_buf, 0, sizeof(replay_buf));
-        clock_gettime(CLOCK_MONOTONIC, &last_replay_return);
-    }
-    if (debug)
-        printf("DEBUG: returning %d samples\n", n);
-    if (debug)
-    
         printf("FRAME %lu: mode=%d nsamples=%d n=%d\n", frame_count, mode, nsamples, n);
     frame_count++;
     return n;

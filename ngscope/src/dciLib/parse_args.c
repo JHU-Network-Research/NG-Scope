@@ -21,6 +21,7 @@ void args_default(prog_args_t* args)
   args->tdd_special_sf                     = 2;
   args->sf_config                          = 2;
   args->mode                               = 0;
+  args->use_replay_hdr                     = true;
   args->input_file_name                    = NULL;
   args->output_file_name                   = NULL;
   args->disable_cfo                        = false;
@@ -32,7 +33,7 @@ void args_default(prog_args_t* args)
   args->file_offset_freq                   = 0;
   args->rf_dev                             = (char*)"";
   args->rf_args                            = (char*)"";
-  args->rf_index                           = 0; 
+  args->rf_index                           = 0;
   args->rf_freq                            = 2.355e9;
   args->rf_nof_rx_ant                      = 1;
   args->remote_enable                      = false;
@@ -40,7 +41,7 @@ void args_default(prog_args_t* args)
   args->decode_RAR                   	   = false;
   args->rar_seed_tracker             	   = false;
   args->rach_filter_only             	   = false;
-
+  args->exit_on_desync                     = 1000;
   args->enable_cfo_ref                     = false;
   args->estimator_alg                      = (char*)"interpolate";
   args->enable_256qam                      = true;
@@ -84,7 +85,7 @@ void usage(prog_args_t* args, char* prog)
   printf("\t-P nof_ports for input file [Default %d]\n", args->file_nof_ports);
   printf("\t-c cell_id for input file [Default %d]\n", args->file_cell_id);
   printf("\t-l Force N_id_2 [Default best]\n");
-  printf("\t-C Disable CFO correction [Default %s]\n", args->disable_cfo ? "Disabled" : "Enabled"); 
+  printf("\t-C Disable CFO correction [Default %s]\n", args->disable_cfo ? "Disabled" : "Enabled");
   printf("\t-F Enable RS-based CFO correction [Default %s]\n", !args->enable_cfo_ref ? "Disabled" : "Enabled");
   printf("\t-R Channel estimates algorithm (average, interpolate, wiener) [Default %s]\n", args->estimator_alg);
   printf("\t-t Add time offset [Default %d]\n", args->time_offset);
@@ -108,5 +109,3 @@ void usage(prog_args_t* args, char* prog)
   printf("\t-Q Use standard LTE sample rates (default %s)\n", args->use_standard_lte_rate ? "enabled" : "disabled");
   printf("\t-v [set srsran_verbose to debug, default none]\n");
 }
-
-

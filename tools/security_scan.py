@@ -75,6 +75,8 @@ RRC_FIELDS = [
     ("lte-rrc.rrcConnectionReestablishmentReject_element","rrcConnectionReestablishmentReject","refused"),
     ("lte-rrc.rrcConnectionSetup_element",               "rrcConnectionSetup",               "progress"),
     ("lte-rrc.rrcConnectionRelease_element",             "rrcConnectionRelease",             "released"),
+    ("lte-rrc.rrcConnectionReconfiguration_element",     "rrcConnectionReconfiguration",     "reconfiguring"),
+    ("lte-rrc.rrcConnectionReconfigurationComplete_element",     "rrcConnectionReconfiguration",     "reconfigured")
 ]
 
 # nas-eps.nas_msg_emm_type comes out as hex. A decimal map silently reports zero of

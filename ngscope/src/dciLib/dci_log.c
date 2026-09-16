@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <stdint.h>
 
+#include "srsran/srsran.h"
+
 #include "ngscope/hdr/dciLib/dci_log.h"
 #include "ngscope/hdr/dciLib/cell_status.h"
 #include "ngscope/hdr/dciLib/socket.h"
@@ -68,6 +70,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 			 * placed relative to a security context here. tools/security_phase_join.py
 			 * fills the field in from the offline scan of the MAC pcap. */
 			fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
+			fprintf(fd_dl,"\"format\": \"%s\",\n",srsran_dci_format_string(q->dl_msg[i].format));
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", q->cell_dl_prb);
@@ -79,7 +82,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 			fprintf(fd_dl,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
 			fprintf(fd_dl,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-
+			fprintf(fd_dl,"\"nof_tb\": \"%d\",\n",q->dl_msg[i].nof_tb);
 
 			// TB1 related information
 			fprintf(fd_dl,"\"TB1_mcs\": \"%d\",\n", q->dl_msg[i].tb[0].mcs);
@@ -118,6 +121,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 		fprintf(fd_dl,"\"rnti\": \"%d\",\n", 0);
 		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
 		fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
+		fprintf(fd_dl,"\"format\": \"\",\n");
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", 0);
@@ -129,7 +133,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 		fprintf(fd_dl,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
 		fprintf(fd_dl,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-
+		fprintf(fd_dl,"\"nof_tb\": \"%d\",\n",0);
 
 		// TB1 related information
 		fprintf(fd_dl,"\"TB1_mcs\": \"%d\",\n", 0);
@@ -234,6 +238,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 			fprintf(fd_ul,"\"tti\": \"%d\",\n", q->tti);
 			fprintf(fd_ul,"\"rnti\": \"%d\",\n", q->ul_msg[i].rnti);
 			fprintf(fd_ul,"\"security_phase\": \"unknown\",\n");
+			fprintf(fd_ul,"\"format\": \"%s\",\n",srsran_dci_format_string(q->ul_msg[i].format));
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", q->cell_ul_prb);
@@ -244,7 +249,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 			fprintf(fd_ul,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
 			fprintf(fd_ul,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-
+			fprintf(fd_ul,"\"nof_tb\": \"%d\",\n",q->ul_msg[i].nof_tb);
 
 			// TB1 related information
 			fprintf(fd_ul,"\"TB1_mcs\": \"%d\",\n", q->ul_msg[i].tb[0].mcs);
@@ -283,6 +288,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 		fprintf(fd_ul,"\"rnti\": \"%d\",\n", 0);
 		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
 		fprintf(fd_ul,"\"security_phase\": \"unknown\",\n");
+		fprintf(fd_ul,"\"format\": \"\",\n");
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", 0);
@@ -293,7 +299,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 		fprintf(fd_ul,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
 		fprintf(fd_ul,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-
+		fprintf(fd_ul,"\"nof_tb\": \"%d\",\n",0);
 
 		// TB1 related information
 		fprintf(fd_ul,"\"TB1_mcs\": \"%d\",\n", 0);
