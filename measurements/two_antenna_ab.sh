@@ -63,6 +63,14 @@ if ! timeout 60 uhd_find_devices 2>&1 | grep -qiE "B210|B200|type: b200"; then
     exit 1
 fi
 
+# Look before spending the disk. See measurements/lib_precheck.sh for why this is not
+# redundant with the record run's own cell search.
+. /home/amarder/NG-Scope/measurements/lib_precheck.sh
+say "pre-check: is 5330 receivable right now?"
+if ! precheck "$RF_FREQ" 180 "$OUT/precheck"; then
+    exit 1
+fi
+
 # ---------------------------------------------------------------- 1. record
 REC="$OUT/record"
 mkdir -p "$REC"
