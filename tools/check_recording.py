@@ -18,6 +18,14 @@ ue_sync failing on roughly 76% of subframes.
 
 So check the file, not the yield. Run it on every capture before trusting one.
 
+It checks two independent things, and a capture can fail either:
+
+  continuity     were samples lost between the antenna and the file?
+  replayability  does the file still open with the cell-search phase replay needs?
+
+The second exists because the first is not sufficient, and saying so cost a 91 GB capture:
+this tool once passed a recording as USABLE at 1.79% loss that no replay could open at all.
+
 Usage: tools/check_recording.py <recorded-samples.bin> [--max-frames N]
 """
 import argparse
@@ -147,6 +155,13 @@ def main():
     # problem would produce, because recorder loss is spread across the whole capture rather
     # than confined to its first moments.
     ACQUIRE_FRAMES = 1000        # 1 s, at one subframe per frame
+
+    # Everything before the stream settled, and how much of it was at a LOWER rate than the
+    # cell's. That is the cell-search phase, and replay cannot do without it -- see the
+    # replayability check below.
+    preamble = frame_sizes[:settle_idx]
+    lower_rate_frames = sum(1 for sz in preamble if sz < dominant - 4)
+
     settle_idx += ACQUIRE_FRAMES
 
     # Pass 2: continuity, but only where the stream is actually streaming.
@@ -207,10 +222,47 @@ def main():
           "tracked radio time")
     print(f"settled at: frame {settle_idx} (cell search, retune and 1 s of acquisition "
           "precede it)")
+    print(f"preamble  : {len(preamble)} frames before the stream settled, "
+          f"{lower_rate_frames} of them at a lower rate")
     top = sorted(sizes.items(), key=lambda kv: -kv[1])[:4]
     print("frame size: " + ", ".join(f"{k} samples x{v}" for k, v in top))
 
     print()
+
+    # Replayability, which is a different question from continuity.
+    #
+    # A recording opens with cell search at ~1.92 Msps, and only retunes to the cell's rate
+    # once it has found one. Replay repeats that search on the file -- and on a file, setting
+    # the sample rate is a no-op, so the search reads whatever the recording starts with and
+    # believes it is at the search rate. A capture that begins at the cell rate therefore
+    # fails PSS correlation and reports "Could not find any cell in this frequency", which is
+    # indistinguishable from a bad recording.
+    #
+    # This tool learned that the hard way: it passed such a capture as USABLE at 1.79% loss,
+    # because by its own measure it was -- the samples present were contiguous and correctly
+    # timestamped. It had no way to know the file was missing a preamble the replay path
+    # depends on. Hence this check.
+    #
+    # Calibration, five captures known to replay: 42, 45, 85, 576 and 581 lower-rate frames.
+    # The one that failed had 0. Anything between 0 and 42 is untested, so it is flagged
+    # rather than judged.
+    if lower_rate_frames == 0:
+        print("NOT REPLAYABLE: the file starts at the cell's own sample rate, with no "
+              "cell-search")
+        print("phase ahead of it. Replay runs its own cell search over these samples and will")
+        print("report \"Could not find any cell in this frequency\" -- which looks like a bad")
+        print("capture rather than a missing preamble.")
+        print()
+        print("The samples themselves may be perfectly good; what is missing is the opening.")
+        print("Re-record with a build that writes from the moment the radio opens.")
+        return 2
+    if lower_rate_frames < 42:
+        print(f"REPLAYABILITY UNTESTED: only {lower_rate_frames} cell-search frames ahead of "
+              "the stream.")
+        print("Every capture known to replay here opened with at least 42. Fewer may still "
+              "work;")
+        print("nothing has measured it. Try the replay before trusting this capture.")
+
     if steady_frames < 2:
         print("INCONCLUSIVE: the capture never settled at a steady frame size, so continuity")
         print("could not be checked. Usually means cell search never completed.")
