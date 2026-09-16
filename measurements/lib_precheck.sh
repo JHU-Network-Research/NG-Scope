@@ -71,8 +71,12 @@ TOML
         echo "PRE-CHECK: recording will be classifiable as contention-free."
     rar=$(ls "$dir"/ngscope_out/*/rar_log-0.csv 2>/dev/null | head -1)
     if [ -n "$rar" ]; then
-        echo "PRE-CHECK: $(( $(wc -l < "$rar") - 1 )) RARs in ${secs}s live -- if this is 0 the"
-        echo "PRE-CHECK: cell is idle and a recording of it will measure nothing."
+        local n=$(( $(wc -l < "$rar") - 1 ))
+        echo "PRE-CHECK: $n RARs in ${secs}s live"
+        # Only when it is actually true. A caveat printed unconditionally reads as a verdict
+        # once it is quoted out of context, and "cell is idle" next to 60 RARs is worse than
+        # saying nothing.
+        [ "$n" -eq 0 ] && echo "PRE-CHECK: the cell is idle -- a recording of it will measure nothing."
     fi
     return 0
 }
