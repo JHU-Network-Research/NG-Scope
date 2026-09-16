@@ -351,6 +351,15 @@ mt_airy02/5110 at `nof_rx_ant = 1`); only TM3's two-layer CDD strictly requires 
 pre-security traffic. `cell_type.json` records `nof_ports` and `nof_rx_ant`, and the security
 teardown line states both alongside the scheme mix.
 
+**A reference capture where handover is observable.** `~/ngscope-data/try_b12_739` (EARFCN
+5110, 739.0 MHz, PCI 223, 50 PRB, 4 ports, two channels, 240 s, 0.8% sample loss) is the only
+capture here whose cell reserves dedicated RACH preambles, so it is the only one where
+`rach_type` can come back `contention_free`. Results: 53 RARs, 18 established = 34.0% (40.0%
+of those with decoded traffic), 36 further UEs confirmed by DL-SCH CRC with no RAR, of which
+4 `reused`. 21 SecurityModeCommands, 9 RRCConnectionResume, 2 Reestablishment. Gates clean:
+RAR cross-check 53/53 identical, 0 comment-vs-dissection mismatches, splice verified over 723
+frames.
+
 **What a second antenna is actually worth, measured.** `measurements/two_antenna_ab.sh`
 records one two-channel capture and replays *the same bytes* at `nof_rx_ant = 1` and `2`, so
 the only variable is the receiver. On EARFCN 5330 (PCI 223, 50 PRB, 4 ports), 193 s:

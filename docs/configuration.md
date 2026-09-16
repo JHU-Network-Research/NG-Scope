@@ -693,9 +693,22 @@ would make the strongest signal here the least trustworthy one.
 
 **Handover is often invisible even when it happens.** A cell that sets
 `numberOfRA-Preambles = 64` reserves none, so an inbound UE RACHes contention-based and looks
-exactly like a new connection -- both cells measured here do that. Without SIB2 the boundary
-is unknown and no RAR can be classified at all. Expect `handover_in = 0` on most captures;
-that means "not observable", not "none happened".
+exactly like a new connection. Without SIB2 the boundary is unknown and no RAR can be
+classified at all. So `handover_in = 0` usually means "not observable", not "none happened",
+and the summary says which of the two it is rather than printing a bare zero.
+
+Three cells measured, and only one of them can answer the question at all:
+
+| cell | `numberOfRA-Preambles` | what a zero means there |
+|---|---|---|
+| att_850_office (PCI 265, 4 ports) | 64 | unobservable -- no preamble is reserved |
+| 763.0 MHz / EARFCN 5330 (PCI 223, 4 ports) | 64 | unobservable -- same |
+| **739.0 MHz / EARFCN 5110 (PCI 223, 4 ports)** | **52** | **measured** -- 12 reserved, none used |
+
+On that last one, 240 s and 53 RARs: every RAPID fell in 0..51 and **not one reached 52**. The
+observed distribution stopping exactly one below the SIB2 boundary is also the best available
+check that the boundary is being read correctly. `handover_in = 0` there is the `none` value
+-- watched and saw nothing -- not the `unknown` one.
 
 The `rach_type` column carries the evidence the call was made from:
 
