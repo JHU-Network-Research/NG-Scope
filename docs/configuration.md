@@ -608,6 +608,24 @@ one channel payload per configured antenna, so a mismatch landed the next frame-
 inside the IQ samples and the stream never resynchronised. It surfaced as `Could not find any
 cell in this frequency`, which reads as weak signal.
 
+## `decode_SIB` defaults on in replay
+
+SIB2 carries `rach-ConfigCommon`, and that is the only source of the contention-based preamble
+boundary. Without it `security_scan.py` cannot classify a single RACH and every UE's
+provenance degrades to `unknown` -- silently, because the output still looks complete, it just
+stops saying anything. So replay turns `decode_SIB` on unless the config says otherwise.
+
+Live and record keep it **off** by default: there it competes with the receive path, and a
+capture taken while decoding has holes in it (see the next section). In replay the stream
+blocks rather than drops, which is the one place the cost is affordable.
+
+An explicit `decode_SIB = false` always wins, and that escape hatch is load-bearing:
+`srsran_ue_dl_find_and_decode_sib1()` segfaults about two minutes into the `mt_airy02/5330`
+capture, so it is the only way to replay that one at all. To make "absent" separable from
+"explicitly false" the config struct carries `decode_SIB_explicit`, set by each backend beside
+its own lookup -- it is not a setting, it is a fact about how one was read, so it is
+deliberately outside the X-macro schema.
+
 ## Recording hygiene: decode nothing while capturing
 
 `record_ring_buffer_insert()` runs synchronously inside the receive callback, so anything else
