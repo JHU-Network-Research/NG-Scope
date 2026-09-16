@@ -184,10 +184,10 @@ TOP_LEVEL = [
     ),
     _f(
         "exit_on_desync",
-        "bool",
-        False,
-        "Exit on desync",
-        "Stop NG-Scope when it loses synchronization with the cell.",
+        "int",
+        1000,
+        "Dropped frames before exit",
+        "The number of frames lost to desynchronization allowed before NG-Scope exits.",
     ),
 ]
 
