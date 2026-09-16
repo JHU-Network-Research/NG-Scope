@@ -146,14 +146,25 @@ cd "$REC" || exit 1
 stdbuf -oL -eL "$NGSCOPE" -c run.toml > stdout.log 2>&1 &
 NG_PID=$!
 
-# Cell search must succeed before any samples are written, so wait for it explicitly rather
-# than assuming the recording started.
-for i in $(seq "$SEARCH_TIMEOUT"); do
-    kill -0 "$NG_PID" 2>/dev/null || break
-    grep -q "Decoding PBCH for cell" stdout.log 2>/dev/null && break
-    sleep 1
-done
-if ! grep -q "Decoding PBCH for cell" stdout.log 2>/dev/null; then
+# Wait for the cell, by watching for a FILE rather than a log line.
+#
+# ngscope writes cell_type.json immediately after cell search succeeds, and a written-and-
+# closed file cannot sit in a buffer. Grepping stdout for "Decoding PBCH for cell" cannot be
+# relied on: with stdout redirected libc block-buffers it, stdbuf does not take effect on
+# this binary, and ngscope only flushes on SIGINT. That combination has now twice declared a
+# NO CELL on a run that had locked and was recording at full rate -- once after 193 s of good
+# capture, once at 739 MHz with cell_type.json already on disk.
+wait_for_lock() {
+    local dir="$1" secs="$2"
+    for _ in $(seq "$secs"); do
+        kill -0 "$NG_PID" 2>/dev/null || return 1
+        find "$dir" -name cell_type.json 2>/dev/null | grep -q . && return 0
+        sleep 1
+    done
+    return 1
+}
+
+if ! wait_for_lock "$REC" "$SEARCH_TIMEOUT"; then
     kill -INT "$NG_PID" 2>/dev/null; wait "$NG_PID" 2>/dev/null
     echo "NO CELL: nothing locked at 763.0 MHz within ${SEARCH_TIMEOUT}s." >&2
     echo "5330 is not receivable from here right now -- check the antenna, or try another" >&2
@@ -161,7 +172,7 @@ if ! grep -q "Decoding PBCH for cell" stdout.log 2>/dev/null; then
     tail -5 stdout.log >&2
     exit 1
 fi
-grep -m1 "Decoding PBCH for cell" stdout.log
+echo "locked -- $(find "$REC" -name cell_type.json -exec cat {} \; | tr -d '\n ')"
 
 sleep "$SECS"
 kill -INT "$NG_PID" 2>/dev/null

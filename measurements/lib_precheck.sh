@@ -52,7 +52,10 @@ TOML
     # for the same reason -- the log is read while it is still being written.
     ( cd "$dir" && timeout -s INT "$secs" stdbuf -oL -eL "$ng" -c run.toml > stdout.log 2>&1 )
 
-    if ! grep -q "Decoding PBCH for cell" "$dir/stdout.log" 2>/dev/null; then
+    # cell_type.json is written and closed right after cell search, so it is the one lock
+    # signal that cannot be lost to stdout buffering. Safe to grep the log for the rest:
+    # by here the process has exited on SIGINT, which flushes.
+    if ! find "$dir" -name cell_type.json 2>/dev/null | grep -q .; then
         echo "PRE-CHECK: nothing locked at $((freq / 1000000)) MHz within ${secs}s." >&2
         echo "PRE-CHECK: not recording. Nothing was written." >&2
         return 1

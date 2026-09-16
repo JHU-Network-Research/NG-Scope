@@ -56,12 +56,29 @@ silent = true
 [dci_log_config]
 log_interval = -1
 TOML
-stdbuf -oL -eL $NG -c run.toml > stdout.log 2>&1 &
+# Wait for the cell, by watching for a FILE rather than a log line.
+#
+# ngscope writes cell_type.json immediately after cell search succeeds, and a written-and-
+# closed file cannot sit in a buffer. Grepping stdout for "Decoding PBCH for cell" cannot be
+# relied on: with stdout redirected libc block-buffers it, stdbuf does not take effect on
+# this binary, and ngscope only flushes on SIGINT. That combination has now twice declared a
+# NO CELL on a run that had locked and was recording at full rate -- once after 193 s of good
+# capture, once at 739 MHz with cell_type.json already on disk.
+wait_for_lock() {
+    local dir="$1" secs="$2"
+    for _ in $(seq "$secs"); do
+        kill -0 "$P" 2>/dev/null || return 1
+        find "$dir" -name cell_type.json 2>/dev/null | grep -q . && return 0
+        sleep 1
+    done
+    return 1
+}
+
+$NG -c run.toml > stdout.log 2>&1 &
 P=$!
-for i in $(seq 300); do grep -q "Decoding PBCH for cell" stdout.log 2>/dev/null && break; sleep 1; done
-if ! grep -q "Decoding PBCH for cell" stdout.log 2>/dev/null; then
+if ! wait_for_lock "$R/record" 300; then
   kill -INT $P 2>/dev/null; wait $P 2>/dev/null; echo "$NAME: NO CELL LOCK"; exit 1; fi
-grep -m1 "Decoding PBCH for cell" stdout.log
+echo "$NAME: locked -- $(find $R/record -name cell_type.json -exec cat {} \; | tr -d '\n ')"
 sleep $SECS; kill -INT $P; wait $P 2>/dev/null
 BIN=$(find $R/record/ngscope_out -name recorded-samples.bin|head -1)
 echo "$NAME: recorded $(du -h $BIN|cut -f1)"
