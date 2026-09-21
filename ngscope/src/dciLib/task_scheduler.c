@@ -858,7 +858,7 @@ void* task_scheduler_thread(void* p){
                 sfn++;  // we increase the sfn incase MIB decoding failed
                 if(sfn == 1024){ sfn = 0; }
             }// endof if(decode_pdcch)
-        }else if (ret == 0 && found_sync){
+        }else if (ret == 0 && found_sync && task_scheduler->prog_args.exit_on_desync > 0){
             desync_count++;
             if (desync_count >= task_scheduler->prog_args.exit_on_desync) {
                 fprintf(stderr, "Lost sync with cell, exiting...\n");

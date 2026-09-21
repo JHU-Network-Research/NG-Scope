@@ -185,9 +185,9 @@ TOP_LEVEL = [
     _f(
         "exit_on_desync",
         "int",
-        1000,
+        0,
         "Dropped frames before exit",
-        "The number of frames lost to desynchronization allowed before NG-Scope exits.",
+        "The number of frames lost to desynchronization allowed before NG-Scope exits. A value of 0 or lower does not exit on any desynchronization.",
     ),
 ]
 

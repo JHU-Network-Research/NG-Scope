@@ -335,7 +335,7 @@ int ngscope_sec_probe_blind_init(const char* out_path, int rf_idx)
   pthread_mutex_init(&q->mtx, NULL);
   /* Header first, before anything that can fail: a header-only file then reads as "probed,
    * found nothing", which is a measurement, rather than as a run that never probed. */
-  fprintf(q->fd, "tti,ct,rnti,rach_ok,outcome,tbs,mcs,prb,rv,fmt,lcids,ch\n");
+  fprintf(q->fd, "tti,ct,rnti,rach_ok,outcome,tbs,mcs,prb,rv,fmt,lcids,ch,nof_tb,nof_layers\n");
   fflush(q->fd);
   printf("BLIND PROBE: writing %s\n", path);
   return 0;
@@ -410,7 +410,7 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
     const char* outcome = "no_dci";
     const char* ch      = "";
     char        lcids[48] = {0};
-    uint32_t    tbs = 0, mcs = 0, prb = 0;
+    uint32_t    tbs = 0, mcs = 0, prb = 0, nof_tb=0, nof_layers=0;
     int         rv = 0, fmt = 0;
 
     if (nof_dci > 0) {
@@ -434,6 +434,9 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       rv      = pdsch_cfg->grant.tb[0].rv;
       fmt     = (int)dci_dl[0].format;
       outcome = (r == 1) ? "crc_pass" : "crc_fail";
+      nof_tb  = pdsch_cfg->grant.nof_tb;
+      nof_layers = pdsch_cfg->grant.nof_layers;
+
       if (r == 1) {
         q->bytes[ok] += tbs / 8;
         bool drb = false, srb = false, ccch = false;
@@ -457,9 +460,9 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
     } else {
       q->crc_fail[ok]++;
     }
-    fprintf(q->fd, "%u,%llu,%u,%d,%s,%u,%u,%u,%d,%d,%s,%s\n", tti,
+    fprintf(q->fd, "%u,%llu,%u,%d,%s,%u,%u,%u,%d,%d,%s,%s,%u,%u\n", tti,
             (unsigned long long)collection_time, rnti, ok, outcome, tbs, mcs, prb, rv, fmt,
-            lcids, ch);
+            lcids, ch, nof_tb, nof_layers);
     pthread_mutex_unlock(&q->mtx);
     rows++;
   }

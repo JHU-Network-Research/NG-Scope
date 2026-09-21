@@ -172,6 +172,28 @@ def load_identity_events(run_dir):
     return by_key, files
 
 
+def load_cell_events(run_dir):
+    files = sorted(glob.glob(os.path.join(run_dir, "security_events-*.csv")))
+    events = {}
+    for path in files:
+        with open(path) as fh:
+            for row in csv.DictReader(fh):
+                rnti = int(row.get("rnti",0))
+                tti = int(row.get("tti",0))
+                ct = row.get("ct")
+                event_type = row.get("layer")
+                event_name = row.get("event")
+                event_signal = row.get("signal")
+                events[(tti,rnti,ct)] = [event_type, event_name, event_signal]
+    # print(f"Loaded {len(events)} security events")
+    # for k,v in events.items():
+    #     print(f"{k}:{v}")
+    # print("-------------------")
+    return events
+
+
+
+
 # The seven values a record can carry. `none` and `unknown` are different claims: `none`
 # means the UE was watched, with decoded traffic, and showed no security evidence -- the
 # signal an IMSI-catcher produces -- while `unknown` means it could not be watched.
@@ -351,6 +373,7 @@ def main():
     if not os.path.isdir(run_dir):
         sys.exit(f"error: {run_dir} is not a directory")
 
+
     boundaries, sec_files = load_sessions(run_dir)
 
     if not sec_files:
@@ -414,6 +437,7 @@ def main():
             )
         sys.exit("\n".join(msg))
 
+    cell_events = load_cell_events(run_dir)
     dci_files = sorted(glob.glob(os.path.join(run_dir, "dci_output", "*.dciLog")))
     if not dci_files:
         sys.exit(f"error: no .dciLog files under {os.path.join(run_dir, 'dci_output')}")
@@ -433,6 +457,7 @@ def main():
     identity_counts = Counter()
     counts = Counter()
     mimo_counts = Counter()
+    event_matched = set()
     disagree = 0
     per_rnti = defaultdict(Counter)
     rewritten = {}
@@ -487,6 +512,13 @@ def main():
             if identity != "none":
                 identity_counts[identity] += 1
 
+            ct = rec.get("collection_time", "")
+            event_key = (tti,rnti,ct)
+            event = cell_events.get(event_key,["","",""])
+
+            if event != ["","",""]:
+                event_matched.add(event_key)
+
             streamed = rec.get("security_phase", "")
             if want_dcilog and direction in ("dl", "ul"):
                 # The full seven-value domain goes in. ngscope now writes one constant
@@ -501,11 +533,17 @@ def main():
                     # A new key, appended rather than replacing anything: the joined
                     # .dciLog is a derived artefact, and ngscope writes no such field.
                     rec["identity_exposure"] = identity
+                    rec["event_type"] = event[0]
+                    rec["event_name"] = event[1]
+                    rec["event_signal"] = event[2]
                 else:
                     rec = {
                         "tti": rec.get("tti"),
                         "rnti": rec.get("rnti"),
                         "security_phase": dcilog_phase,
+                        "event_type":event[0],
+                        "event_name":event[1],
+                        "event_signal":event[2],
                         **{k: v for k, v in rec.items() if k not in ("tti", "rnti")},
                     }
                 rewritten[path].append(rec)
@@ -518,6 +556,7 @@ def main():
             ):
                 disagree += 1
 
+
             if not args.summary_only:
                 rows.append(
                     {
@@ -527,6 +566,9 @@ def main():
                         "timestamp_us": ts,
                         "collection_time": rec.get("collection_time", ""),
                         "format": rec.get("format", ""),
+                        "event_type": event[0],
+                        "event_name": event[1],
+                        "event_signal": event[2],
                         "security_phase": phase,
                         "security_phase_in_stream": streamed,
                         "identity_exposure": identity,
@@ -583,9 +625,14 @@ def main():
     print(f"dci records    : {total:,} from {len(dci_files)} .dciLog file(s)")
 
     mimo_total = sum(mimo_counts.values())
-    print("MIMO Summary: ")
+    print("MIMO Summary:")
     for k, v in mimo_counts.items():
         print(f"\t{k}:\t{v} ({v / mimo_total:.02%})")
+
+    if len(cell_events) > 0:
+        print(f"Event Summary: matched {len(event_matched)} of {len(cell_events)} events to their corresponding DCIs ({len(event_matched)/len(cell_events):.02%})")
+    else:
+        print("Event Summary: No events found")
     # Always reported, including when clean. A silent line would make "checked, found no
     # identity exposure" -- the good result -- indistinguishable from a join that does not
     # look for it at all, which is the same mistake the zero-boundary rule exists to prevent.

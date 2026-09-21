@@ -95,7 +95,7 @@ typedef struct{
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
     X(BOOL,   "qam_retry",         qam_retry,          true,   false)                      \
     X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)                      \
-    X(INT,    "exit_on_desync",     exit_on_desync,    1000,   false)                      \
+    X(INT,    "exit_on_desync",     exit_on_desync,    0,   false)                      \
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \
