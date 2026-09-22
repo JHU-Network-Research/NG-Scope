@@ -36,6 +36,16 @@ typedef struct{
     int                 nof_rf_dev;
     int                 remote_enable;
 	int 				decode_SIB;
+    /* Was decode_SIB written in the config file, or is this just the default?
+     *
+     * Needed because replay turns it on by default and must still honour an explicit
+     * decode_SIB = false -- srsran_ue_dl_find_and_decode_sib1() segfaults partway into at
+     * least one reference capture, and that config is the only way to replay it. Without
+     * this flag "absent" and "false" are the same value and the escape hatch does not exist.
+     *
+     * Not part of the X-macro schema: it is not a setting, it is a fact about how one was
+     * read, so each backend sets it beside its own lookup. */
+    int         decode_SIB_explicit;
 	int 				decode_RAR;
 	int 				rar_seed_tracker;
 	int 				rach_filter_only;

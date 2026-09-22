@@ -150,10 +150,92 @@ EVENT_HEADER = ["frame", "rf_idx", "rnti", "src", "tti", "ct", "ts_us",
                 "rlc_segments", "rlc_skipped", "detail"]
 
 SESSION_HEADER = ["rnti", "rar_tti", "rar_ct", "session_end_ct", "window_end_ct",
+                  "anchor", "rach_type", "provenance", "ctx_active_ct",
                   "outcome", "outcome_event", "outcome_ct", "ms_rar_to_outcome",
                   "nas_outcome", "nas_outcome_event",
                   "identity_exposure", "identity_event", "identity_ct",
                   "n_pdus", "n_srb_pdus", "n_events", "evidence"]
+
+# How the UE got here, which is a different question from what it then did.
+#
+#   anchor=rar  the UE RACHed on this cell and we saw the RAR.
+#   anchor=crc  it never RACHed here, and is known only because a transport block addressed
+#               to it passed its DL-SCH CRC. That is what a UE that handed in to this cell
+#               looks like, and also what one already connected when the capture began looks
+#               like. Positive evidence of a served UE either way, so it is reported -- but
+#               never in the RAR-anchored rate, whose denominator is "UEs that RACHed here".
+#
+#   rach_type   for anchor=rar only:
+#     contention       RAPID below numberOfRA-Preambles: the UE picked its own preamble.
+#     contention_free  RAPID at or above it: the network told this UE which preamble to use,
+#                      which means a handover into this cell or a PDCCH order.
+#     ordered          contention_free, and a PDCCH order to a known RNTI carried the same
+#                      preamble shortly before -- so it was ordered, not a handover.
+#     unknown          no SIB2 on this run, so the boundary was never learned. NOT a
+#                      synonym for `contention`: guessing the boundary from the RAPID
+#                      histogram would manufacture handovers.
+SESSION_ANCHOR_RAR = "rar"
+SESSION_ANCHOR_CRC = "crc"
+
+# How the UE came to be on this cell.
+#
+#   rach_here     it RACHed here and we saw the RAR. The ordinary case.
+#   handover_in   a RAR with a contention-free preamble that no PDCCH order explains. The
+#                 network named the preamble for this UE, and for an inbound UE that means a
+#                 handover was prepared for it. This is the ONLY value here that is a
+#                 positive claim about a handover.
+#   pre_existing  no RAR here, and already transmitting when the receiver opened -- so it
+#                 was connected before collection started.
+#   no_rach       no RAR here, first seen later in the capture. It could have handed in, it
+#                 could have been connected and idle, it could have been connected all along
+#                 with nothing of its downlink decoded until now. Nothing observable from
+#                 this cell separates those, so nothing is claimed.
+#   unknown       CRC-confirmed but not placeable in time.
+#
+# `no_rach` exists because an earlier version called it handover_in on the strength of "first
+# seen late", which is not evidence of a handover -- it is evidence of being seen late. The
+# distinction matters for the detector: a handover into this cell is positive evidence that a
+# real network prepared it, and inflating that set with UEs that merely woke up would make
+# the strongest signal here the least trustworthy one.
+#
+# Handover cannot always be seen even when it happens. A cell that sets
+# numberOfRA-Preambles = 64 reserves none, so an inbound UE RACHes contention-based and is
+# indistinguishable from a new connection; both cells measured here do exactly that. And
+# without SIB2 the boundary is unknown, so no RAR can be classified at all.
+PROV_RACH = "rach_here"
+PROV_HANDOVER = "handover_in"
+PROV_PRE_EXISTING = "pre_existing"
+PROV_NO_RACH = "no_rach"
+PROV_UNKNOWN = "unknown"
+
+# A UE already transmitting this soon after the receiver opened was connected before it. The
+# claim is only about the start of the capture, which is why it does not run the other way:
+# appearing after this window says nothing about where the UE came from.
+PRE_EXISTING_GRACE_US = 15_000_000
+
+# Outcomes that mean this UE holds an AS security context from here on. `established` is the
+# SecurityModeCommand; `reused` is an RRCConnectionReestablishment or Resume, which restores a
+# stored K_eNB -- no SMC follows, and reaching either is positive evidence that a real context
+# already existed. Both give a moment after which the context is active, which is what
+# ctx_active_ct records.
+CTX_ACTIVE_OUTCOMES = ("established", "reused")
+
+
+def classify_provenance(anchor, rach_type, first_ct, capture_start_ct):
+    if anchor == SESSION_ANCHOR_RAR:
+        # `ordered` is explicitly not a handover: a PDCCH order accounts for the dedicated
+        # preamble, and `unknown` means the boundary was never learned, so neither can carry
+        # the claim.
+        return PROV_HANDOVER if rach_type == "contention_free" else PROV_RACH
+    if first_ct is None or capture_start_ct is None:
+        return PROV_UNKNOWN
+    if first_ct - capture_start_ct <= PRE_EXISTING_GRACE_US:
+        return PROV_PRE_EXISTING
+    return PROV_NO_RACH
+
+# A PDCCH order and the RAR answering it are milliseconds apart. Generous, and bounded well
+# below the 10240-subframe TTI wrap so the modular comparison stays unambiguous.
+PDCCH_ORDER_MATCH_TTI = 200
 
 # Resolved highest-priority-first. `no_traffic` (nothing decoded at all) is kept apart from
 # `none` (traffic decoded, no evidence): the first is a statement about the receiver, the
@@ -377,11 +459,96 @@ def load_rar_anchors(run_dir, rf_idx):
                     "rar_ct": int(row["collection_time"]),
                     "rapid": int(row.get("rapid") or -1),
                     "ta": int(row.get("ta_cmd") or -1),
+                    "anchor": SESSION_ANCHOR_RAR,
                 })
             except (KeyError, ValueError):
                 continue
     anchors.sort(key=lambda a: (a["rnti"], a["rar_ct"]))
     return anchors, path
+
+
+def load_rach_config(run_dir):
+    """The contention-based/contention-free preamble boundary, from SIB2.
+
+    Returns None when it was never learned -- no SIB2 decoded on this run -- which must stay
+    distinguishable from "learned, and it is 64". A cell that sets numberOfRA-Preambles to 64
+    reserves none, so no contention-free RACH can occur on it at all; a cell we never read
+    SIB2 from tells us nothing. Those are opposite conclusions from the same RAPID values.
+    """
+    path = os.path.join(run_dir, "rach_config.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as fh:
+            return int(json.load(fh)["contention_free_rapid_min"])
+    except (ValueError, KeyError, OSError):
+        return None
+
+
+def load_pdcch_orders(run_dir, rf_idx):
+    """Random-access orders, so an ordered RACH is not read as a handover.
+
+    Only orders addressed to an RNTI the cell is known to serve are returned. The
+    PDCCH-order bit pattern is 1A-shaped and a false-alarm DCI can match it, carrying a
+    manufactured RNTI -- measured on att_850_office, all 9 orders found were of that kind.
+    Letting one of those explain away a real contention-free RACH would lose a handover.
+    """
+    path = os.path.join(run_dir, f"pdcch_order-{rf_idx}.csv")
+    if not os.path.isfile(path):
+        return []
+    out = []
+    with open(path) as fh:
+        for row in csv.DictReader(fh):
+            try:
+                if int(row.get("rnti_known") or 0) != 1:
+                    continue
+                out.append({"tti": int(row["tti"]), "preamble_idx": int(row["preamble_idx"])})
+            except (KeyError, ValueError):
+                continue
+    return out
+
+
+def classify_rach(anchor, rapid, rar_tti, boundary, orders):
+    """See SESSION_HEADER for the domain. Never guesses a boundary it was not given."""
+    if anchor != SESSION_ANCHOR_RAR:
+        return ""
+    if boundary is None:
+        return "unknown"
+    if rapid is None or rapid < 0:
+        return "unknown"
+    if rapid < boundary:
+        return "contention"
+    for o in orders:
+        if o["preamble_idx"] != rapid:
+            continue
+        # TTI wraps at 10240; the order precedes its RAR by milliseconds.
+        gap = (rar_tti - o["tti"]) % 10240
+        if 0 <= gap <= PDCCH_ORDER_MATCH_TTI:
+            return "ordered"
+    return "contention_free"
+
+
+def synth_crc_anchors(frames, rar_rntis):
+    """Sessions for UEs the cell served that never RACHed here.
+
+    ngscope writes these blocks with src=probe: the DCI came from a search targeted at a
+    known RNTI, and the transport block passed CRC24A, so both the identity and the bytes are
+    sound. What is missing is a RAR, and that absence is the signal -- it is how a handover-in
+    and an already-connected UE both present from the target cell.
+
+    Anchored at the first such block rather than at a RAR, so every downstream time
+    comparison keeps working unchanged.
+    """
+    first = {}
+    for f in frames:
+        if f.get("src") != "probe" or f["rnti"] is None or f["rnti"] in rar_rntis:
+            continue
+        cur = first.get(f["rnti"])
+        if cur is None or (f["ct"] is not None and cur["rar_ct"] > f["ct"]):
+            first[f["rnti"]] = {"rnti": f["rnti"], "rar_tti": f["tti"] or 0,
+                                "rar_ct": f["ct"] or 0, "rapid": -1, "ta": -1,
+                                "anchor": SESSION_ANCHOR_CRC}
+    return sorted(first.values(), key=lambda a: (a["rnti"], a["rar_ct"]))
 
 
 def build_events(rows):
@@ -741,7 +908,22 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
     assert_dissected(rows, work)
     events, frames = build_events(rows)
     anchors, rar_path = load_rar_anchors(run_dir, rf_idx)
-    sessions = build_sessions(anchors, events, frames)
+    rar_rntis = {a["rnti"] for a in anchors}
+
+    # UEs the cell served that never RACHed here: handed in, or already connected. Appended
+    # after the RAR anchors so the RAR-anchored denominator below can exclude them by anchor.
+    crc_anchors = synth_crc_anchors(frames, rar_rntis)
+
+    # When did this capture start watching? Used only to separate a UE that was already
+    # transmitting when we opened the receiver from one that arrived later. Taken from the
+    # earliest decoded block rather than a wall clock, because collection_time is the radio
+    # domain and everything else here is compared in it.
+    _cts = [f["ct"] for f in frames if f["ct"] is not None]
+    capture_start_ct = min(_cts) if _cts else None
+    boundary = load_rach_config(run_dir)
+    orders = load_pdcch_orders(run_dir, rf_idx)
+
+    sessions = build_sessions(anchors + crc_anchors, events, frames)
     idx_sessions = defaultdict(list)
     for s_ in sessions:
         idx_sessions[s_["rnti"]].append(s_)
@@ -774,18 +956,40 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
     out_counts = Counter()
     session_rows = []
     id_counts = Counter()
+    anchor_counts = Counter()
+    rach_counts = Counter()
+    prov_counts = Counter()
+    crc_out_counts = Counter()
     for s in sessions:
         outcome, ev, nas_outcome, nas_ev = resolve_outcome(s)
         identity, id_ev = resolve_identity(s)
         id_counts[identity] += 1
-        out_counts[outcome] += 1
+        if s.get("anchor", SESSION_ANCHOR_RAR) == SESSION_ANCHOR_RAR:
+            # The published rate's denominator is "UEs that RACHed on this cell". A
+            # CRC-anchored UE did not, so folding it in would silently redefine the figure
+            # every historical number is quoted against.
+            out_counts[outcome] += 1
+        else:
+            crc_out_counts[outcome] += 1
         ms = ""
         if ev is not None and ev["ct"] is not None:
             ms = round((ev["ct"] - s["rar_ct"]) / 1000.0, 3)
+        anchor = s.get("anchor", SESSION_ANCHOR_RAR)
+        rach_type = classify_rach(anchor, s.get("rapid"), s["rar_tti"], boundary, orders)
+        provenance = classify_provenance(anchor, rach_type, s["rar_ct"], capture_start_ct)
+        # The moment this UE's AS security context became active, by either route: the
+        # SecurityModeCommand, or the reestablishment/resume that restored a stored one.
+        # Every DCI after it is covered by that context.
+        ctx_active_ct = (ev["ct"] if outcome in CTX_ACTIVE_OUTCOMES and ev
+                         and ev["ct"] is not None else "")
+        anchor_counts[anchor] += 1
+        prov_counts[provenance] += 1
+        if rach_type:
+            rach_counts[rach_type] += 1
         session_rows.append([
             s["rnti"], s["rar_tti"], s["rar_ct"],
             s["session_end_ct"] if s["session_end_ct"] is not None else "",
-            s["window_end_ct"], outcome,
+            s["window_end_ct"], anchor, rach_type, provenance, ctx_active_ct, outcome,
             ev["event"] if ev else "", ev["ct"] if ev else "", ms,
             nas_outcome, nas_ev["event"] if nas_ev else "",
             identity, id_ev["event"] if id_ev else "",
@@ -795,12 +999,18 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
         ])
 
     # --- sec= verdict per frame, then the in-place splice ------------------------------
+    # By name, not by position. These were row[5] and row[7], which silently became the
+    # anchor and outcome_event columns the moment two were inserted ahead of them -- every
+    # frame then resolved through SEC_FROM_OUTCOME["rar"] and came out "unknown". Nothing
+    # downstream could notice: the splice verifier only checks that the dissection is
+    # unchanged apart from the comment, which a uniformly wrong verdict satisfies.
+    _col = {name: i for i, name in enumerate(SESSION_HEADER)}
     established_ct = {}
     outcome_by_key = {}
     for s_, row in zip(sessions, session_rows):
-        outcome_by_key[id(s_)] = row[5]
-        if row[5] == "established":
-            established_ct[id(s_)] = row[7]
+        outcome_by_key[id(s_)] = row[_col["outcome"]]
+        if row[_col["outcome"]] == "established":
+            established_ct[id(s_)] = row[_col["outcome_ct"]]
 
     def verdict_for_frame(f):
         if not is_unicast(f["rnti"]):
@@ -866,6 +1076,18 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
             "raw_pct": round(100.0 * established / total, 1) if total else 0.0,
             "with_traffic_denominator": with_traffic,
             "with_traffic_pct": round(100.0 * established / with_traffic, 1) if with_traffic else 0.0,
+        },
+        # How UEs arrived, kept out of `rate` on purpose. A CRC-anchored UE never RACHed
+        # here, so it does not belong in a denominator that means "UEs that RACHed here";
+        # and a contention-free RACH is positive evidence of a prior security context, in
+        # the same class as `reused`, not a failure to establish one.
+        "provenance": {
+            "anchors": dict(anchor_counts),
+            "provenance": dict(prov_counts),
+            "rach_type": dict(rach_counts),
+            "preamble_boundary": boundary,
+            "pdcch_orders_to_known_rnti": len(orders),
+            "crc_anchored_outcomes": dict(crc_out_counts),
         },
         "events": dict(ev_counts),
         # Identity exposure is reported beside the security rate, never inside it. An IMSI
@@ -1000,6 +1222,56 @@ def main():
                   "P-RNTI, so paging")
             print("                      by IMSI would not be seen. Blind spot, not a "
                   "clean result.)")
+
+        prov = cell.get("provenance") or {}
+        if prov:
+            anch = prov.get("anchors") or {}
+            n_crc = anch.get("crc", 0)
+            if n_crc:
+                crc_out = prov.get("crc_anchored_outcomes") or {}
+                print(f"  served, no RACH   : {n_crc} UEs confirmed by a DL-SCH CRC with no RAR "
+                      f"on this cell")
+                print("                      (handed in, or already connected when the capture "
+                      "began -- either way")
+                print("                       positive evidence of a UE this cell was really "
+                      "serving; excluded from")
+                print("                       the rate above, whose denominator is UEs that "
+                      "RACHed here)")
+                if crc_out:
+                    print("                      their outcomes: " +
+                          ", ".join(f"{k}={v}" for k, v in sorted(crc_out.items())))
+            pv = prov.get("provenance") or {}
+            if pv:
+                print("  provenance        : " +
+                      ", ".join(f"{k}={v}" for k, v in sorted(pv.items())))
+                if pv.get(PROV_NO_RACH):
+                    print(f"                      ({pv[PROV_NO_RACH]} no_rach: served here "
+                          "with no RAR and first seen mid-capture.")
+                    print("                       Could be handover in, could be a UE waking "
+                          "up -- nothing in the")
+                    print("                       downlink separates those, so no handover is "
+                          "claimed.)")
+                if not pv.get(PROV_HANDOVER):
+                    print("                      (no handover_in: that needs a contention-free "
+                          "RAR no PDCCH order")
+                    print("                       explains, which this run saw none of.)")
+            rt = prov.get("rach_type") or {}
+            if prov.get("preamble_boundary") is None:
+                print("  RACH type         : not classified -- no SIB2 on this run, so the "
+                      "contention-free")
+                print("                      preamble boundary was never learned. Not the same "
+                      "as 'none seen'.")
+            else:
+                bnd = prov["preamble_boundary"]
+                print(f"  RACH type         : " +
+                      ", ".join(f"{k}={v}" for k, v in sorted(rt.items())) +
+                      f"  (boundary RAPID>={bnd}, {prov.get('pdcch_orders_to_known_rnti', 0)} "
+                      f"PDCCH orders to a known RNTI)")
+                if bnd >= 64:
+                    print("                      the cell reserves no preambles, so no "
+                          "contention-free RACH is")
+                    print("                      possible on it -- handover in cannot be seen "
+                          "this way here")
 
         if cell["events"]:
             print(f"  events            : " +

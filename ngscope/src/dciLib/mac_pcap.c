@@ -52,6 +52,8 @@ static const char* src_str(ngscope_mac_src_t src)
             return "rar";
         case NGSCOPE_MAC_SRC_SIB:
             return "sib";
+        case NGSCOPE_MAC_SRC_PROBE:
+            return "probe";
         case NGSCOPE_MAC_SRC_BLIND:
         default:
             return "blind";

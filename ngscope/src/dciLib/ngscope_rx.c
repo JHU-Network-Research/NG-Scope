@@ -48,7 +48,23 @@ ngscope_mode_t  mode       = NORMAL;
 // static struct timespec last_rx_time  = {0, 0};
 static FILE*    replay_fh  = NULL;  // used only for REPLAY
 // static FILE*    outfp = NULL;
+/* Channels present in the stream: what a recording's header says it holds, or what the SDR
+ * was opened with. Distinct from rx_nof_rx_ant below, which is what the decoder asked for.
+ * Conflating the two is what made a mismatch corrupt the stream instead of degrading it. */
 static uint32_t sdr_nof_ports = SRSRAN_MAX_PORTS;
+
+/* Channels the decoder allocated buffers for, i.e. nof_rx_ant.
+ *
+ * It bounds every write through ptr[]. `ptr[i] != NULL` is NOT a valid test for "this channel
+ * has a buffer": the array behind it is not always SRSRAN_MAX_PORTS long -- cell search
+ * passes a shorter one -- so reading past the end returns garbage that is not NULL, and
+ * writing through it smashes the caller's stack. */
+static uint32_t rx_nof_rx_ant = 1;
+
+void ngscope_rx_set_nof_rx_ant(uint32_t n)
+{
+  rx_nof_rx_ant = (n >= 1 && n <= SRSRAN_MAX_PORTS) ? n : 1;
+}
 
 static uint64_t         last_replay_ts_full = 0;
 static double           last_replay_ts_frac = 0.0;
@@ -56,6 +72,7 @@ static struct timespec  last_replay_return  = {0, 0};
 static uint64_t frame_count = 0;
 static uint64_t nreplayed = 0;
 static uint64_t nrecorded = 0;
+static bool     warned_short_stream = false;
 
 bool __attribute__((weak)) go_exit = false;
 bool __attribute__((weak)) debug = false;
@@ -269,7 +286,20 @@ bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
 
         sdr_nof_ports = hdr->nof_rx_antenna;
     }else{
-        sdr_nof_ports = nof_ports;
+        /* No header, so the file cannot say how many channels it holds -- and guessing the
+         * configured nof_rx_ant, which is what this used to do, is the one guess that can
+         * corrupt the stream: the read loop would consume a second channel's worth of bytes
+         * per frame from a single-channel file, land the next header read inside the IQ, and
+         * never resynchronise. It surfaced as "Could not find any cell in this frequency",
+         * which reads as weak signal.
+         *
+         * Every headerless recording predates multi-channel record, so it holds exactly one
+         * channel. Take that, and let the mismatch handling below zero-fill the rest. */
+        sdr_nof_ports = 1;
+        if (nof_ports != 1) {
+            printf("REPLAY: no recording header, so assuming 1 channel in the file (%u "
+                   "requested; the extra will be zero-filled)\n", nof_ports);
+        }
     }
 
 
@@ -315,9 +345,16 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
     // fprintf(stdout, "[AGC] retrieving normal sample\n");
 
     DEBUG(" ----  Receive %d samples  ----", nsamples);
+    /* Fan out only as far as the caller actually has buffers.
+     *
+     * This used to copy all SRSRAN_MAX_PORTS entries, but data_[] is not always that long --
+     * cell search passes a shorter array -- so the surplus reads ran past its end. What came
+     * back was uninitialised stack, which is not NULL, so nothing downstream could tell the
+     * difference; writing through one of those pointers is a stack smash. Bounding the
+     * fan-out and nulling the rest makes the array say what it means. */
     void* ptr[SRSRAN_MAX_PORTS];
-    for (int i = 0; i < SRSRAN_MAX_PORTS; i++) {
-        ptr[i] = data_[i];
+    for (uint32_t i = 0; i < SRSRAN_MAX_PORTS; i++) {
+        ptr[i] = (i < rx_nof_rx_ant) ? data_[i] : NULL;
     }
     int n = 0;
     if (mode == NORMAL || mode == RECORD){
@@ -455,6 +492,9 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
         t->full_secs = hdr.timestamp_full_secs;
         t->frac_secs = hdr.timestamp_frac_secs;
 
+        /* Read every channel the file holds, but only keep the ones the decoder has a buffer
+         * for. A surplus channel still has to be read to stay aligned with the stream; it is
+         * simply dropped. */
         for (uint32_t i = 0; i < sdr_nof_ports; i++){
 
             if (debug)
@@ -480,11 +520,32 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             else
                 if (debug)
                     printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
-            // if (i == 0) // JH TODO: This is for testing the difference between 1 and 2 channels on the same recording. We skip channels >=1 to simulate only having data from channel 0.
-            memcpy(ptr[i], replay_buf, n*sizeof(cf_t));
-            if (debug)
-                printf("REPLAY: Copied %d samples to ptr channel %d\n", n, i);
+            if (i < rx_nof_rx_ant) {
+                memcpy(ptr[i], replay_buf, n*sizeof(cf_t));
+                if (debug)
+                    printf("REPLAY: Copied %d samples to ptr channel %d\n", n, i);
+            } else if (debug) {
+                printf("REPLAY: dropped channel %d (file has %u, decoder wants %u)\n",
+                       i, sdr_nof_ports, rx_nof_rx_ant);
+            }
             memset(replay_buf, 0, sizeof(replay_buf));
+        }
+
+        /* Fewer channels in the file than the decoder expects. Zero the rest rather than
+         * leaving them: they come from malloc, and uninitialised memory reaching the channel
+         * estimator is silently wrong rather than obviously wrong. A zero channel estimate
+         * contributes zero to both sides of every MRC sum, so the result is exactly the
+         * lower-antenna one -- a missing antenna, not a corrupt one. */
+        for (uint32_t i = sdr_nof_ports; i < rx_nof_rx_ant; i++) {
+            memset(ptr[i], 0, (size_t)n * sizeof(cf_t));
+        }
+        if (sdr_nof_ports < rx_nof_rx_ant && !warned_short_stream) {
+            warned_short_stream = true;
+            printf("REPLAY: recording holds %u channel%s but nof_rx_ant is %u; the missing "
+                   "channels are zero-filled, so this run measures %u antenna%s of diversity, "
+                   "not %u\n",
+                   sdr_nof_ports, sdr_nof_ports == 1 ? "" : "s", rx_nof_rx_ant,
+                   sdr_nof_ports, sdr_nof_ports == 1 ? "" : "s", rx_nof_rx_ant);
         }
         clock_gettime(CLOCK_MONOTONIC, &last_replay_return);
     }

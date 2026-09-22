@@ -42,6 +42,16 @@ typedef struct{
      * Always 0 unless mark_security_phase is on. */
     uint8_t             sec_phase;
 
+    /* How the RNTI that carries this DCI earned its place in the output: 0 unknown, 1 a RAR
+     * on this cell, 2 a passing DL-SCH CRC (ngscope_rach_anchor_t). Same plain-integer
+     * treatment as sec_phase above, and for the same reason.
+     *
+     * The distinction matters because the two anchors answer different questions. A RAR says
+     * the UE started here. A CRC confirmation says only that the (RNTI, grant) pair is real
+     * -- which is what a UE that handed in to this cell, or was already connected when the
+     * capture began, looks like, since neither has a RAR here. */
+    uint8_t             anchor;
+
     // information of the transport block
     ngscope_dci_tb_t    tb[2];
 

@@ -163,6 +163,13 @@ static int ngscope_read_config_libconfig(ngscope_config_t* config, char* path)
     NGSCOPE_TOP_LEVEL_KEYS(X)
 #undef X
 
+    /* See load_config.h: replay defaults decode_SIB on, so "absent" has to stay separable
+     * from "explicitly false". */
+    {
+        int probe = 0;
+        config->decode_SIB_explicit = config_lookup_bool(cfg, "decode_SIB", &probe) ? 1 : 0;
+    }
+
     ngscope_config_check_nof_rf_dev(config);
 
     /************************ per RF device ************************/
@@ -289,6 +296,35 @@ static long long replay_freq_from_run_dir(const char* replay_fname)
 void ngscope_config_finalize(ngscope_config_t* config, const char* path)
 {
     config->dci_log_config.nof_cell = config->nof_rf_dev;
+
+    /* Replay decodes SIB1/SIB2 unless told not to.
+     *
+     * SIB2 carries rach-ConfigCommon, which is the only source of the contention-based
+     * preamble boundary -- and without it tools/security_scan.py cannot classify a single
+     * RACH, so every UE's provenance degrades to `unknown`. That is a silent degradation:
+     * the output still looks complete, it just says nothing. In replay the cost is paid in
+     * wall time on a stream that blocks rather than drops, which is the one place it is
+     * affordable.
+     *
+     * Live and record keep it off by default: there it competes with the receive path, and
+     * a capture taken while decoding has holes in it (docs/configuration.md, "Recording
+     * hygiene").
+     *
+     * An explicit decode_SIB = false always wins -- srsran_ue_dl_find_and_decode_sib1()
+     * segfaults about two minutes into the mt_airy02/5330 capture, so that setting is the
+     * only way to replay it at all. */
+    if (!config->decode_SIB && !config->decode_SIB_explicit) {
+        for (int i = 0; i < config->nof_rf_dev; i++) {
+            if (config->rf_config[i].mode == REPLAY) {
+                config->decode_SIB = true;
+                printf("config: decode_SIB defaulted ON for replay -- SIB2 carries the RACH "
+                       "preamble boundary, without which no RACH can be classified. Set "
+                       "decode_SIB = false explicitly to opt out (needed on captures where "
+                       "SIB1 decoding crashes).\n");
+                break;
+            }
+        }
+    }
 
     if (config->rach_filter_only && !config->decode_RAR) {
         printf("config: WARNING: rach_filter_only needs decode_RAR to populate the RNTI set; "

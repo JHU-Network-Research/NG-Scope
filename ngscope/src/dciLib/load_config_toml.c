@@ -168,6 +168,10 @@ int ngscope_read_config_toml(ngscope_config_t* config, char* path)
     NGSCOPE_TOP_LEVEL_KEYS(X)
 #undef X
 
+    /* See load_config.h: replay defaults decode_SIB on, so "absent" has to stay separable
+     * from "explicitly false". */
+    config->decode_SIB_explicit = toml_bool_in(root, "decode_SIB").ok ? 1 : 0;
+
     /************************ per RF device ************************/
     /* The [[rf_config]] array is authoritative for how many devices there are; nof_rf_dev is
      * accepted only so the two formats declare the same set of keys. */

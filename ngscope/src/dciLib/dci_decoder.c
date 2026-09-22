@@ -95,6 +95,11 @@ int decoder_idx
         exit(-1);
     }
 
+    /* Both counts, together, decide which transmission schemes are decodable at all, so the
+     * security report can state that rather than leave it to be inferred from the cell type
+     * file. Idempotent across decoder threads: they all share one cell. */
+    ngscope_sec_set_cell(prog_args.rf_index, cell->nof_ports, prog_args.rf_nof_rx_ant);
+
     ZERO_OBJECT(dci_decoder->ue_dl_cfg);
     ZERO_OBJECT(dci_decoder->dl_sf);
     ZERO_OBJECT(dci_decoder->pdsch_cfg);
@@ -351,7 +356,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 			// Remember the RNTI regardless of whether the filter is on, so that turning it
 			// on costs nothing extra and the set is always available.
-			ngscope_rach_filter_add(rf_idx, rars[i].temp_crnti, tti);
+			ngscope_rach_filter_add(rf_idx, rars[i].temp_crnti, tti, NGSCOPE_RACH_ANCHOR_RAR);
 
 			// Anchor the security-phase tracker on the same RAR. Unlike the filter above
 			// this re-arms on every sighting, because an RNTI handed out again later is a

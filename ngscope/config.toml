@@ -102,6 +102,10 @@ qam_retry = true
 # Writes blind_probe-<rf>.csv. Pair with rach_filter_only = false. See docs/configuration.md.
 probe_blind_dci = false
 
+# Exit when sync to the cell is lost, instead of searching again. Unattended runs want this:
+# a desynced run otherwise fills a disk with samples of nothing.
+exit_on_desync = false
+
 
 # ----------------------------- RF devices --------------------------------
 # One [[rf_config]] table per cell, max 4. Unlike the .cfg format there is no nof_rf_dev to
@@ -141,6 +145,11 @@ mode = 1
 # Source file for mode 2. Ignored otherwise: recording always writes to
 # <out_dir>/<timestamp>/recorded-samples.bin.
 replay_fname = "/tmp/ngscope_iq.bin"
+
+# Read the record header at the head of the replay file (channel count + carrier frequency).
+# Set false for a legacy headerless capture -- anything recorded before multi-channel record.
+# It supplies rf_freq; it does NOT override nof_rx_ant.
+use_replay_hdr = true
 
 # Verbose per-subframe tracing. Thousands of lines per second.
 debug = false

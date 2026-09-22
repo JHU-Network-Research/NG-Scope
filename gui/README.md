@@ -121,7 +121,7 @@ Two things sit outside that mirror.
 **Settings that are not the user's to make in a given mode are hidden, not disabled, and are
 emitted at a fixed value.** A schema field may carry `replay_only` (the C side refuses or
 ignores it outside `mode == REPLAY`) or `mode_locked = {mode: value}` (exactly one valid value
-in that mode — `nof_rx_ant` in Record, because the IQ recorder writes channel 0 only). In both
+in that mode — currently unused, since the recorder learned to write every channel). In both
 cases the form stops offering the choice and `config_io` emits the fixed value, while whatever
 the user last chose stays in `state.py` and returns when they switch back. So switching a cell
 to Normal or Record can never produce a config ngscope refuses, and nobody has to set anything

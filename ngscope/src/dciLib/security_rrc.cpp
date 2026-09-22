@@ -49,6 +49,33 @@ void ngscope_sec_rrc_set_qam_retry(int rf_idx, bool enable)
   }
 }
 
+/* The transmission scheme a grant is decoded under follows from the DCI format, not from a
+ * cell-wide guess.
+ *
+ * dci_decoder.c pins ue_dl_cfg.cfg.tm to TM4 on every multi-port cell, and config_mimo_type()
+ * (ra_dl.c) reads that pin. For Format1/1A/1C that is harmless -- dl_dci_compute_tb() forces
+ * nof_tb == 1 and those formats carry no precoding-info field, so TM4 resolves to DIVERSITY,
+ * the same answer TM2 gives. It stops being harmless the moment Format2A is searched: under
+ * TM4 a two-codeword 2A grant resolves to SPATIALMUX, where under its own TM3 it is CDD.
+ *
+ * So map the format to the mode that actually schedules it. The pin stays as it is, because
+ * it also selects the format set for everything else in that decoder thread; this swap is
+ * scoped to the grant build, which is the only thing cfg.tm affects here
+ * (srsran_ue_dl_decode_pdsch reads the grant, not the config). */
+static srsran_tm_t tm_for_format(srsran_dci_format_t f, uint32_t nof_ports)
+{
+  switch (f) {
+    case SRSRAN_DCI_FORMAT2:
+      return SRSRAN_TM4;
+    case SRSRAN_DCI_FORMAT2A:
+      return SRSRAN_TM3;
+    default:
+      /* TM1 on a single-port cell gives PORT0; TM2 on a multi-port cell gives DIVERSITY,
+       * which is what every pre-security grant is carried by. */
+      return (nof_ports == 1) ? SRSRAN_TM1 : SRSRAN_TM2;
+  }
+}
+
 /* Build the grant for one DCI on a given MCS->TBS table and decode its transport block.
  *
  * Returns 1 if the block passed CRC, 0 if it was attempted and failed, and -1 if the grant
@@ -68,7 +95,11 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
 {
   cfg->cfg.pdsch.use_tbs_index_alt = use_alt;
 
-  if (srsran_ue_dl_dci_to_pdsch_grant(ue_dl, sf, cfg, dci, &pdsch_cfg->grant)) {
+  const srsran_tm_t saved_tm = cfg->cfg.tm;
+  cfg->cfg.tm                = tm_for_format(dci->format, ue_dl->cell.nof_ports);
+  const int grant_ret        = srsran_ue_dl_dci_to_pdsch_grant(ue_dl, sf, cfg, dci, &pdsch_cfg->grant);
+  cfg->cfg.tm                = saved_tm;
+  if (grant_ret) {
     return -1;
   }
 
@@ -94,11 +125,87 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
   if (!decode_enable) {
     return -1;
   }
+  /* SRSRAN_ERROR here is not a CRC failure. srsran_pdsch_decode() returns it from the
+   * symbol/layer guards and the predecoder, all upstream of demodulation, while a genuine
+   * CRC failure comes back as SRSRAN_SUCCESS with crc == false. Collapsing the two -- which
+   * this did -- makes a grant srsRAN has no predecoder for indistinguishable from one the
+   * channel beat, and those are different claims about the cell. */
   if (srsran_ue_dl_decode_pdsch(ue_dl, sf, pdsch_cfg, pdsch_res) != SRSRAN_SUCCESS) {
-    return 0;
+    return -2;
   }
   return (pdsch_res[0].crc && pdsch_cfg->grant.tb[0].tbs > 0) ? 1 : 0;
 }
+
+/* Can srsRAN predecode this scheme on this cell, with this many receive antennas?
+ *
+ * Transmit diversity is implemented for 2 and 4 ports and combines however many receive
+ * antennas it is given (precoding.c:428/:465 and :673/:714 both accumulate over nof_rxant),
+ * which is why a 4-port cell is not the ceiling it has been described as: every pre-security
+ * downlink message is carried by it.
+ *
+ * Spatial multiplexing and CDD are the real gaps, and both are 2-Tx-port only
+ * (precoding.c:1853, :1219).
+ *
+ * Spatial multiplexing works at one receive antenna as well as two, which is worth stating
+ * because the kernel looks as though it should not: srsran_predecoding_multiplex_2x1_mrc()
+ * loops k < 2 unconditionally, reading y[1] and h[*][1], and at nof_rx_antennas == 1 the
+ * channel estimator never writes h[*][1]. Those buffers stay zero, so antenna 1 contributes
+ * zero to both the numerator and the hh denominator of the MRC sum and the result is exactly
+ * the single-antenna one. Measured: 2,238 of 2,580 Format2 grants decoded on a 2-port cell at
+ * one antenna. It relies on that memory staying zeroed, which it does because nothing writes
+ * it -- fragile, but correct, and not something to model as a failure.
+ *
+ * CDD genuinely needs two: srsran_predecoding_ccd_zf/mmse test nof_rxant == 2 and error
+ * otherwise, rather than admitting <= 2 the way multiplex does. */
+static bool scheme_supported(srsran_tx_scheme_t s, uint32_t nof_ports, uint32_t nof_rxant)
+{
+  switch (s) {
+    case SRSRAN_TXSCHEME_PORT0:      return nof_ports == 1;
+    case SRSRAN_TXSCHEME_DIVERSITY:  return nof_ports == 2 || nof_ports == 4;
+    case SRSRAN_TXSCHEME_CDD:        return nof_ports == 2 && nof_rxant == 2;
+    case SRSRAN_TXSCHEME_SPATIALMUX: return nof_ports == 2;
+    default:                         return false;
+  }
+}
+
+/* Which DCI formats to search in a tracked UE's own search space.
+ *
+ * srsran_ue_dl_find_dl_dci() derives this from cfg->cfg.tm, which dci_decoder.c pins to TM4
+ * for the cell's port count -- giving {1A, 2}. That is the format pair a UE *in TM4*
+ * monitors, and it is the wrong question for a sniffer. A UE is in TM1/TM2 until an
+ * RRCConnectionReconfiguration moves it, and that reconfiguration only follows a completed
+ * SecurityModeCommand. So every message this tool exists to see -- Msg4, RRCConnectionSetup,
+ * the SecurityModeCommand itself, the NAS above them -- is scheduled with Format1 or
+ * Format1A, and Format1 was never searched on any multi-port cell.
+ *
+ * Format2A is included for the same reason in the other direction: TM3 is a real
+ * configuration, and a single-codeword 2A grant is transmit diversity, which decodes on a
+ * 4-port cell. Format2 stays because post-security traffic uses it and single-TB Format2 with
+ * pinfo == 0 is also transmit diversity.
+ *
+ * 1B, 1D and 2B are deliberately absent: config_mimo_type() rejects TM5/6/7/8 outright, so
+ * such a grant can never yield a transport block, and searching them costs a size hypothesis
+ * per location per tracked UE per subframe for a DCI the blind search already reports.
+ *
+ * 1A first, because dci_blind_search() takes the first format that hits at a location. */
+static uint32_t sec_ue_formats(uint32_t nof_ports, srsran_dci_format_t out[SRSRAN_MAX_FORMATS])
+{
+  uint32_t n = 0;
+  out[n++]   = SRSRAN_DCI_FORMAT1A;
+  out[n++]   = SRSRAN_DCI_FORMAT1;
+  if (nof_ports > 1) {
+    out[n++] = SRSRAN_DCI_FORMAT2A;
+    out[n++] = SRSRAN_DCI_FORMAT2;
+  }
+  return n;
+}
+
+/* security_ctx.h restates the srsran enum sizes because it is a leaf header. This file does
+ * see the real enums, so it is where the restatement gets checked. */
+static_assert(NGSCOPE_SEC_NOF_FORMATS == SRSRAN_DCI_NOF_FORMATS,
+              "NGSCOPE_SEC_NOF_FORMATS is out of step with srsran_dci_format_t");
+static_assert(NGSCOPE_SEC_NOF_SCHEMES == SRSRAN_TXSCHEME_CDD + 1,
+              "NGSCOPE_SEC_NOF_SCHEMES is out of step with srsran_tx_scheme_t");
 
 int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               srsran_dl_sf_cfg_t* sf,
@@ -143,6 +250,11 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
 
   const uint16_t saved_rnti = pdsch_cfg->rnti;
   int            nof_written = 0;
+  int            nof_searched = 0;
+  int            nof_no_dci   = 0;
+
+  srsran_dci_format_t ue_formats[SRSRAN_MAX_FORMATS];
+  const uint32_t      nof_ue_formats = sec_ue_formats(ue_dl->cell.nof_ports, ue_formats);
 
   for (int i = 0; i < nof_rnti; i++) {
     const uint16_t rnti = rntis[i];
@@ -150,13 +262,22 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
     /* Targeted search of this UE's search space. The CRC is checked against the RNTI, so
      * unlike the blind path a hit here cannot be a manufactured candidate. */
     srsran_dci_dl_t dci_dl[SRSRAN_MAX_DCI_MSG] = {};
-    int             nof_dci = srsran_ue_dl_find_dl_dci(ue_dl, sf, cfg, rnti, dci_dl);
+    /* Common SS searched too: it is where Msg4 addressed to a temporary C-RNTI is scheduled,
+     * and cfg->cfg.dci_common_ss is false everywhere in ngscope, so that pass never ran. */
+    int             nof_dci = srsran_ue_dl_find_dl_dci_formats(ue_dl, sf, cfg, rnti, ue_formats,
+                                                               nof_ue_formats, true, dci_dl);
+    nof_searched++;
     if (nof_dci <= 0) {
+      /* Counted rather than dropped. On its own it says little -- a tracked UE usually has
+       * no grant in a given subframe -- but it is the only place a UE scheduled with a
+       * format this search does not look for would show up, and it was invisible. */
+      nof_no_dci++;
       continue;
     }
 
     for (int d = 0; d < nof_dci; d++) {
       pdsch_cfg->rnti = rnti;
+      ngscope_sec_count_dci(rf_idx, (int)dci_dl[d].format);
 
       /* Deliberately NOT skipping spatial-multiplexing grants. srsRAN has no multiplex
        * predecoder for 4 Tx ports, so on such a cell these attempts emit a pair of errors
@@ -174,6 +295,8 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
 
       int r = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[d], data, pdsch_res,
                                       cfg_alt);
+      /* Retry only a genuine CRC failure. r == -2 is a predecoding failure, upstream of rate
+       * matching, so the other MCS->TBS table cannot rescue it -- retrying was pure work. */
       if (r == 0 && sec_rf_idx_ok(rf_idx) && qam_retry_enabled[rf_idx]) {
         ngscope_sec_count_tb_retry(rf_idx);
         const int r2 = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[d], data,
@@ -185,9 +308,28 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
       }
       cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
 
-      if (r < 0) {
+      if (r == -1) {
         continue;   /* no buildable grant: not an attempt */
       }
+
+      /* The grant exists, so classify it whatever happened next. A scheme this cell and this
+       * receiver have no predecoder for is reported as its own outcome: it could not have
+       * decoded at any signal level, and calling that a CRC failure is what made the
+       * decodable share of a 4-port cell an assertion rather than a measurement. */
+      const srsran_tx_scheme_t scheme = pdsch_cfg->grant.tx_scheme;
+      const bool supported = scheme_supported(scheme, ue_dl->cell.nof_ports,
+                                              (uint32_t)ue_dl->nof_rx_antennas);
+      int outcome;
+      if (r == 1) {
+        outcome = NGSCOPE_SEC_GRANT_CRC_PASS;
+      } else if (!supported) {
+        outcome = NGSCOPE_SEC_GRANT_UNSUPPORTED;
+      } else if (r == -2) {
+        outcome = NGSCOPE_SEC_GRANT_PREDECODE_ERR;
+      } else {
+        outcome = NGSCOPE_SEC_GRANT_CRC_FAIL;
+      }
+      ngscope_sec_count_grant(rf_idx, (int)dci_dl[d].format, (int)scheme, outcome);
 
       bool pdsch_ok = false;
 
@@ -234,6 +376,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
     }
   }
 
+  ngscope_sec_count_scan(rf_idx, nof_searched, nof_no_dci);
   pdsch_cfg->rnti = saved_rnti;
   return nof_written;
 }
@@ -361,7 +504,6 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
                             uint64_t               ts_us,
                             uint64_t               collection_time)
 {
-  (void)ts_us;
   if (!sec_rf_idx_ok(rf_idx) || dci_per_sub == NULL || blind_probe[rf_idx].fd == NULL) {
     return 0;
   }
@@ -447,6 +589,46 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
           q->drb[ok]++;
         } else if (srb) {
           q->srb[ok]++;
+        }
+
+        if (!ok) {
+          /* Confirmed, and no RAR on this cell ever handed this RNTI out. Promote it: the
+           * DL-SCH CRC is a stricter test than the RAR anchor, so admitting on it does not
+           * loosen the filter that keeps manufactured RNTIs out -- those can never pass one.
+           *
+           * One passing block is the threshold. At ~2^-24 per block the second adds little
+           * against chance, and a UE whose downlink this receiver only ever caught once is
+           * exactly the marginal case worth keeping. The anchor is recorded per DCI in the
+           * .dciLog, so anyone who wants a stricter bar can apply it afterwards on evidence
+           * rather than having it silently pre-applied here.
+           *
+           * Both calls are idempotent and neither overrides a RAR anchor. */
+          ngscope_rach_filter_add(rf_idx, rnti, tti, NGSCOPE_RACH_ANCHOR_CRC);
+          ngscope_sec_note_crc_confirmed(rf_idx, rnti, tti, ts_us, collection_time);
+
+          /* And write the block. The probe wrote no pcap when it only had to count, but a
+           * promoted UE's first confirmed block is the one place its pre-security RRC could
+           * be, and it is the only block that arrives before the tracked scan takes over. */
+          ngscope_mac_tb_t cap;
+          memset(&cap, 0, sizeof(cap));
+          cap.rf_idx          = rf_idx;
+          cap.tti             = tti;
+          cap.ts_us           = ts_us;
+          cap.collection_time = collection_time;
+          cap.rnti            = rnti;
+          cap.src             = NGSCOPE_MAC_SRC_PROBE;
+          cap.rv              = pdsch_cfg->grant.tb[0].rv;
+          cap.mcs             = pdsch_cfg->grant.tb[0].mcs_idx;
+          cap.tbs             = (int)tbs;
+          cap.prb             = pdsch_cfg->grant.nof_prb;
+          cap.harq_pid        = dci_dl[0].pid;
+          cap.format          = dci_dl[0].format;
+          cap.tx_scheme       = pdsch_cfg->grant.tx_scheme;
+          cap.rach_ok         = false; /* no RAR here -- that is the finding, not a defect */
+          cap.evm             = pdsch_res[0].evm;
+          cap.payload         = pdsch_res[0].payload;
+          cap.len             = tbs / 8;
+          ngscope_mac_pcap_write(&cap);
         }
       }
     }

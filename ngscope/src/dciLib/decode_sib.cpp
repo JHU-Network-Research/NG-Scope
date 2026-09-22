@@ -98,10 +98,42 @@ void save_cellcfg_from_sib1_json(asn1::rrc::sib_type1_s* sib1){
   return;
 }
 
+/* How many of the 64 RACH preambles this cell leaves for contention-based access.
+ *
+ * Everything at or above this index is reserved, handed to one UE at a time by the network:
+ * that is how a handover into this cell, and a PDCCH order, tell the UE which preamble to
+ * use. So a RAR whose RAPID is >= this value answers a contention-FREE RACH, and a RAR below
+ * it answers a UE that picked its own preamble at random -- an ordinary connection attempt.
+ *
+ * It is only knowable from SIB2, and decode_SIB is off on captures where SIB decoding
+ * crashes. Written to its own file so that its absence is unambiguous: no file means the
+ * boundary was never learned, and tools/security_scan.py must then classify every RACH
+ * `unknown` rather than guess. Inferring it from the RAPID histogram would be guessing. */
+void save_rach_config_json(asn1::rrc::sib_type2_s* sib2)
+{
+  char path[1280];
+  cellcfg_path(path, sizeof(path), "rach_config.json");
+  FILE* f = fopen(path, "w");
+  if (f == NULL) {
+    return;
+  }
+  const uint8_t nof_ra_preambs =
+      sib2->rr_cfg_common.rach_cfg_common.preamb_info.nof_ra_preambs.to_number();
+  fprintf(f, "{\n");
+  fprintf(f, "\"nof_ra_preambles\": \"%u\",\n", (unsigned)nof_ra_preambs);
+  fprintf(f, "\"contention_free_rapid_min\": \"%u\"\n", (unsigned)nof_ra_preambs);
+  fprintf(f, "}");
+  fclose(f);
+  printf("CELL: rach-ConfigCommon -- %u contention-based preambles; a RAR with RAPID >= %u "
+         "answers a contention-free RACH (handover in, or a PDCCH order)\n",
+         (unsigned)nof_ra_preambs, (unsigned)nof_ra_preambs);
+}
+
 void save_cellcfg_from_sib2_json(asn1::rrc::sib_type2_s* sib2){
 
 
   sib_json_record.pdsch_power_dbm = sib2->rr_cfg_common.pdsch_cfg_common.ref_sig_pwr;
+  save_rach_config_json(sib2);
   
   if(have_sib1 == false){
     return;
