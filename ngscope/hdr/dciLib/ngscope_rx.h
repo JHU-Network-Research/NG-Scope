@@ -25,8 +25,29 @@ typedef struct {
 }rx_frame_header_t;
 
 typedef struct {
+    // written before recording starts, gathered from config
     uint32_t nof_rx_antenna;
     double rf_freq;
+    uint64_t record_start_ns;
+
+    //populated after the recording is done
+    char location[1024];
+    char comment[1024];
+    uint64_t record_duration_ns;
+
+    uint32_t pci;
+    uint32_t prb;
+    uint32_t nof_cell_ports;
+
+    srsran_cp_t           cp;
+    srsran_phich_length_t phich_length;
+    srsran_phich_r_t      phich_resources;
+    srsran_frame_type_t   frame_type;
+
+    uint32_t decoded_frames;
+    uint32_t desynced_frames;
+    uint32_t skipped_frames;
+    uint32_t first_sync_frame;
 
 }rx_record_header_t;
 
@@ -47,3 +68,7 @@ int stop_record();
 int stop_replay();
 void flush_record(void *buf);
 void flush_thread_cleanup(void *arg);
+
+void update_record_header(rx_record_header_t *hdr);
+
+uint32_t get_rx_read_ctr();

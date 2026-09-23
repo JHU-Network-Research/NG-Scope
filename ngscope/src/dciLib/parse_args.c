@@ -57,6 +57,8 @@ void args_default(prog_args_t* args)
   args->mbsfn_area_id                      = -1;
   args->non_mbsfn_region                   = 2;
   args->mbsfn_sf_mask                      = 32;
+  bzero(args->location,LOCATION_MAX_LEN);
+  bzero(args->comment,COMMENT_MAX_LEN);
   bzero(args->sib_logs, SIB_LOGS_PATH_MAX_LEN);
 }
 

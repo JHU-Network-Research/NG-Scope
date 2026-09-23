@@ -18,6 +18,8 @@
 
 #define SIB_LOGS_PATH_MAX_LEN 512
 #define OUT_PATH_MAX_LEN 512
+#define COMMENT_MAX_LEN 1024
+#define LOCATION_MAX_LEN 1024
 
 typedef struct {
   int      nof_subframes;
@@ -79,6 +81,9 @@ typedef struct {
   bool     use_standard_lte_rate;
   char sib_logs[SIB_LOGS_PATH_MAX_LEN];
   char out_path[OUT_PATH_MAX_LEN];
+
+  char     comment[COMMENT_MAX_LEN];
+  char     location[LOCATION_MAX_LEN];
 
   int      exit_on_desync;
 } prog_args_t;

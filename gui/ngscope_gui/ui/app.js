@@ -29,6 +29,7 @@ const FIELD_GROUPS = {
      shown only when a cell is actually replaying. */
   securityReplay: ['qam_retry'],
   topToggles: ['decode_SIB', 'remote_enable'],
+  metadata: ['location','comment'],
 };
 
 /* Chips carry the one fact about a setting that is not obvious from its name -- a cost, or
@@ -81,6 +82,10 @@ function el(tag, className, text) {
    replaying, so no one has to set them back. */
 function replaying() {
   return ((S && S.config && S.config.cells) || []).some((c) => c.mode === MODE_REPLAY);
+}
+
+function recording() {
+  return ((S && S.config && S.config.cells) || []).some((c) => c.mode === MODE_RECORD);
 }
 
 function availableFields(fields) {
@@ -696,6 +701,13 @@ function renderTopLevel() {
     if (field) body.appendChild(renderField(field, top[key], set(key), `top.${key}`));
   });
 
+  if (recording()) {
+    FIELD_GROUPS.metadata.forEach((key) => {
+      const field = fieldByKey(SCHEMA.top_level, key);
+      if (field) body.appendChild(renderField(field, top[key], set(key), `top.${key}`));
+    })
+  }
+
   const toggles = el('div', 'toggles');
   FIELD_GROUPS.topToggles.forEach((key) => {
     const field = fieldByKey(SCHEMA.top_level, key);
@@ -709,6 +721,7 @@ function renderTopLevel() {
     ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topToggles,
     ...FIELD_GROUPS.rachPrimary, ...FIELD_GROUPS.rachDependent,
     ...FIELD_GROUPS.securityPrimary, ...FIELD_GROUPS.securityReplay,
+    ...FIELD_GROUPS.metadata,
   ]);
   appendLeftovers(body, rest, top, set, 'top');
 }
