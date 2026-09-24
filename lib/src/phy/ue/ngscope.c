@@ -1,4 +1,5 @@
 #include "srsran/srsran.h"
+#include <srsran/phy/common/phy_common.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
@@ -50,13 +51,18 @@ void unpack_dci_message_vec(srsran_ue_dl_t*        q,
 					srsran_ngscope_dci_into_array_ul(tree->dci_array, 0, loc_idx, tree->dci_location[loc_idx],
 									dci_msg[j].decode_prob, dci_msg[j].corr, &dci_ul, &dci_ul_grant);
 				}
-			}else{
+			} else if (dci_msg[j].format == SRSRAN_DCI_FORMAT1 || dci_msg[j].format == SRSRAN_DCI_FORMAT1A || dci_msg[j].format == SRSRAN_DCI_FORMAT1C
+			    || dci_msg[j].format == SRSRAN_DCI_FORMAT2 || dci_msg[j].format == SRSRAN_DCI_FORMAT2A){
 				// Upack the downlink dci to downlink grant
 				if(srsran_ngscope_unpack_dl_dci_2grant(q, sf, cfg, pdsch_cfg, &dci_msg[j],
 								&dci_dl, &dci_dl_grant) == SRSRAN_SUCCESS){
 					int format_idx = ngscope_format_to_index(dci_msg[j].format);
 					srsran_ngscope_dci_into_array_dl(tree->dci_array, format_idx, loc_idx, tree->dci_location[loc_idx],
 							dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl, &dci_dl_grant);
+				}else{
+				    if (dci_msg[j].format == SRSRAN_DCI_FORMAT2){
+								ERROR("Unpacking grant for format 2 DCI");
+					}
 				}
 			}
 		}

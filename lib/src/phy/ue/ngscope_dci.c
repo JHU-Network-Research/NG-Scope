@@ -1,3 +1,4 @@
+#include <srsran/phy/common/phy_common.h>
 #include <string.h>
 #include "srsran/srsran.h"
 #include "srsran/phy/ue/ngscope_dci.h"
@@ -17,7 +18,8 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
                                         srsran_pdsch_grant_t* dci_dl_grant)
 {
     if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, &cfg->cfg.dci, dci_msg, dci_dl)) {
-        //ERROR("Unpacking DL DCI");
+        if (dci_msg->format == SRSRAN_DCI_FORMAT2)
+            ERROR("Unpacking DL DCI");
         return SRSRAN_ERROR;
     }
 
@@ -35,6 +37,8 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
     if (dci_dl->is_pdcch_order) {
         ngscope_pdcch_order_note_bound(dci_msg->rnti, sf->tti, dci_dl->preamble_idx,
                                        dci_dl->prach_mask_idx);
+        if (dci_msg->format == SRSRAN_DCI_FORMAT2)
+            ERROR("order note bound");
         return SRSRAN_ERROR;
     }
     uint32_t before_crb;
@@ -47,7 +51,8 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
     // }
 
     if (srsran_ue_dl_dci_to_pdsch_grant(q,sf, cfg, dci_dl, dci_dl_grant)) {
-        // ERROR("Unpacking dl dci to pdsch grant");
+        if (dci_msg->format == SRSRAN_DCI_FORMAT2)
+            ERROR("Unpacking dl dci to pdsch grant");
         return SRSRAN_ERROR;
     }
 

@@ -23,6 +23,7 @@
 
 #include "srsran/srsran.h"
 // #include "dciLib/ngscope_rx.h"
+#include <srsran/phy/common/phy_common.h>
 #include <string.h>
 #include "dciLib/rach_filter.h"
 // #include "srsran/phy/ue/ngscope_consistency.h"
@@ -666,6 +667,15 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
           return SRSRAN_ERROR;
         }
 
+        // P/SI/RA-RNTIs must be format 1A or 1C
+        if (!SRSRAN_RNTI_ISUSER(dci_msg[nof_dci].rnti) && !SRSRAN_RNTI_ISMBSFN(dci_msg[nof_dci].rnti)){
+            if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT1A && dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT1C){
+                continue;
+            }
+        }
+        // if (dci_msg[nof_dci].rnti == 4 && )
+
+
         /* Thread-bound: uses the calling decoder thread's RF device, and only filters when
          * that device set rach_filter_only. Previously this hardcoded rf_idx 0 and ran
          * unconditionally, so cells 1..3 were filtered against cell 0's RNTI set and the
@@ -676,6 +686,12 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
           // printf("Filtering invalid dci: %d\n", dci_msg[nof_dci].rnti);
           continue;
         }
+
+        // Skip DCIs for unsupported formats
+        // if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
+        //     continue;
+        // }
+
 
       	dci_msg[nof_dci].decode_prob = decode_prob;
         // Check if RNTI is matched

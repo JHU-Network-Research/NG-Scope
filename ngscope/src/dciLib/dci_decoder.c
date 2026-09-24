@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <srsran/phy/common/phy_common.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -182,6 +182,9 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
   switch (dci->alloc_type) {
     case SRSRAN_RA_ALLOC_TYPE0:
       bitmask = dci->type0_alloc.rbg_bitmask;
+      if (bitmask == 0){
+          return SRSRAN_ERROR;
+      }
       int nb  = (int)ceilf((float)nof_prb / P);
       for (i = 0; i < nb; i++) {
         if (bitmask & (1 << (nb - i - 1))) {
@@ -196,6 +199,9 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
       memcpy(&grant->prb_idx[1], &grant->prb_idx[0], SRSRAN_MAX_PRB * sizeof(bool));
       break;
     case SRSRAN_RA_ALLOC_TYPE1:
+        if (dci->type1_alloc.rbg_subset >= P) {
+            return SRSRAN_ERROR;
+            }
       // Make sure the rbg_subset is valid
       if (dci->type1_alloc.rbg_subset >= P) {
         // ERROR("Invalid RBG subset=%d for nof_prb=%d where P=%d", dci->type1_alloc.rbg_subset, nof_prb, P);
@@ -212,6 +218,9 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
       }
       int shift = dci->type1_alloc.shift ? (n_rb_rbg_subset - n_rb_type1) : 0;
       bitmask   = dci->type1_alloc.vrb_bitmask;
+      if (bitmask == 0) {
+          return SRSRAN_ERROR;  // No VRBs allocated
+        }
       for (i = 0; i < n_rb_type1; i++) {
         if (bitmask & (1 << (n_rb_type1 - i - 1))) {
           uint32_t idx = (((i + shift) / P) * P * P + dci->type1_alloc.rbg_subset * P + (i + shift) % P);
@@ -418,7 +427,8 @@ static int dl_dci_compute_tb(bool pdsch_use_tbs_index_alt, const srsran_dci_dl_t
         return SRSRAN_ERROR;
       }
     } else {
-      //ERROR("Error decoding DCI: P/SI/RA-RNTI supports Format1A/1C only");
+        // if (dci->format == SRSRAN_DCI_FORMAT2)
+            ERROR("Error decoding DCI with RNTI %d: P/SI/RA-RNTI supports Format1A/1C only", dci->rnti);
       return SRSRAN_ERROR;
     }
     grant->tb[0].mod = SRSRAN_MOD_QPSK;
@@ -440,7 +450,7 @@ static int dl_dci_compute_tb(bool pdsch_use_tbs_index_alt, const srsran_dci_dl_t
         if (grant->tb[i].tbs < 0) {
           char str[128];
           srsran_dci_dl_info(dci, str, sizeof(str));
-          INFO("Error computing TBS from %s", str);
+          ERROR("Error computing TBS from %s", str);
           return SRSRAN_ERROR;
         }
       } else {
@@ -660,17 +670,20 @@ static int
 config_mimo(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_t* dci, srsran_pdsch_grant_t* grant)
 {
   if (config_mimo_type(cell, tm, dci, grant)) {
-    // ERROR("Configuring MIMO type");
+      if (dci->format == SRSRAN_DCI_FORMAT2)
+          ERROR("Configuring MIMO type");
     return -1;
   }
 
   if (config_mimo_pmi(cell, dci, grant)) {
-    // ERROR("Configuring MIMO PMI");
+      if (dci->format == SRSRAN_DCI_FORMAT2)
+          ERROR("Configuring MIMO PMI");
     return -1;
   }
 
   if (config_mimo_layers(cell, dci, grant)) {
-    // ERROR("Configuring MIMO layers");
+      if (dci->format == SRSRAN_DCI_FORMAT2)
+          ERROR("Configuring MIMO layers");
     return -1;
   }
 
@@ -711,11 +724,13 @@ int srsran_ra_dl_dci_to_grant(const srsran_cell_t*   cell,
         }
       }
     } else {
-      INFO("Configuring TB Info");
+        if (dci->format == SRSRAN_DCI_FORMAT2)
+            ERROR("Configuring TB Info");
       return SRSRAN_ERROR;
     }
   } else {
-    // ERROR("Configuring resource allocation");
+      if (dci->format == SRSRAN_DCI_FORMAT2)
+          ERROR("Configuring resource allocation");
     return SRSRAN_ERROR;
   }
 

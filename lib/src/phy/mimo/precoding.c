@@ -1193,6 +1193,128 @@ static int srsran_predecoding_ccd_2x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
   return SRSRAN_SUCCESS;
 }
 
+// 4x2 CDD predecoding with 2 layers, MMSE equalization, with CSI output
+static int srsran_predecoding_ccd_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
+                                               cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                               cf_t*  x[SRSRAN_MAX_LAYERS],
+                                               float* csi[SRSRAN_MAX_CODEWORDS],
+                                               int    nof_symbols,
+                                               float  scaling,
+                                               float  noise_estimate)
+{
+  // 4-port CDD cycles through 4 precoder indices
+  // From 3GPP TS 36.211 Table 6.3.4.2.3-2 (4 antenna ports, 2 layers)
+  // The large-delay CDD matrix D and DFT matrix U combine with codebook C
+  // Effective precoding cycles with period 4 across subcarriers
+  //
+  // For 4x2 with 2 layers, the effective channel matrix H_eff = H * W
+  // where W is 4x2 precoding matrix cycling through indices 0,1,2,3
+  //
+  // Codebook index 0: W = 1/2 * [1  0;  0  1;  1  0;  0 -1]  -> h_eff = [h0+h2, h1-h3]
+  // Codebook index 1: W = 1/2 * [1  0;  0  1;  0  1; -1  0]  -> h_eff = [h0, h1+h2-h3] (simplified)
+  // Codebook index 2: W = 1/2 * [1  0;  0  1; -1  0;  0  1]  -> h_eff = [h0-h2, h1+h3]
+  // Codebook index 3: W = 1/2 * [1  0;  0  1;  0 -1;  1  0]  -> h_eff = [h0, h1-h2+h3] (simplified)
+  //
+  // Actually using the standard CDD formula with cycling:
+  // W(i) = C * D(i) * U where D(i) = diag(1, e^{-j*2*pi*i/4}, e^{-j*4*pi*i/4}, e^{-j*6*pi*i/4})
+  //
+  // For practical implementation, we use the 4 codebook matrices that cycle:
+
+  int   i    = 0;
+  float norm = 2.0f / scaling;
+
+  // Phase factors for CDD: e^{-j*2*pi*k/4} for k=0,1,2,3
+  // k=0: 1, k=1: -j, k=2: -1, k=3: j
+  const cf_t phase[4] = {1.0f, -I, -1.0f, I};
+
+  cf_t h00, h01, h10, h11;  // Effective 2x2 channel after combining 4 TX
+
+  for (i = 0; i < nof_symbols; i++) {
+    int idx = i % 4;  // Cycle through 4 precoders
+
+    // Compute effective channel by combining 4 TX channels with CDD precoding
+    // H_eff[rx][layer] = sum over tx of H[tx][rx] * W[tx][layer]
+    //
+    // Using CDD structure: apply phase rotation to TX ports 1,2,3
+    // TX0: phase[0] = 1
+    // TX1: phase[idx]
+    // TX2: phase[2*idx % 4]
+    // TX3: phase[3*idx % 4]
+
+    cf_t p0 = phase[0];                    // Always 1
+    cf_t p1 = phase[idx];                  // Cycles: 1, -j, -1, j
+    cf_t p2 = phase[(2 * idx) % 4];        // Cycles: 1, -1, 1, -1
+    cf_t p3 = phase[(3 * idx) % 4];        // Cycles: 1, j, -1, -j
+
+    // For 2 layers with 4 TX, the precoding matrix structure gives:
+    // Layer 0: uses TX0 and TX2 (with phases)
+    // Layer 1: uses TX1 and TX3 (with phases)
+    //
+    // Effective channel for RX0:
+    // h_eff[0][0] = h[0][0]*p0 + h[2][0]*p2  (RX0, Layer0)
+    // h_eff[0][1] = h[1][0]*p1 + h[3][0]*p3  (RX0, Layer1)
+    // Effective channel for RX1:
+    // h_eff[1][0] = h[0][1]*p0 + h[2][1]*p2  (RX1, Layer0)
+    // h_eff[1][1] = h[1][1]*p1 + h[3][1]*p3  (RX1, Layer1)
+
+    // h[tx_port][rx_port][symbol]
+    h00 = h[0][0][i] * p0 + h[2][0][i] * p2;  // RX0, Layer0
+    h01 = h[1][0][i] * p1 + h[3][0][i] * p3;  // RX0, Layer1
+    h10 = h[0][1][i] * p0 + h[2][1][i] * p2;  // RX1, Layer0
+    h11 = h[1][1][i] * p1 + h[3][1][i] * p3;  // RX1, Layer1
+
+    // Now solve 2x2 MMSE: y = H_eff * x + n
+    srsran_mat_2x2_mmse_csi_gen(
+        y[0][i], y[1][i], h00, h01, h10, h11,
+        &x[0][i], &x[1][i], &csi[0][i], &csi[1][i],
+        noise_estimate, norm);
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+// 4x2 CDD predecoding with 2 layers, MMSE equalization, without CSI output
+static int srsran_predecoding_ccd_4x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
+                                           cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                           cf_t* x[SRSRAN_MAX_LAYERS],
+                                           int   nof_symbols,
+                                           float scaling,
+                                           float noise_estimate)
+{
+  int   i    = 0;
+  float norm = 2.0f / scaling;
+
+  // Phase factors for CDD: e^{-j*2*pi*k/4} for k=0,1,2,3
+  const cf_t phase[4] = {1.0f, -I, -1.0f, I};
+
+  cf_t h00, h01, h10, h11;
+
+  for (i = 0; i < nof_symbols; i++) {
+    int idx = i % 4;
+
+    cf_t p0 = phase[0];
+    cf_t p1 = phase[idx];
+    cf_t p2 = phase[(2 * idx) % 4];
+    cf_t p3 = phase[(3 * idx) % 4];
+
+    // Effective 2x2 channel
+    h00 = h[0][0][i] * p0 + h[2][0][i] * p2;
+    h01 = h[1][0][i] * p1 + h[3][0][i] * p3;
+    h10 = h[0][1][i] * p0 + h[2][1][i] * p2;
+    h11 = h[1][1][i] * p1 + h[3][1][i] * p3;
+
+    srsran_mat_2x2_mmse_gen(
+        y[0][i], y[1][i], h00, h01, h10, h11,
+        &x[0][i], &x[1][i],
+        noise_estimate, norm);
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+
+
+
 int srsran_predecoding_ccd_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
                                 cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
                                 cf_t*  x[SRSRAN_MAX_LAYERS],
@@ -1215,8 +1337,12 @@ int srsran_predecoding_ccd_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
       ERROR("Error predecoding CCD: Invalid number of layers %d", nof_layers);
       return -1;
     }
-  } else if (nof_ports == 4) {
-    ERROR("Error predecoding CCD: Only 2 ports supported");
+  } else if (nof_ports == 4 && nof_rxant == 2) {
+      if (csi && csi[0])
+        return srsran_predecoding_ccd_4x2_mmse_csi(y, h, x, csi, nof_symbols, scaling, noise_estimate);
+      else {
+        return srsran_predecoding_ccd_4x2_mmse(y, h, x, nof_symbols, scaling, noise_estimate);
+      }
   } else {
     ERROR("Error predecoding CCD: Invalid combination of ports %d and rx antennax %d", nof_ports, nof_rxant);
   }
