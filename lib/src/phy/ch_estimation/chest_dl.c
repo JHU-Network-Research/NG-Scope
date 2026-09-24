@@ -1009,6 +1009,7 @@ int srsran_chest_dl_estimate_cfg(srsran_chest_dl_t*     q,
     }
 
     for (uint32_t port_id = 0; port_id < q->cell.nof_ports; port_id++) {
+        // printf("Checking cell port %d\n", port_id);
       if (sf->sf_type == SRSRAN_SF_MBSFN) {
         if (estimate_port_mbsfn(q, sf, cfg, input[rxant_id], res->ce[port_id][rxant_id], port_id, rxant_id)) {
           return SRSRAN_ERROR;

@@ -163,7 +163,7 @@ static bool scheme_supported(srsran_tx_scheme_t s, uint32_t nof_ports, uint32_t 
     case SRSRAN_TXSCHEME_PORT0:      return nof_ports == 1;
     case SRSRAN_TXSCHEME_DIVERSITY:  return nof_ports == 2 || nof_ports == 4;
     case SRSRAN_TXSCHEME_CDD:        return nof_ports == 2 && nof_rxant == 2;
-    case SRSRAN_TXSCHEME_SPATIALMUX: return nof_ports == 2;
+    case SRSRAN_TXSCHEME_SPATIALMUX: return nof_ports == 2 || nof_ports == 4;
     default:                         return false;
   }
 }
@@ -243,7 +243,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
   static bool errors_muted = false;
   if (!errors_muted) {
     errors_muted = true;
-    set_handler_enabled(true);
+    // set_handler_enabled(true);
     printf("SECURITY: probing UE transport blocks; srsRAN PHY errors are routed to srslog "
            "for the rest of this run (they would otherwise flood stderr)\n");
   }

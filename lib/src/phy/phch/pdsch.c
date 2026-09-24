@@ -826,6 +826,15 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
          srsran_mod_string(cfg->grant.tb[0].mod),
          cfg->grant.nof_layers,
          nof_tb);
+    // if (cfg->grant.tx_scheme == SRSRAN_TXSCHEME_SPATIALMUX)
+    //     printf("Decoding PDSCH SF: %d, RNTI: 0x%x, NofSymbols: %d, C_prb=%d, mod=%s, nof_layers=%d, nof_tb=%d\n",
+    //         sf->tti % 10,
+    //         cfg->rnti,
+    //         cfg->grant.nof_re,
+    //         cfg->grant.nof_prb,
+    //         srsran_mod_string(cfg->grant.tb[0].mod),
+    //         cfg->grant.nof_layers,
+    //         nof_tb);
 
     // Extract Symbols and Channel Estimates
     uint32_t lstart = SRSRAN_NOF_CTRL_SYMBOLS(q->cell, sf->cfi);
@@ -833,6 +842,7 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
       int n = srsran_pdsch_get(q, sf_symbols[j], q->symbols[j], &cfg->grant, lstart, sf->tti % 10);
       if (n != cfg->grant.nof_re) {
         ERROR("Error expecting %d symbols but got %d", cfg->grant.nof_re, n);
+        fprintf(stderr,"Error expecting %d symbols but got %d", cfg->grant.nof_re, n);
         return SRSRAN_ERROR;
       }
 
@@ -840,6 +850,7 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
         n = srsran_pdsch_get(q, channel->ce[i][j], q->ce[i][j], &cfg->grant, lstart, sf->tti % 10);
         if (n != cfg->grant.nof_re) {
           ERROR("Error expecting %d symbols but got %d", cfg->grant.nof_re, n);
+          fprintf(stderr,"Error expecting %d symbols but got %d\n", cfg->grant.nof_re, n);
           return SRSRAN_ERROR;
         }
       }
@@ -847,6 +858,7 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
 
     if (cfg->grant.nof_layers == 0 || cfg->grant.nof_layers > SRSRAN_MAX_LAYERS) {
       ERROR("PDSCH Number of layers (%d) is out-of-bounds", cfg->grant.nof_layers);
+      fprintf(stderr,"PDSCH Number of layers (%d) is out-of-bounds\n", cfg->grant.nof_layers);
       return SRSRAN_ERROR_OUT_OF_BOUNDS;
     }
 
@@ -863,8 +875,20 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
       x = q->x;
     }
 
+
+    uint32_t codebook_idx;
+
+
+    if (q->cell.nof_ports == 4) {
+      // 4-antenna ports: direct mapping
+      codebook_idx = cfg->grant.pmi;
+    } else {
+      // 2-antenna ports: dual layer needs +1 offset
+      codebook_idx = (nof_tb == 1) ? cfg->grant.pmi : (cfg->grant.pmi + 1);
+    }
+
     // Pre-decoder
-    uint32_t codebook_idx = nof_tb == 1 ? cfg->grant.pmi : (cfg->grant.pmi + 1);
+    // uint32_t codebook_idx = nof_tb == 1 ? cfg->grant.pmi : (cfg->grant.pmi + 1);
     if (srsran_predecoding_type(q->symbols,
                                 q->ce,
                                 x,
@@ -877,13 +901,17 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
                                 cfg->grant.tx_scheme,
                                 pdsch_scaling,
                                 noise_estimate) < 0) {
-      ERROR("Error predecoding");
+      ERROR("Error predecoding for nof_rx=%d, nof_ports=%d, nof_layers=%d",q->nof_rx_antennas,q->cell.nof_ports,cfg->grant.nof_layers);
+      fprintf(stderr, "Error predecoding for nof_rx=%d, nof_ports=%d, nof_layers=%d\n",q->nof_rx_antennas,q->cell.nof_ports,cfg->grant.nof_layers);
       return SRSRAN_ERROR;
     }
 
     // Layer demapping only if necessary
     if (cfg->grant.nof_layers != nof_tb) {
       srsran_layerdemap_type(x, q->d, cfg->grant.nof_layers, nof_tb, nof_symbols[0], nof_symbols, cfg->grant.tx_scheme);
+      // printf("NEED TO DEMAP LAYERS, nof_layers=%d, not_tb=%d\n",cfg->grant.nof_layers,nof_tb );
+    }else{
+      // printf("No demapping needed for nof_layers=%d, nof_tb=%d\n",cfg->grant.nof_layers,nof_tb);
     }
 
     /* Codeword decoding: Implementation of 3GPP 36.212 Table 5.3.3.1.5-1 and Table 5.3.3.1.5-2 */

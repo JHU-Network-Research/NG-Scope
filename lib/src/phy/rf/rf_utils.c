@@ -127,7 +127,9 @@ int rf_mib_decoder(srsran_rf_t*       rf,
 
   if (mode != REPLAY){
     INFO("Setting sampling frequency %.2f MHz for PSS search", (float)srate / 1000000);
-    srsran_rf_set_rx_srate(rf, (float)srate);
+    printf("Setting sampling frequency %.2f MHz for PSS search\n", (float)srate / 1000000);
+    double res = srsran_rf_set_rx_srate(rf, (float)srate);
+    printf("Set samping frequency to %.2f MHz with result %.2f MHz\n", (float)srate / 1000000, (float)res / 1000000);
 
     INFO("Starting receiver...");
     printf("DEBUG: Starting receiver\n");
@@ -197,7 +199,7 @@ int rf_cell_search(srsran_rf_t*       rf,
   if (mode != REPLAY){
     INFO("Setting sampling frequency %.2f MHz for PSS search", SRSRAN_CS_SAMP_FREQ / 1000000);
     srsran_rf_set_rx_srate(rf, SRSRAN_CS_SAMP_FREQ);
-  
+
 
   INFO("Starting receiver...");
   srsran_rf_start_rx_stream(rf, false);

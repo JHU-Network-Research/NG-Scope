@@ -68,4 +68,6 @@ SRSRAN_API int srsran_ngscope_dci_prune(ngscope_tree_t* q,
                                         uint32_t sf_idx);
 
 int srsran_ngscope_dci_prune_ret(ngscope_dci_per_sub_t* q);
+
+srsran_tm_t infer_tm_from_dci(srsran_cell_t* cell, srsran_dci_dl_t* dci);
 #endif

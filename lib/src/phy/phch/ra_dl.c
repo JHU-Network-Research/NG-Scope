@@ -198,7 +198,7 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
     case SRSRAN_RA_ALLOC_TYPE1:
       // Make sure the rbg_subset is valid
       if (dci->type1_alloc.rbg_subset >= P) {
-        //ERROR("Invalid RBG subset=%d for nof_prb=%d where P=%d", dci->type1_alloc.rbg_subset, nof_prb, P);
+        // ERROR("Invalid RBG subset=%d for nof_prb=%d where P=%d", dci->type1_alloc.rbg_subset, nof_prb, P);
         return SRSRAN_ERROR;
       }
       n_rb_type1    = srsran_ra_type1_N_rb(nof_prb);
@@ -219,7 +219,7 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
             grant->prb_idx[0][idx] = true;
             grant->nof_prb++;
           } else {
-            //ERROR("Invalid idx=%d in Type1 RA, nof_prb=%d", idx, nof_prb);
+            // ERROR("Invalid idx=%d in Type1 RA, nof_prb=%d", idx, nof_prb);
             return SRSRAN_ERROR;
           }
         }
@@ -227,6 +227,13 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
       memcpy(&grant->prb_idx[1], &grant->prb_idx[0], SRSRAN_MAX_PRB * sizeof(bool));
       break;
     case SRSRAN_RA_ALLOC_TYPE2:
+
+        uint32_t max_riv = nof_prb * (nof_prb + 1) / 2;
+        if (dci->type2_alloc.riv >= max_riv) {
+        // ERROR("Invalid RIV %d >= max %d for nof_prb=%d",
+        //         dci->type2_alloc.riv, max_riv, nof_prb);
+        return SRSRAN_ERROR;
+        }
 
       if (dci->type2_alloc.mode == SRSRAN_RA_TYPE2_LOC) {
         nof_vrb = nof_prb;
@@ -246,6 +253,14 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
         L_crb *= n_step;
         RB_start *= n_step;
       }
+
+      // Validate decoded allocation
+        if (L_crb == 0 || RB_start + L_crb > nof_prb) {
+          // ERROR("Invalid Type2 allocation: RB_start=%d, L_crb=%d, nof_prb=%d (RIV=%d)",
+          //       RB_start, L_crb, nof_prb, dci->type2_alloc.riv);
+          return SRSRAN_ERROR;
+        }
+
       // fprintf(stderr, "Setting L_crb=%u and rb_start=%u\n", L_crb, RB_start);
       if (out_L_crb)  memcpy(out_L_crb, &L_crb, sizeof(uint32_t));
       //  *out_L_crb    = L_crb;
@@ -292,12 +307,14 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
             if (n_tilde_prb_odd < nof_prb) {
               grant->prb_idx[0][n_tilde_prb_odd] = true;
             } else {
+                // ERROR("n_tilde_prb_odd %d < nof_prb %d", n_tilde_prb_odd, nof_prb);
               return SRSRAN_ERROR;
             }
           } else {
             if (n_tilde_prb_odd + N_gap - N_tilde_vrb / 2 < nof_prb) {
               grant->prb_idx[0][n_tilde_prb_odd + N_gap - N_tilde_vrb / 2] = true;
             } else {
+                // ERROR("n_tilde_prb_odd %d + N_gap %d - N_tilde_vrb %d / 2 < nof_prb %d", n_tilde_prb_odd, N_gap, N_tilde_vrb, nof_prb);
               return SRSRAN_ERROR;
             }
           }
@@ -306,12 +323,19 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
             if (n_tilde_prb_even < nof_prb) {
               grant->prb_idx[1][n_tilde_prb_even] = true;
             } else {
+                // ERROR("n_tilde_prb_even %d < nof_prb %d", n_tilde_prb_even, nof_prb);
               return SRSRAN_ERROR;
             }
           } else {
             if (n_tilde_prb_even + N_gap - N_tilde_vrb / 2 < nof_prb) {
               grant->prb_idx[1][n_tilde_prb_even + N_gap - N_tilde_vrb / 2] = true;
             } else {
+                // ERROR("n_tilde_prb_even %d + N_gap %d - N_tilde_vrb %d  / 2 < nof_prb %d", n_tilde_prb_even, N_gap, N_tilde_vrb, nof_prb);
+                // fprintf(stderr,"Type2 distributed allocation out of bounds: "
+                //         "n_tilde_prb_even=%d, N_gap=%d, N_tilde_vrb=%d, nof_prb=%d, "
+                //         "RB_start=%d, L_crb=%d, i=%d, RIV=%d\n",
+                //         n_tilde_prb_even, N_gap, N_tilde_vrb, nof_prb,
+                //         RB_start, L_crb, i, dci->type2_alloc.riv);
               return SRSRAN_ERROR;
             }
           }
@@ -319,6 +343,7 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
       }
       break;
     default:
+        ERROR("Invalid DCI Allocation Type: %d", dci->alloc_type);
       return SRSRAN_ERROR;
   }
 
@@ -500,7 +525,10 @@ config_mimo_type(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_
     case SRSRAN_TM6:
     case SRSRAN_TM7:
     case SRSRAN_TM8:
-      ERROR("Not implemented Tx mode (%d)", tm + 1);
+    case SRSRAN_TM9:
+    case SRSRAN_TM10:
+      // ERROR("Not implemented Tx mode (%d)", tm + 1);
+      valid_config = false;
       break;
 
       /* Error cases */
@@ -511,30 +539,73 @@ config_mimo_type(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_
 }
 
 /* Translates Precoding Information (pinfo) to Precoding matrix Index (pmi) as 3GPP 36.212 Table 5.3.3.1.5-4 */
+// static int config_mimo_pmi(const srsran_cell_t* cell, const srsran_dci_dl_t* dci, srsran_pdsch_grant_t* grant)
+// {
+//   uint32_t nof_tb = grant->nof_tb;
+//   if (grant->tx_scheme == SRSRAN_TXSCHEME_SPATIALMUX) {
+//     if (nof_tb == 1) {
+//       if (dci->pinfo > 0 && dci->pinfo < 5) {
+//         grant->pmi = dci->pinfo - 1;
+//       } else {
+//         ERROR("Not Implemented (nof_tb=%d, pinfo=%d)", nof_tb, dci->pinfo);
+//         return -1;
+//       }
+//     } else {
+//       if (dci->pinfo == 2) {
+//         ERROR("Not implemented codebook index (nof_tb=%d (%d/%d), pinfo=%d)",
+//               nof_tb,
+//               SRSRAN_DCI_IS_TB_EN(grant->tb[0]),
+//               SRSRAN_DCI_IS_TB_EN(grant->tb[1]),
+//               dci->pinfo);
+//         return -1;
+//       } else if (dci->pinfo > 2) {
+//         ERROR("Reserved codebook index (nof_tb=%d, pinfo=%d)", nof_tb, dci->pinfo);
+//         return -1;
+//       }
+//       grant->pmi = dci->pinfo % 2;
+//     }
+//   }
+
+//   return 0;
+// }
+//
 static int config_mimo_pmi(const srsran_cell_t* cell, const srsran_dci_dl_t* dci, srsran_pdsch_grant_t* grant)
 {
   uint32_t nof_tb = grant->nof_tb;
+
   if (grant->tx_scheme == SRSRAN_TXSCHEME_SPATIALMUX) {
-    if (nof_tb == 1) {
-      if (dci->pinfo > 0 && dci->pinfo < 5) {
-        grant->pmi = dci->pinfo - 1;
+
+    if (cell->nof_ports == 2) {
+      // 2-antenna ports: 3-bit pinfo field
+      if (nof_tb == 1) {
+        if (dci->pinfo == 0) {
+          grant->pmi = 0;
+        } else if (dci->pinfo <= 4) {
+          grant->pmi = dci->pinfo - 1;
+        } else {
+          ERROR("Invalid pinfo for 2-port single layer (pinfo=%d)", dci->pinfo);
+          return -1;
+        }
       } else {
-        ERROR("Not Implemented (nof_tb=%d, pinfo=%d)", nof_tb, dci->pinfo);
-        return -1;
+        // Dual layer: lower 2 bits for PMI
+        grant->pmi = dci->pinfo & 0x01;
       }
+
+    } else if (cell->nof_ports == 4) {
+      // 4-antenna ports: 6-bit pinfo field
+      // Extract lower 4 bits for TPMI/codebook index (0-15)
+      grant->pmi = dci->pinfo & 0x0F;
+
+      // Note: Bit 4 is TB-CW swap, Bit 5 is precoding confirmation
+      // These are ignored here but may need handling in PDSCH decoder
+      if (dci->pinfo > 15) {
+        DEBUG("4-port pinfo=%d: pmi=%d, flags=%d",
+              dci->pinfo, grant->pmi, dci->pinfo >> 4);
+      }
+
     } else {
-      if (dci->pinfo == 2) {
-        ERROR("Not implemented codebook index (nof_tb=%d (%d/%d), pinfo=%d)",
-              nof_tb,
-              SRSRAN_DCI_IS_TB_EN(grant->tb[0]),
-              SRSRAN_DCI_IS_TB_EN(grant->tb[1]),
-              dci->pinfo);
-        return -1;
-      } else if (dci->pinfo > 2) {
-        ERROR("Reserved codebook index (nof_tb=%d, pinfo=%d)", nof_tb, dci->pinfo);
-        return -1;
-      }
-      grant->pmi = dci->pinfo % 2;
+      ERROR("Unsupported number of antenna ports: %d", cell->nof_ports);
+      return -1;
     }
   }
 
@@ -589,17 +660,17 @@ static int
 config_mimo(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_t* dci, srsran_pdsch_grant_t* grant)
 {
   if (config_mimo_type(cell, tm, dci, grant)) {
-    ERROR("Configuring MIMO type");
+    // ERROR("Configuring MIMO type");
     return -1;
   }
 
   if (config_mimo_pmi(cell, dci, grant)) {
-    ERROR("Configuring MIMO PMI");
+    // ERROR("Configuring MIMO PMI");
     return -1;
   }
 
   if (config_mimo_layers(cell, dci, grant)) {
-    ERROR("Configuring MIMO layers");
+    // ERROR("Configuring MIMO layers");
     return -1;
   }
 
@@ -620,6 +691,7 @@ int srsran_ra_dl_dci_to_grant(const srsran_cell_t*   cell,
                               srsran_pdsch_grant_t*  grant)
 {
   bzero(grant, sizeof(srsran_pdsch_grant_t));
+  // printf("USING TM %d\n", tm);
 
   // Compute PRB allocation
   int ret = srsran_ra_dl_grant_to_grant_prb_allocation(dci, grant, cell->nof_prb, NULL, NULL);
@@ -643,7 +715,7 @@ int srsran_ra_dl_dci_to_grant(const srsran_cell_t*   cell,
       return SRSRAN_ERROR;
     }
   } else {
-    ERROR("Configuring resource allocation");
+    // ERROR("Configuring resource allocation");
     return SRSRAN_ERROR;
   }
 
@@ -651,7 +723,7 @@ int srsran_ra_dl_dci_to_grant(const srsran_cell_t*   cell,
   return config_mimo(cell, tm, dci, grant);
 }
 
-/** Compute the DL grant parameters  
+/** Compute the DL grant parameters
  *  In NG-Scope, we igore the mimo configuration
  ***/
 int srsran_ra_dl_dci_to_grant_wo_mimo_yx(const srsran_cell_t*   cell,

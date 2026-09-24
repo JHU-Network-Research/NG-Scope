@@ -91,7 +91,7 @@ void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci);
  * header is a leaf (stdbool/stdint only). security_rrc.cpp, which does see the real enums,
  * static_asserts these against them, so a drift in srsRAN fails the build rather than
  * silently dropping counts off the end of an array. */
-#define NGSCOPE_SEC_NOF_FORMATS 13
+#define NGSCOPE_SEC_NOF_FORMATS 15
 #define NGSCOPE_SEC_NOF_SCHEMES 4
 
 #define NGSCOPE_SEC_GRANT_CRC_PASS      0

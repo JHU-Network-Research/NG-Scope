@@ -266,6 +266,7 @@ int srsran_wiener_dl_init(srsran_wiener_dl_t* q, uint32_t max_prb, uint32_t max_
 
     // Allocate state
     for (uint32_t tx = 0; tx < q->max_tx_ports && !ret; tx++) {
+        printf("Allocating resource for tx port %d\n", tx);
       for (uint32_t rx = 0; rx < q->max_rx_ant && !ret; rx++) {
         srsran_wiener_dl_state_t* state = srsran_wiener_dl_state_malloc(q);
         if (!state) {
@@ -767,6 +768,7 @@ int srsran_wiener_dl_run(srsran_wiener_dl_t* q,
 
     // Get estimator state
     srsran_wiener_dl_state_t* state = q->state[tx][rx];
+    printf("Got state for tx=%d,rx=%d, %d\n", tx, rx, state != NULL);
 
     // Process symbol
     switch (m) {
