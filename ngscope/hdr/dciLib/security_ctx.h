@@ -93,17 +93,18 @@ void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci);
  * silently dropping counts off the end of an array. */
 #define NGSCOPE_SEC_NOF_FORMATS 15
 #define NGSCOPE_SEC_NOF_SCHEMES 4
+#define NGSCOPE_SEC_NOF_TM 11
 
 #define NGSCOPE_SEC_GRANT_CRC_PASS      0
 #define NGSCOPE_SEC_GRANT_CRC_FAIL      1
 #define NGSCOPE_SEC_GRANT_PREDECODE_ERR 2
 #define NGSCOPE_SEC_GRANT_UNSUPPORTED   3
 
-void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome);
+void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome, int tm);
 
 /* One DCI found by the targeted search, before any decode is attempted. Separate from
  * count_grant so "found but never buildable" is visible per format. */
-void ngscope_sec_count_dci(int rf_idx, int fmt);
+void ngscope_sec_count_dci(int rf_idx, int fmt, int tm);
 
 void ngscope_sec_report(int rf_idx);
 

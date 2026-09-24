@@ -7,6 +7,9 @@ extern "C" {
 }
 
 #include "ngscope/hdr/dciLib/mac_pcap.h"
+// #include "srsran/srsran.h"
+// #include "srsran/phy/ue/ngscope_dci.h"
+
 
 #include <pthread.h>
 #include <stdio.h>
@@ -64,11 +67,40 @@ void ngscope_sec_rrc_set_qam_retry(int rf_idx, bool enable)
  * (srsran_ue_dl_decode_pdsch reads the grant, not the config). */
 static srsran_tm_t tm_for_format(srsran_dci_format_t f, uint32_t nof_ports)
 {
+
+    if (nof_ports == 1){
+        return SRSRAN_TM1;
+    }
   switch (f) {
+      case SRSRAN_DCI_FORMAT1:
+        // Format 1: Single codeword, could be TM1, TM2, or TM7
+        return SRSRAN_TM2;  // Assume transmit diversity
+      case SRSRAN_DCI_FORMAT1A:
+        // Format 1A: Compact, single codeword - typically TM2 fallback
+        return SRSRAN_TM2;
+
+      case SRSRAN_DCI_FORMAT1B:
+        // Format 1B: Closed-loop single rank (TM6)
+        return SRSRAN_TM6;
+      case SRSRAN_DCI_FORMAT1C:
+        // Format 1C: Very compact, single codeword
+        return SRSRAN_TM2;
     case SRSRAN_DCI_FORMAT2:
       return SRSRAN_TM4;
     case SRSRAN_DCI_FORMAT2A:
       return SRSRAN_TM3;
+    case SRSRAN_DCI_FORMAT2B:
+      // Format 2B: Dual-layer beamforming (TM8)
+      return SRSRAN_TM8;
+
+      // JH TODO: return error for unsupported TMs or formats?
+    case SRSRAN_DCI_FORMAT2C:
+      // Format 2C: Up to 8-layer transmission (TM9)
+      return SRSRAN_TM9;
+
+    case SRSRAN_DCI_FORMAT2D:
+      // Format 2D: Up to 8-layer transmission (TM10)
+      return SRSRAN_TM10;
     default:
       /* TM1 on a single-port cell gives PORT0; TM2 on a multi-port cell gives DIVERSITY,
        * which is what every pre-security grant is carried by. */
@@ -206,6 +238,8 @@ static_assert(NGSCOPE_SEC_NOF_FORMATS == SRSRAN_DCI_NOF_FORMATS,
               "NGSCOPE_SEC_NOF_FORMATS is out of step with srsran_dci_format_t");
 static_assert(NGSCOPE_SEC_NOF_SCHEMES == SRSRAN_TXSCHEME_CDD + 1,
               "NGSCOPE_SEC_NOF_SCHEMES is out of step with srsran_tx_scheme_t");
+static_assert(NGSCOPE_SEC_NOF_TM == SRSRAN_TMINV + 1,
+              "NGSCOPE_SEC_NOF_TM is out of step with srsran_tm_t");
 
 int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               srsran_dl_sf_cfg_t* sf,
@@ -277,7 +311,8 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
 
     for (int d = 0; d < nof_dci; d++) {
       pdsch_cfg->rnti = rnti;
-      ngscope_sec_count_dci(rf_idx, (int)dci_dl[d].format);
+      srsran_tm_t tm = tm_for_format(dci_dl[d].format, ue_dl->cell.nof_ports);
+      ngscope_sec_count_dci(rf_idx, (int)dci_dl[d].format, tm);
 
       /* Deliberately NOT skipping spatial-multiplexing grants. srsRAN has no multiplex
        * predecoder for 4 Tx ports, so on such a cell these attempts emit a pair of errors
@@ -329,7 +364,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
       } else {
         outcome = NGSCOPE_SEC_GRANT_CRC_FAIL;
       }
-      ngscope_sec_count_grant(rf_idx, (int)dci_dl[d].format, (int)scheme, outcome);
+      ngscope_sec_count_grant(rf_idx, (int)dci_dl[d].format, (int)scheme, outcome, tm);
 
       bool pdsch_ok = false;
 
@@ -512,7 +547,7 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
    * identity to confirm, and probing it twice would double-count it in the rates. */
   uint16_t seen[MAX_DCI_PER_SUB];
   int      nof_seen = 0;
-  for (int i = 0; i < dci_per_sub->nof_dl_dci && nof_seen < MAX_DCI_PER_SUB; i++) {
+  for (uint32_t i = 0; i < dci_per_sub->nof_dl_dci && nof_seen < MAX_DCI_PER_SUB; i++) {
     const uint16_t rnti = dci_per_sub->dl_msg[i].rnti;
     /* SI-RNTI, P-RNTI and RA-RNTI are not UE identities; they are decoded by their own
      * paths and would not be affected by RACH filtering either way. */

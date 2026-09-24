@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -43,6 +44,7 @@ typedef struct {
 
 #define SEC_NOF_FORMATS NGSCOPE_SEC_NOF_FORMATS
 #define SEC_NOF_SCHEMES NGSCOPE_SEC_NOF_SCHEMES
+#define SEC_NOF_TM      NGSCOPE_SEC_NOF_TM
 
 typedef struct {
     sec_rnti_t rnti[65536];
@@ -90,6 +92,23 @@ typedef struct {
     uint64_t   nof_dci_fmt[SEC_NOF_FORMATS];
     uint64_t   nof_attempt_fmt[SEC_NOF_FORMATS];
     uint64_t   nof_crc_pass_fmt[SEC_NOF_FORMATS];
+    uint64_t   nof_crc_fail_fmt[SEC_NOF_FORMATS];
+    uint64_t   nof_unsupported_fmt[SEC_NOF_FORMATS];
+    uint64_t   nof_predecode_err_fmt[SEC_NOF_FORMATS];
+
+    uint64_t   nof_dci_tm[SEC_NOF_TM];
+    uint64_t   nof_attempt_tm[SEC_NOF_TM];
+    uint64_t   nof_crc_pass_tm[SEC_NOF_TM];
+    uint64_t   nof_crc_fail_tm[SEC_NOF_TM];
+    uint64_t   nof_unsupported_tm[SEC_NOF_TM];
+    uint64_t   nof_predecode_err_tm[SEC_NOF_TM];
+
+    // uint64_t   nof_dci_scheme[SEC_NOF_SCHEMES];
+    uint64_t   nof_attempt_scheme[SEC_NOF_SCHEMES];
+    uint64_t   nof_crc_pass_scheme[SEC_NOF_SCHEMES];
+    uint64_t   nof_crc_fail_scheme[SEC_NOF_SCHEMES];
+    uint64_t   nof_unsupported_scheme[SEC_NOF_SCHEMES];
+    uint64_t   nof_predecode_err_scheme[SEC_NOF_SCHEMES];
 
     /* Per transmission scheme, and why a decode did not land. A grant srsRAN has no
      * predecoder for on this cell is not the same observation as one the channel beat. */
@@ -314,17 +333,19 @@ void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
-void ngscope_sec_count_dci(int rf_idx, int fmt)
+void ngscope_sec_count_dci(int rf_idx, int fmt, int tm)
 {
-    if (!rf_idx_valid(rf_idx) || fmt < 0 || fmt >= SEC_NOF_FORMATS) {
+    if (!rf_idx_valid(rf_idx) || fmt < 0 || fmt >= SEC_NOF_FORMATS || tm < 0 || tm >= SEC_NOF_TM) {
         return;
     }
     pthread_mutex_lock(&sec_mutex[rf_idx]);
     sec_ctx[rf_idx].nof_dci_fmt[fmt]++;
+    sec_ctx[rf_idx].nof_dci_tm[tm]++;
+    // sec_ctx[rf_idx].nof_dci_scheme[scheme]++;
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
-void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome)
+void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome, int tm)
 {
     if (!rf_idx_valid(rf_idx)) {
         return;
@@ -333,12 +354,55 @@ void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome)
     pthread_mutex_lock(&sec_mutex[rf_idx]);
     if (fmt >= 0 && fmt < SEC_NOF_FORMATS) {
         q->nof_attempt_fmt[fmt]++;
-        if (outcome == NGSCOPE_SEC_GRANT_CRC_PASS) {
-            q->nof_crc_pass_fmt[fmt]++;
+        switch (outcome){
+            case NGSCOPE_SEC_GRANT_CRC_PASS:
+                q->nof_crc_pass_fmt[fmt]++;
+                break;
+            case NGSCOPE_SEC_GRANT_CRC_FAIL:
+                q->nof_crc_fail_fmt[fmt]++;
+                break;
+            case NGSCOPE_SEC_GRANT_UNSUPPORTED:
+                q->nof_unsupported_fmt[fmt]++;
+                break;
+            case NGSCOPE_SEC_GRANT_PREDECODE_ERR:
+                q->nof_predecode_err_fmt[fmt]++;
+                break;
+        }
+    }
+    if (tm >= 0 && tm < SEC_NOF_TM) {
+        q->nof_attempt_tm[tm]++;
+        switch (outcome){
+            case NGSCOPE_SEC_GRANT_CRC_PASS:
+                q->nof_crc_pass_tm[tm]++;
+                break;
+            case NGSCOPE_SEC_GRANT_CRC_FAIL:
+                q->nof_crc_fail_tm[tm]++;
+                break;
+            case NGSCOPE_SEC_GRANT_UNSUPPORTED:
+                q->nof_unsupported_tm[tm]++;
+                break;
+            case NGSCOPE_SEC_GRANT_PREDECODE_ERR:
+                q->nof_predecode_err_tm[tm]++;
+                break;
         }
     }
     if (scheme >= 0 && scheme < SEC_NOF_SCHEMES) {
         q->nof_scheme[scheme]++;
+        q->nof_attempt_scheme[scheme]++;
+        switch (outcome){
+            case NGSCOPE_SEC_GRANT_CRC_PASS:
+                q->nof_crc_pass_scheme[scheme]++;
+                break;
+            case NGSCOPE_SEC_GRANT_CRC_FAIL:
+                q->nof_crc_fail_scheme[scheme]++;
+                break;
+            case NGSCOPE_SEC_GRANT_UNSUPPORTED:
+                q->nof_unsupported_scheme[scheme]++;
+                break;
+            case NGSCOPE_SEC_GRANT_PREDECODE_ERR:
+                q->nof_predecode_err_scheme[scheme]++;
+                break;
+        }
     }
     switch (outcome) {
         case NGSCOPE_SEC_GRANT_CRC_FAIL:      q->nof_crc_fail++;           break;
@@ -379,6 +443,16 @@ static const char* sec_format_name(int f)
     static const char* n[SEC_NOF_FORMATS] = {"0",  "1",  "1A", "1B", "1C", "1D", "2",
                                              "2A", "2B", "N0", "N1", "N2", "RAR"};
     return (f >= 0 && f < SEC_NOF_FORMATS) ? n[f] : "?";
+}
+
+static const char* sec_tm_name(int t){
+    static const char* names[SEC_NOF_TM] = {"TM1", "TM2", "TM3", "TM4", "TM5", "TM6", "TM7", "TM8", "TM9", "TM0", "TMINV"};
+    return (t >= 0 && t < SEC_NOF_TM) ? names[t]: "?";
+}
+
+static const char* sec_scheme_name(int s){
+    static const char* names[SEC_NOF_SCHEMES] = {"PORT0", "DIVERSITY", "SPATIALMUX", "CDD"};
+    return (s >= 0 && s < SEC_NOF_SCHEMES) ? names[s]: "?";
 }
 
 /* Coverage, not conclusions.
@@ -488,19 +562,87 @@ void ngscope_sec_report(int rf_idx)
         sum_pass += q->nof_crc_pass_fmt[f];
     }
     if (sum_att > 0) {
-        printf("SECURITY (cell %d): DCI by format --", rf_idx);
+        printf("SECURITY (cell %d): DCI by format --\n", rf_idx);
         for (int f = 0; f < SEC_NOF_FORMATS; f++) {
             if (q->nof_dci_fmt[f] == 0 && q->nof_attempt_fmt[f] == 0) {
                 continue;
             }
-            printf(" %s %llu found/%llu built/%llu CRC (%.1f%%);",
+            printf("\t%s %llu found / %llu built / %llu CRC PASS(%.1f%%) / %llu CRC FAIL(%.1f%%) / %llu unsupported(%.1f%%) / %llu predecode err(%.1f%%);\n",
                    sec_format_name(f),
                    (unsigned long long)q->nof_dci_fmt[f],
                    (unsigned long long)q->nof_attempt_fmt[f],
                    (unsigned long long)q->nof_crc_pass_fmt[f],
                    q->nof_attempt_fmt[f]
                        ? 100.0 * (double)q->nof_crc_pass_fmt[f] / (double)q->nof_attempt_fmt[f]
-                       : 0.0);
+                       : 0.0,
+                    (unsigned long long)q->nof_crc_fail_fmt[f],
+                    q->nof_attempt_fmt[f]
+                        ? 100.0 * (double)q->nof_crc_fail_fmt[f] / (double)q->nof_attempt_fmt[f]
+                        : 0.0,
+                    (unsigned long long)q->nof_unsupported_fmt[f],
+                    q->nof_attempt_fmt[f]
+                        ? 100.0 * (double)q->nof_unsupported_fmt[f] / (double)q->nof_attempt_fmt[f]
+                        : 0.0,
+                    (unsigned long long)q->nof_predecode_err_fmt[f],
+                    q->nof_attempt_fmt[f]
+                        ? 100.0 * (double)q->nof_predecode_err_fmt[f] / (double)q->nof_attempt_fmt[f]
+                        : 0.0);
+        }
+        printf("\n");
+
+        printf("SECURITY (cell %d): DCI by TM --\n", rf_idx);
+        for (int t = 0; t < SEC_NOF_SCHEMES; t++) {
+            if (q->nof_dci_tm[t] == 0 && q->nof_attempt_tm[t] == 0) {
+                continue;
+            }
+            printf("\t%s %llu found / %llu built / %llu CRC PASS(%.1f%%) / %llu CRC FAIL(%.1f%%) / %llu unsupported(%.1f%%) / %llu predecode err(%.1f%%);\n",
+                   sec_tm_name(t),
+                   (unsigned long long)q->nof_dci_tm[t],
+                   (unsigned long long)q->nof_attempt_tm[t],
+                   (unsigned long long)q->nof_crc_pass_tm[t],
+                   q->nof_attempt_tm[t]
+                       ? 100.0 * (double)q->nof_crc_pass_tm[t] / (double)q->nof_attempt_tm[t]
+                       : 0.0,
+                    (unsigned long long)q->nof_crc_fail_tm[t],
+                    q->nof_attempt_tm[t]
+                        ? 100.0 * (double)q->nof_crc_fail_tm[t] / (double)q->nof_attempt_tm[t]
+                        : 0.0,
+                    (unsigned long long)q->nof_unsupported_tm[t],
+                    q->nof_attempt_tm[t]
+                        ? 100.0 * (double)q->nof_unsupported_tm[t] / (double)q->nof_attempt_tm[t]
+                        : 0.0,
+                    (unsigned long long)q->nof_predecode_err_tm[t],
+                    q->nof_attempt_tm[t]
+                        ? 100.0 * (double)q->nof_predecode_err_tm[t] / (double)q->nof_attempt_tm[t]
+                        : 0.0);
+        }
+        printf("\n");
+
+        printf("SECURITY (cell %d): DCI by SCHEME --\n", rf_idx);
+        for (int s = 0; s < SEC_NOF_SCHEMES; s++) {
+            if (q->nof_scheme[s] == 0 && q->nof_attempt_scheme[s] == 0) {
+                continue;
+            }
+            printf("\t%s %llu found / %llu built / %llu CRC PASS(%.1f%%) / %llu CRC FAIL(%.1f%%) / %llu unsupported(%.1f%%) / %llu predecode err(%.1f%%);\n",
+                   sec_scheme_name(s),
+                   (unsigned long long)q->nof_scheme[s],
+                   (unsigned long long)q->nof_attempt_scheme[s],
+                   (unsigned long long)q->nof_crc_pass_scheme[s],
+                   q->nof_attempt_scheme[s]
+                       ? 100.0 * (double)q->nof_crc_pass_scheme[s] / (double)q->nof_attempt_scheme[s]
+                       : 0.0,
+                    (unsigned long long)q->nof_crc_fail_scheme[s],
+                    q->nof_attempt_scheme[s]
+                        ? 100.0 * (double)q->nof_crc_fail_scheme[s] / (double)q->nof_attempt_scheme[s]
+                        : 0.0,
+                    (unsigned long long)q->nof_unsupported_scheme[s],
+                    q->nof_attempt_scheme[s]
+                        ? 100.0 * (double)q->nof_unsupported_scheme[s] / (double)q->nof_attempt_scheme[s]
+                        : 0.0,
+                    (unsigned long long)q->nof_predecode_err_scheme[s],
+                    q->nof_attempt_scheme[s]
+                        ? 100.0 * (double)q->nof_predecode_err_scheme[s] / (double)q->nof_attempt_scheme[s]
+                        : 0.0);
         }
         printf("\n");
 
