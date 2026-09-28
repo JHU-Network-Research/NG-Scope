@@ -856,6 +856,38 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
       }
     }
 
+
+
+    // // DEBUG: Add this block here
+    //     if (q->cell.nof_ports == 4) {
+    //       printf("PDSCH 4-port CE after extraction (nof_re=%d):\n", cfg->grant.nof_re);
+    //       for (int p = 0; p < 4; p++) {
+    //         for (int r = 0; r < q->nof_rx_antennas; r++) {
+    //           float pwr = 0;
+    //           int nz = 0;
+    //           int check_len = cfg->grant.nof_re < 200 ? cfg->grant.nof_re : 200;
+    //           for (int k = 0; k < check_len; k++) {
+    //             float re = crealf(q->ce[p][r][k]);
+    //             float im = cimagf(q->ce[p][r][k]);
+    //             pwr += re*re + im*im;
+    //             if (re != 0 || im != 0) nz++;
+    //           }
+    //           printf("  q->ce[%d][%d]: pwr=%.4f nonzero=%d/%d\n", p, r, pwr/check_len, nz, check_len);
+    //         }
+    //       }
+    //     }
+    //     // END DEBUG
+    //
+    // printf("DEBUG CRS symbols per port:\n");
+    // for (int p = 0; p < 4; p++) {
+    //     uint32_t nsym = srsran_refsignal_cs_nof_symbols(&q->chest_res, sf, p);
+    //     printf("  Port %d: %u symbols\n", p, nsym);
+    //     for (int l = 0; l < nsym; l++) {
+    //         uint32_t sym_idx = srsran_refsignal_cs_nsymbol(l, q->cell.cp, p);
+    //         printf("    l=%d -> symbol %u\n", l, sym_idx);
+    //     }
+    // }
+
     if (cfg->grant.nof_layers == 0 || cfg->grant.nof_layers > SRSRAN_MAX_LAYERS) {
       ERROR("PDSCH Number of layers (%d) is out-of-bounds", cfg->grant.nof_layers);
       fprintf(stderr,"PDSCH Number of layers (%d) is out-of-bounds\n", cfg->grant.nof_layers);
@@ -889,6 +921,7 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
 
     // Pre-decoder
     // uint32_t codebook_idx = nof_tb == 1 ? cfg->grant.pmi : (cfg->grant.pmi + 1);
+    // printf("nof_layers=%d, nof_tb=%d, format=%d\n", cfg->grant.nof_layers, cfg->grant.nof_tb, cfg->grant.forma);
     if (srsran_predecoding_type(q->symbols,
                                 q->ce,
                                 x,
@@ -901,8 +934,8 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
                                 cfg->grant.tx_scheme,
                                 pdsch_scaling,
                                 noise_estimate) < 0) {
-      ERROR("Error predecoding for nof_rx=%d, nof_ports=%d, nof_layers=%d",q->nof_rx_antennas,q->cell.nof_ports,cfg->grant.nof_layers);
-      fprintf(stderr, "Error predecoding for nof_rx=%d, nof_ports=%d, nof_layers=%d\n",q->nof_rx_antennas,q->cell.nof_ports,cfg->grant.nof_layers);
+      // ERROR("Error predecoding for nof_rx=%d, nof_ports=%d, nof_layers=%d",q->nof_rx_antennas,q->cell.nof_ports,cfg->grant.nof_layers);
+      // fprintf(stderr, "Error predecoding for nof_rx=%d, nof_ports=%d, nof_layers=%d\n",q->nof_rx_antennas,q->cell.nof_ports,cfg->grant.nof_layers);
       return SRSRAN_ERROR;
     }
 

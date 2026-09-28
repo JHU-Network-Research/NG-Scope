@@ -446,6 +446,8 @@ static void interpolate_pilots(srsran_chest_dl_t*     q,
                                                           : srsran_refsignal_cs_nof_symbols(&q->csr_refs, sf, port_id);
   uint32_t fidx_offset = 0;
 
+
+
   /* Interpolate in the frequency domain */
 
   uint32_t freq_nsymbols = nsymbols;
@@ -813,12 +815,35 @@ static int estimate_port(srsran_chest_dl_t*     q,
 {
   uint32_t npilots = srsran_refsignal_cs_nof_re(&q->csr_refs, sf, port_id);
 
+  // Debug
+  static int chest_debug_count = 0;
+  if (chest_debug_count < 0) {
+    printf("[CHEST estimate_port] port_id=%d, rxant_id=%d, npilots=%d\n",
+           port_id, rxant_id, npilots);
+  }
+
   /* Get references from the input signal */
   srsran_refsignal_cs_get_sf(&q->csr_refs, sf, port_id, input, q->pilot_recv_signal);
 
   /* Use the known CSR signal to compute Least-squares estimates */
   srsran_vec_prod_conj_ccc(
       q->pilot_recv_signal, q->csr_refs.pilots[port_id / 2][sf->tti % 10], q->pilot_estimates, npilots);
+
+  // Debug pilot power
+  if (chest_debug_count < 0) {
+    float pilot_pwr = srsran_vec_avg_power_cf(q->pilot_estimates, npilots);
+    float recv_pwr = srsran_vec_avg_power_cf(q->pilot_recv_signal, npilots);
+    printf("[CHEST estimate_port] port_id=%d: recv_pwr=%.4f, pilot_est_pwr=%.4f\n",
+           port_id, recv_pwr, pilot_pwr);
+
+    // Check first few pilot estimates
+    printf("[CHEST estimate_port] port_id=%d first 4 pilots: ", port_id);
+    for (int i = 0; i < 4 && i < npilots; i++) {
+      printf("(%.3f,%.3f) ", crealf(q->pilot_estimates[i]), cimagf(q->pilot_estimates[i]));
+    }
+    printf("\n");
+    chest_debug_count++;
+  }
 
   /* Compute RSRP for the channel estimates in this port */
   if (cfg->rsrp_neighbour) {
@@ -832,6 +857,36 @@ static int estimate_port(srsran_chest_dl_t*     q,
 
   return 0;
 }
+
+// static int estimate_port(srsran_chest_dl_t*     q,
+//                          srsran_dl_sf_cfg_t*    sf,
+//                          srsran_chest_dl_cfg_t* cfg,
+//                          cf_t*                  input,
+//                          cf_t*                  ce,
+//                          uint32_t               port_id,
+//                          uint32_t               rxant_id)
+// {
+//   uint32_t npilots = srsran_refsignal_cs_nof_re(&q->csr_refs, sf, port_id);
+
+//   /* Get references from the input signal */
+//   srsran_refsignal_cs_get_sf(&q->csr_refs, sf, port_id, input, q->pilot_recv_signal);
+
+//   /* Use the known CSR signal to compute Least-squares estimates */
+//   srsran_vec_prod_conj_ccc(
+//       q->pilot_recv_signal, q->csr_refs.pilots[port_id / 2][sf->tti % 10], q->pilot_estimates, npilots);
+
+//   /* Compute RSRP for the channel estimates in this port */
+//   if (cfg->rsrp_neighbour) {
+//     double energy                   = cabsf(srsran_vec_acc_cc(q->pilot_estimates, npilots) / npilots);
+//     q->rsrp_corr[rxant_id][port_id] = energy * energy;
+//   }
+//   q->rsrp[rxant_id][port_id] = srsran_vec_avg_power_cf(q->pilot_recv_signal, npilots);
+//   q->rssi[rxant_id][port_id] = chest_dl_rssi(q, sf, input, port_id);
+
+//   chest_interpolate_noise_est(q, sf, cfg, input, ce, port_id, rxant_id);
+
+//   return 0;
+// }
 
 static int estimate_port_mbsfn(srsran_chest_dl_t*     q,
                                srsran_dl_sf_cfg_t*    sf,
@@ -1002,6 +1057,13 @@ int srsran_chest_dl_estimate_cfg(srsran_chest_dl_t*     q,
                                  cf_t*                  input[SRSRAN_MAX_PORTS],
                                  srsran_chest_dl_res_t* res)
 {
+
+    // static int debug_count = 0;
+      // if (debug_count < 20) {
+        // printf("[CHEST DEBUG] cell.nof_ports=%d, nof_rx_antennas=%d, cell.id=%d, cell.nof_prb=%d\n",
+        //        q->cell.nof_ports, q->nof_rx_antennas, q->cell.id, q->cell.nof_prb);
+        // debug_count++;
+      // }
   for (uint32_t rxant_id = 0; rxant_id < q->nof_rx_antennas; rxant_id++) {
     // Estimate and correct synchronization error if enabled
     if (cfg->sync_error_enable) {

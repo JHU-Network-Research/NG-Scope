@@ -100,6 +100,8 @@ void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci);
 #define NGSCOPE_SEC_GRANT_PREDECODE_ERR 2
 #define NGSCOPE_SEC_GRANT_UNSUPPORTED   3
 
+void ngscope_sec_count_codebook_idx(int rf_idx, int outcome, int codebook_idx);
+
 void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome, int tm);
 
 /* One DCI found by the targeted search, before any decode is attempted. Separate from

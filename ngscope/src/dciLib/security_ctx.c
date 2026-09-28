@@ -110,6 +110,10 @@ typedef struct {
     uint64_t   nof_unsupported_scheme[SEC_NOF_SCHEMES];
     uint64_t   nof_predecode_err_scheme[SEC_NOF_SCHEMES];
 
+
+    uint64_t   codebook_idx_success[16];
+    uint64_t   codebook_idx_failure[16];
+
     /* Per transmission scheme, and why a decode did not land. A grant srsRAN has no
      * predecoder for on this cell is not the same observation as one the channel beat. */
     uint64_t   nof_scheme[SEC_NOF_SCHEMES];
@@ -455,6 +459,20 @@ static const char* sec_scheme_name(int s){
     return (s >= 0 && s < SEC_NOF_SCHEMES) ? names[s]: "?";
 }
 
+void ngscope_sec_count_codebook_idx(int rf_idx, int outcome, int codebook_idx)
+{
+    if (!rf_idx_valid(rf_idx) || (outcome != NGSCOPE_SEC_GRANT_CRC_PASS && outcome != NGSCOPE_SEC_GRANT_CRC_FAIL) || codebook_idx < 0 || codebook_idx > 15) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    if (outcome == NGSCOPE_SEC_GRANT_CRC_FAIL){
+        sec_ctx[rf_idx].codebook_idx_failure[codebook_idx]++;
+    }else if (outcome == NGSCOPE_SEC_GRANT_CRC_PASS){
+        sec_ctx[rf_idx].codebook_idx_success[codebook_idx]++;
+    }
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 /* Coverage, not conclusions.
  *
  * Everything here is a property of the decoder, and every line is a validity condition for
@@ -643,6 +661,15 @@ void ngscope_sec_report(int rf_idx)
                     q->nof_attempt_scheme[s]
                         ? 100.0 * (double)q->nof_predecode_err_scheme[s] / (double)q->nof_attempt_scheme[s]
                         : 0.0);
+        }
+        printf("\n");
+
+        printf("SECURITY (cell %d): MIMO CRC PERFORMANCE BY CODEBOOK_IDX --\n", rf_idx);
+        for(int c = 0; c < 16; c++){
+            if (q->codebook_idx_failure[c] == 0 && q->codebook_idx_success[c] == 0){
+                continue;
+            }
+            printf("\tcodebook_idx: %d, %ld successes and %ld failures\n", c, q->codebook_idx_success[c], q->codebook_idx_failure[c]);
         }
         printf("\n");
 

@@ -1,4 +1,5 @@
 #include "ngscope/hdr/dciLib/security_rrc.h"
+#include <srsran/phy/phch/dci.h>
 
 extern "C" {
 #include "ngscope/hdr/dciLib/security_ctx.h"
@@ -162,6 +163,9 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
    * CRC failure comes back as SRSRAN_SUCCESS with crc == false. Collapsing the two -- which
    * this did -- makes a grant srsRAN has no predecoder for indistinguishable from one the
    * channel beat, and those are different claims about the cell. */
+  // if (pdsch_cfg->grant.nof_tb == 2 && ue_dl->cell.nof_ports == 4 && cfg->cfg.tm == 2)
+      // printf("Decoding DCI with format: %s, sf->tti=%d, lstart=%d\n", srsran_dci_format_string(dci->format),  sf->tti, SRSRAN_NOF_CTRL_SYMBOLS(ue_dl->cell, sf->cfi));
+  // printf("DEBUG: sf->tti=%d, lstart=%d\n", sf->tti, lstart);
   if (srsran_ue_dl_decode_pdsch(ue_dl, sf, pdsch_cfg, pdsch_res) != SRSRAN_SUCCESS) {
     return -2;
   }
@@ -194,7 +198,7 @@ static bool scheme_supported(srsran_tx_scheme_t s, uint32_t nof_ports, uint32_t 
   switch (s) {
     case SRSRAN_TXSCHEME_PORT0:      return nof_ports == 1;
     case SRSRAN_TXSCHEME_DIVERSITY:  return nof_ports == 2 || nof_ports == 4;
-    case SRSRAN_TXSCHEME_CDD:        return nof_ports == 2 && nof_rxant == 2;
+    case SRSRAN_TXSCHEME_CDD:        return (nof_ports == 2 || nof_ports == 4) && nof_rxant == 2;
     case SRSRAN_TXSCHEME_SPATIALMUX: return nof_ports == 2 || nof_ports == 4;
     default:                         return false;
   }
@@ -354,6 +358,8 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
       const srsran_tx_scheme_t scheme = pdsch_cfg->grant.tx_scheme;
       const bool supported = scheme_supported(scheme, ue_dl->cell.nof_ports,
                                               (uint32_t)ue_dl->nof_rx_antennas);
+      if (! supported)
+          ERROR("Unsupported scheme %d with %d ports and %d antennas",scheme, ue_dl->cell.nof_ports, (uint32_t)ue_dl->nof_rx_antennas);
       int outcome;
       if (r == 1) {
         outcome = NGSCOPE_SEC_GRANT_CRC_PASS;
@@ -363,6 +369,16 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         outcome = NGSCOPE_SEC_GRANT_PREDECODE_ERR;
       } else {
         outcome = NGSCOPE_SEC_GRANT_CRC_FAIL;
+      }
+
+      // if (scheme == 3 && outcome == NGSCOPE_SEC_GRANT_CRC_FAIL){
+      //     ERROR("CDD FAILED CRC: nof_ports=%d, nof_rx=%d, nof_layers=%d, tm=%d, format=%d",ue_dl->cell.nof_ports, (uint32_t)ue_dl->nof_rx_antennas,pdsch_cfg->grant.nof_layers,tm,dci_dl[d].format);
+      // }
+      //
+      if (scheme == 2){
+          if (outcome == NGSCOPE_SEC_GRANT_CRC_PASS || outcome == NGSCOPE_SEC_GRANT_CRC_FAIL) {
+              ngscope_sec_count_codebook_idx(rf_idx, outcome, pdsch_cfg->grant.pmi);
+          }
       }
       ngscope_sec_count_grant(rf_idx, (int)dci_dl[d].format, (int)scheme, outcome, tm);
 
