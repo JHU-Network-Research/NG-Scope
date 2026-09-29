@@ -484,93 +484,94 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 			/*********************   Print decoding result  **********************/
 
+			if (dci_decoder->prog_args.mode != RECORD){
+    			FILE *decodelog;
+    			char fname[1024];
+    			memset(fname,0,1024);
+    			sprintf(fname,"%sdci-decode-debug-%d.csv",dci_decoder->prog_args.out_path,decoder_idx);
+    			decodelog=fopen(fname,"a");
 
-			FILE *decodelog;
-			char fname[1024];
-			memset(fname,0,1024);
-			sprintf(fname,"%sdci-decode-debug-%d.csv",dci_decoder->prog_args.out_path,decoder_idx);
-			decodelog=fopen(fname,"a");
+    			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
+    				ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
 
-			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
-				ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
+    				ngscope_dci_tb_t tb1;
+    				memset(&tb1, 0, sizeof(ngscope_dci_tb_t));
+    				ngscope_dci_tb_t tb2;
+    				memset(&tb2, 0, sizeof(ngscope_dci_tb_t));
 
-				ngscope_dci_tb_t tb1;
-				memset(&tb1, 0, sizeof(ngscope_dci_tb_t));
-				ngscope_dci_tb_t tb2;
-				memset(&tb2, 0, sizeof(ngscope_dci_tb_t));
-
-				if (dl_msg.nof_tb > 0){
-					tb1 = dl_msg.tb[0];
-				}
-				if (dl_msg.nof_tb == 2){
-					tb2 = dl_msg.tb[1];
-				}
+    				if (dl_msg.nof_tb > 0){
+    					tb1 = dl_msg.tb[0];
+    				}
+    				if (dl_msg.nof_tb == 2){
+    					tb2 = dl_msg.tb[1];
+    				}
 
 
-				if(decodelog){
-					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
-					fprintf(decodelog,
-						"%lu,%lu, normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-						dci_per_sub->timestamp,
-						dci_per_sub->collection_time,
-						tti,
-						dl_msg.rnti,
-						dl_msg.prb,
-						dl_msg.dl,
-						dl_msg.harq,
-						dl_msg.loc.ncce,
-						dl_msg.loc.L,
-						srsran_dci_format_string(dl_msg.format),
-						dl_msg.loc.mean_llr,
-						dl_msg.nof_tb,
-						dl_msg.decode_prob,
-						dl_msg.corr,
-						// dl_msg.nof_bits,
-						// K_w,
-						// dl_msg.agreement,
-						// dl_msg.repeat_corr,
-						tb1.mcs,
-						tb1.tbs,
-						tb1.rv,
-						tb1.ndi,
-						tb2.mcs,
-						tb2.tbs,
-						tb2.rv,
-						tb2.ndi,
-						// whether this RNTI would survive rach_filter_only; recorded even when
-						// the filter is off so a single run shows what it would have dropped
-						ngscope_rach_filter_pass(rf_idx, dl_msg.rnti) ? 1 : 0
-						);
-					}
-				if(debug)
-					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d\n",
-						tti,
-						dl_msg.rnti,
-						dl_msg.prb,
-						dl_msg.dl,
-						dl_msg.harq,
-						dl_msg.loc.ncce,
-						dl_msg.loc.L,
-						srsran_dci_format_string(dl_msg.format),
-						dl_msg.loc.mean_llr,
-						dl_msg.nof_tb,
-						dl_msg.decode_prob,
-						dl_msg.corr,
-						// dl_msg.nof_bits,
-						// K_w,
-						// dl_msg.agreement,
-						// dl_msg.repeat_corr,
-						tb1.mcs,
-						tb1.tbs,
-						tb1.rv,
-						tb1.ndi,
-						tb2.mcs,
-						tb2.tbs,
-						tb2.rv,
-						tb2.ndi
-						);
+    				if(decodelog){
+    					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
+    					fprintf(decodelog,
+    						"%lu,%lu, normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+    						dci_per_sub->timestamp,
+    						dci_per_sub->collection_time,
+    						tti,
+    						dl_msg.rnti,
+    						dl_msg.prb,
+    						dl_msg.dl,
+    						dl_msg.harq,
+    						dl_msg.loc.ncce,
+    						dl_msg.loc.L,
+    						srsran_dci_format_string(dl_msg.format),
+    						dl_msg.loc.mean_llr,
+    						dl_msg.nof_tb,
+    						dl_msg.decode_prob,
+    						dl_msg.corr,
+    						// dl_msg.nof_bits,
+    						// K_w,
+    						// dl_msg.agreement,
+    						// dl_msg.repeat_corr,
+    						tb1.mcs,
+    						tb1.tbs,
+    						tb1.rv,
+    						tb1.ndi,
+    						tb2.mcs,
+    						tb2.tbs,
+    						tb2.rv,
+    						tb2.ndi,
+    						// whether this RNTI would survive rach_filter_only; recorded even when
+    						// the filter is off so a single run shows what it would have dropped
+    						ngscope_rach_filter_pass(rf_idx, dl_msg.rnti) ? 1 : 0
+    						);
+    					}
+    				if(debug)
+    					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d\n",
+    						tti,
+    						dl_msg.rnti,
+    						dl_msg.prb,
+    						dl_msg.dl,
+    						dl_msg.harq,
+    						dl_msg.loc.ncce,
+    						dl_msg.loc.L,
+    						srsran_dci_format_string(dl_msg.format),
+    						dl_msg.loc.mean_llr,
+    						dl_msg.nof_tb,
+    						dl_msg.decode_prob,
+    						dl_msg.corr,
+    						// dl_msg.nof_bits,
+    						// K_w,
+    						// dl_msg.agreement,
+    						// dl_msg.repeat_corr,
+    						tb1.mcs,
+    						tb1.tbs,
+    						tb1.rv,
+    						tb1.ndi,
+    						tb2.mcs,
+    						tb2.tbs,
+    						tb2.rv,
+    						tb2.ndi
+    						);
+    			}
+    			fclose(decodelog);
 			}
-			fclose(decodelog);
 
 			int nof_node = srsran_ngscope_tree_non_empty_nodes(&tree);
 			if (debug)
@@ -884,21 +885,22 @@ void* dci_decoder_thread(void* p){
         dci_ret.tti          = sfn *10 + sf_idx;
         dci_ret.cell_idx     = rf_idx;
 
-        // put the dci into the dci buffer
-        pthread_mutex_lock(&dci_ready.mutex);
-        dci_buffer[dci_ready.header] = dci_ret;
-        dci_ready.header = (dci_ready.header + 1) % MAX_DCI_BUFFER;
-        if(dci_ready.nof_dci < MAX_DCI_BUFFER){
-            dci_ready.nof_dci++;
-        }else{
-			printf("DCI-buffer between decoder and status tracker is full! Considering increase its side!\n");
-		}
+        if (dci_decoder->prog_args.mode != RECORD){
+            // put the dci into the dci buffer
+            pthread_mutex_lock(&dci_ready.mutex);
+            dci_buffer[dci_ready.header] = dci_ret;
+            dci_ready.header = (dci_ready.header + 1) % MAX_DCI_BUFFER;
+            if(dci_ready.nof_dci < MAX_DCI_BUFFER){
+                dci_ready.nof_dci++;
+            }else{
+    			printf("DCI-buffer between decoder and status tracker is full! Considering increase its side!\n");
+    		}
 
-        //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci,
-        //                                        dci_per_sub.nof_dl_dci, dci_ready.nof_dci);
-        pthread_cond_signal(&dci_ready.cond);
-        pthread_mutex_unlock(&dci_ready.mutex);
-
+            //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci,
+            //                                        dci_per_sub.nof_dl_dci, dci_ready.nof_dci);
+            pthread_cond_signal(&dci_ready.cond);
+            pthread_mutex_unlock(&dci_ready.mutex);
+        }
 		//fprintf(fd, "%d\t%ld\t%ld\n",tti, t4-t1, t3-t2);
     }
 	//fprintf(fd, "%ld\t%ld\n", t4-t1, t3-t2);

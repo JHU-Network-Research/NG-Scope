@@ -115,11 +115,11 @@ int ngscope_main(ngscope_config_t* config)
 
         prog_args[i].mode          = config->rf_config[i].mode;
         prog_args[i].use_replay_hdr= config->rf_config[i].use_replay_hdr;
-        if (config->rf_config[i].mode == 1){
+        if (config->rf_config[i].mode == RECORD){
             prog_args[i].output_file_name      = (char*) malloc(1024);
             sprintf(prog_args[i].output_file_name,"%s/recorded-samples.bin",config->out_path);
             // strcpy(prog_args[i].output_file_name, );
-        }else if (config->rf_config[i].mode == 2){
+        }else if (config->rf_config[i].mode == REPLAY){
             prog_args[i].input_file_name      = (char*) malloc(1024);
             strcpy(prog_args[i].input_file_name, config->rf_config[i].replay_fname);
         }
@@ -136,16 +136,21 @@ int ngscope_main(ngscope_config_t* config)
     }
 
     pthread_t status_thd;
-    prog_args[0].disable_plots    = config->rf_config[0].disable_plot;
-    printf("disable_plots :%d\n", prog_args[0].disable_plots);
+    if (config->rf_config[0].mode != RECORD){
 
-	// status tracking thread
-    pthread_create(&status_thd, NULL, status_tracker_thread, (void*)(config));
+        prog_args[0].disable_plots    = config->rf_config[0].disable_plot;
+        printf("disable_plots :%d\n", prog_args[0].disable_plots);
+
+    	// status tracking thread
+        pthread_create(&status_thd, NULL, status_tracker_thread, (void*)(config));
+    }
 
     /* Now waiting for those threads to end */
     for(int i=0; i<nof_rf_dev; i++){
         pthread_join(task_thd[i], NULL);
     }
-    pthread_join(status_thd, NULL);
+    if (config->rf_config[0].mode != RECORD){
+        pthread_join(status_thd, NULL);
+    }
     return 1;
 }
