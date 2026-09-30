@@ -43,6 +43,8 @@ pthread_t flush_thread;
 const char *record_path;
 const char *replay_path;
 
+uint64_t read_ctr = 0;
+
 ngscope_mode_t  mode       = NORMAL;
 // static uint64_t total_bytes_fetched = 0;
 // static struct timespec last_rx_time  = {0, 0};
@@ -89,9 +91,35 @@ bool init_record(const char* path, uint32_t buf_size_gb, uint32_t nof_ports, dou
 
   record_ring_buffer_init(&record_buf, buf_size, path);
 
+  struct timespec ts;
+
+  if ( clock_gettime( CLOCK_REALTIME, &ts ) < 0 ) {
+    perror( "clock_gettime" );
+    exit( 1 );
+  }
+
+  uint64_t ct = ts.tv_sec * 1000000000 + ts.tv_nsec;
+
   rx_record_header_t hdr;
   hdr.nof_rx_antenna = nof_ports;
   hdr.rf_freq = rf_freq;
+  hdr.record_start_ns = ct;
+
+  hdr.pci = 0;
+  hdr.prb = 0;
+  hdr.record_duration_ns = 0;
+  hdr.frame_type = 0;
+  hdr.nof_cell_ports = 0;
+  hdr.cp = 0;
+  hdr.phich_length = 0;
+  hdr.phich_resources = 0;
+  hdr.decoded_frames = 0;
+  hdr.desynced_frames = 0;
+  hdr.skipped_frames = 0;
+  hdr.first_sync_frame = 0;
+  memset(hdr.comment,0,1024);
+  memset(hdr.location,0,1024);
+
 
   record_ring_buffer_insert(&record_buf, &hdr, sizeof(hdr));
 
@@ -266,7 +294,7 @@ bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
     if (hdr != NULL){
 
         int n = fread(hdr, sizeof(rx_record_header_t), 1, replay_fh);
-
+        printf("Size of header: %d\n", sizeof(rx_record_header_t));
         printf("Read replay header with result %d\n", n);
         printf("\tnof_rx_antenna:\t%d\n", hdr->nof_rx_antenna);
         printf("\trf_freq:\t%f\n",hdr->rf_freq);
@@ -283,6 +311,42 @@ bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
             fprintf(stderr, "ERROR: Invalid # rx antenna: %d", hdr->nof_rx_antenna);
             return false;
         }
+
+        printf("Replaying file: %s\n", path);
+        printf("\tnof_rx_antenna: %d\n",hdr->nof_rx_antenna);
+        printf("\trf_freq: %.02f\n", hdr->rf_freq);
+        printf("\trecord start (us): %ld\n", hdr->record_start_ns);
+        printf("\trecord duration (us): %ld\n", hdr->record_duration_ns);
+        printf("\tnof decoded frames:\t%d\n",hdr->decoded_frames);
+        printf("\tnof desynced frames:\t%d\n", hdr->desynced_frames);
+        printf("\tnof skipped frames:\t%d\n", hdr->skipped_frames);
+        printf("\tfirst synced frame:\t%d\n", hdr->first_sync_frame);
+        printf("\tCell info:\n");
+        printf("\t\tpci:\t%d\n",hdr->pci);
+        printf("\t\tprb:\t%d\n",hdr->prb);
+        printf("\t\tnof_ports:\t%d\n", hdr->nof_cell_ports);
+        printf("\t\tframe type:\t%s\n",hdr->frame_type == SRSRAN_FDD ? "FDD" : "TDD");
+        printf("\t\tcp:\t%s\n",srsran_cp_string(hdr->cp));
+        printf("\t\tphich length:\t%s\n",hdr->phich_length == SRSRAN_PHICH_EXT ? "Extended" : "Normal");
+        printf("\t\tphich resources:\t");
+        switch (hdr->phich_resources) {
+          case SRSRAN_PHICH_R_1_6:
+            printf("1/6\n");
+            break;
+          case SRSRAN_PHICH_R_1_2:
+            printf("1/2\n");
+            break;
+          case SRSRAN_PHICH_R_1:
+            printf("1\n");
+            break;
+          case SRSRAN_PHICH_R_2:
+            printf("2\n");
+            break;
+        }
+        printf("\tlocation:\t%s\n",hdr->location);
+        printf("\tcomment:\t%s\n",hdr->comment);
+
+
 
         sdr_nof_ports = hdr->nof_rx_antenna;
     }else{
@@ -343,7 +407,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
     }
 
     // fprintf(stdout, "[AGC] retrieving normal sample\n");
-
+    read_ctr++;
     DEBUG(" ----  Receive %d samples  ----", nsamples);
     /* Fan out only as far as the caller actually has buffers.
      *
@@ -648,4 +712,101 @@ void flush_thread_cleanup(void *arg){
     pthread_mutex_unlock(&buf->mutex);
     // pthread_mutex_unlock(&buf->mutex);
 
+}
+
+void update_record_header(rx_record_header_t *hdr){
+
+
+    rx_record_header_t to_update;
+
+    FILE *f = fopen(record_path,"rb+");
+    printf("Opened file %s (%d)\n", record_path, f != NULL);
+    if (fread(&to_update,sizeof(rx_record_header_t),1,f) < 1){
+        fprintf(stderr,"Error reading record file header from %s\n", record_path);
+        return;
+    }
+    if (fseek(f,0,SEEK_SET) != 0){
+        fprintf(stderr,"Error setting file pointer\n");
+        fclose(f);
+        return;
+    } // reset file pointer
+
+    struct timespec ts;
+
+    if ( clock_gettime( CLOCK_REALTIME, &ts ) < 0 ) {
+      perror( "clock_gettime" );
+      fclose(f);
+      exit( 1 );
+    }
+
+    uint64_t ct = ts.tv_sec * 1000000000 + ts.tv_nsec;
+
+    to_update.pci = hdr->pci;
+    to_update.prb = hdr->prb;
+    to_update.record_duration_ns = ct - hdr->record_start_ns;
+    to_update.frame_type = hdr->frame_type;
+
+    to_update.nof_cell_ports = hdr->nof_cell_ports;
+    to_update.phich_length = hdr->phich_length;
+    to_update.phich_resources = hdr->phich_resources;
+    to_update.cp = hdr->cp;
+
+    to_update.decoded_frames = hdr->decoded_frames;
+    to_update.desynced_frames = hdr->desynced_frames;
+    to_update.skipped_frames = hdr->skipped_frames;
+    to_update.first_sync_frame = hdr->first_sync_frame;
+
+    strcpy(to_update.comment, hdr->comment);
+    strcpy(to_update.location, hdr->location);
+
+
+    printf("Writing updated header to file: %s\n", record_path);
+    printf("\tnof_rx_antenna: %d\n",to_update.nof_rx_antenna);
+    printf("\trf_freq: %.02f\n", to_update.rf_freq);
+    printf("\trecord start (us): %ld\n", to_update.record_start_ns);
+    printf("\trecord duration (us): %ld\n", to_update.record_duration_ns);
+    printf("\tnof decoded frames:\t%d\n",to_update.decoded_frames);
+    printf("\tnof desynced frames:\t%d\n", to_update.desynced_frames);
+    printf("\tnof skipped frames:\t%d\n", to_update.skipped_frames);
+    printf("\tfirst synced frame:\t%d\n", to_update.first_sync_frame);
+    printf("\tCell info:\n");
+    printf("\t\tpci:\t%d\n",to_update.pci);
+    printf("\t\tprb:\t%d\n",to_update.prb);
+    printf("\t\tnof_ports:\t%d\n", to_update.nof_cell_ports);
+    printf("\t\tframe type:\t%s\n",to_update.frame_type == SRSRAN_FDD ? "FDD" : "TDD");
+    printf("\t\tcp:\t%s\n",srsran_cp_string(to_update.cp));
+    printf("\t\tphich length:\t%s\n",to_update.phich_length == SRSRAN_PHICH_EXT ? "Extended" : "Normal");
+    printf("\t\tphich resources:\t");
+    switch (to_update.phich_resources) {
+      case SRSRAN_PHICH_R_1_6:
+        printf("1/6\n");
+        break;
+      case SRSRAN_PHICH_R_1_2:
+        printf("1/2\n");
+        break;
+      case SRSRAN_PHICH_R_1:
+        printf("1\n");
+        break;
+      case SRSRAN_PHICH_R_2:
+        printf("2\n");
+        break;
+    }
+    printf("\tlocation:\t%s\n",to_update.location);
+    printf("\tcomment:\t%s\n",to_update.comment);
+
+    int n = fwrite(&to_update,sizeof(rx_record_header_t),1,f);
+    if (n < 0){
+        fprintf(stderr,"ERROR: Updating record header\n");
+    }else if (n != 1){
+        fprintf(stderr, "ERROR: Wrote incorrect number of bytes to recording file (%d)\n",n);
+    }else{
+        printf("Updated header with result %d\n",n);
+    }
+    fflush(f);
+    fclose(f);
+}
+
+
+uint32_t get_rx_read_ctr(){
+    return read_ctr;
 }

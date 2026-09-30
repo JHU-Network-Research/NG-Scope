@@ -47,11 +47,12 @@ extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 extern pthread_mutex_t     scheduler_close_mutex;
 
 extern ngscope_mode_t mode;
+rx_record_header_t record_hdr;
 
 uint64_t nof_times_assigned = 0;
 uint64_t nof_times_read = 0;
 uint64_t nof_decode_pdcch_false = 0;
-uint64_t nof_ue_sync = 0;
+uint64_t nof_desync = 0;
 
 bool debug = true;
 bool silent = false;
@@ -616,6 +617,19 @@ void* task_scheduler_thread(void* p){
         perror("Error physical resource block number!\n");
     }
 
+    if (mode == RECORD){
+        record_hdr.prb = task_scheduler->cell.nof_prb;
+        record_hdr.nof_cell_ports = task_scheduler->cell.nof_ports;
+        record_hdr.pci = task_scheduler->cell.id;
+        record_hdr.frame_type = task_scheduler->cell.frame_type;
+        record_hdr.cp = task_scheduler->cell.cp;
+        record_hdr.phich_length = task_scheduler->cell.phich_length;
+        record_hdr.phich_resources = task_scheduler->cell.phich_resources;
+
+
+
+    }
+
     char cellcfgpath[1024];
     sprintf(cellcfgpath,"%scell_type.json", task_scheduler->prog_args.out_path);
     FILE* cellcfgfile = NULL;
@@ -766,15 +780,18 @@ void* task_scheduler_thread(void* p){
         ret = srsran_ue_sync_zerocopy(&(task_scheduler->ue_sync), buffers, max_num_samples);
         readctr++;
         fprintf(nreadslog, "TTI=%d, total # sample reads=%d, result=%d\n", tti, readctr, ret);
-        if (ret != 1) {
-            nof_ue_sync++;
+        if (ret == 1) {
+            nof_desync++;
         }
         //t2 = timestamp_us();
         //printf("time_spend:%ld (us)\n", t2-t1);
         //printf("RET is:%d\n", ret);
         if (ret < 0) {
-            ERROR("Error calling srsran_ue_sync_work()");
+            ERROR("Error calling srsran_ue_sync_zerocopy()");
         }else if(ret == 1){
+            if (!found_sync && mode == RECORD){
+                record_hdr.first_sync_frame = get_rx_read_ctr();
+            }
             found_sync = true;
         	//t1_sf_idx = timestamp_us();
             sf_idx = srsran_ue_sync_get_sfidx(&task_scheduler->ue_sync);
@@ -986,12 +1003,22 @@ void* task_scheduler_thread(void* p){
 //        }
 //    }
 //
+
+    if (mode == RECORD){
+        record_hdr.desynced_frames = nof_desync;
+        record_hdr.skipped_frames = nof_decode_pdcch_false;
+        record_hdr.decoded_frames = nof_times_assigned;
+        strcpy(record_hdr.comment, task_scheduler->prog_args.comment);
+        strcpy(record_hdr.location, task_scheduler->prog_args.location);
+        update_record_header(&record_hdr);
+    }
+
     pthread_mutex_lock(&scheduler_close_mutex);
 	task_scheduler_closed[rf_idx] = true;
     pthread_mutex_unlock(&scheduler_close_mutex);
     free(task_scheduler);
 
-    printf("DEBUG: assigned to decoder %ld times, skipped %ld times when decode_pdcch is false and %ld when ret != 1\n", nof_times_assigned, nof_decode_pdcch_false, nof_ue_sync);
+    printf("DEBUG: assigned to decoder %ld times, skipped %ld times when decode_pdcch is false and %ld when ret != 1\n", nof_times_assigned, nof_decode_pdcch_false, nof_desync);
     fflush(stdout);
     printf("TASK-Scheduler of %d-th RF devices CLOSED!\n", rf_idx);
     return NULL;

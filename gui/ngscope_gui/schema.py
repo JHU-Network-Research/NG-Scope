@@ -200,6 +200,20 @@ TOP_LEVEL = [
         "Dropped frames before exit",
         "The number of frames lost to desynchronization allowed before NG-Scope exits. A value of 0 or lower does not exit on any desynchronization.",
     ),
+    _f(
+        "location",
+        "str",
+        "",
+        "Location",
+        "The location where the recording was taken."
+    ),
+    _f(
+        "comment",
+        "str",
+        "",
+        "Comment",
+        "A comment to be stored with the recording metadata."
+    )
 ]
 
 # --------------------------------------------------------------------------- per RF device
