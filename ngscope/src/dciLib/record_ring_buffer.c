@@ -84,7 +84,8 @@ int record_ring_buffer_insert(record_ring_buffer_t *buf, void *data, size_t size
         if (debug)
             printf("DEBUG: Write does not wrap around\n");
         memcpy(buf->buf+buf->head, data, size);
-
+        printf("Finished copying data with size %ld!\n", size);
+        printf("Adding %ld bytes to buffer of size %ld with capacity %ld\n", size, buf->size, buf->capacity);
         buf->head += size;
     }
     if (debug)
@@ -102,7 +103,7 @@ int record_ring_buffer_insert(record_ring_buffer_t *buf, void *data, size_t size
     }
     pthread_mutex_unlock(&buf->mutex);
 
-    
+
     return size;
 }
 

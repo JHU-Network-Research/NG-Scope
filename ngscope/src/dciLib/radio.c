@@ -20,18 +20,55 @@
 
 #include "ngscope/hdr/dciLib/radio.h"
 #include "ngscope/hdr/dciLib/load_config.h"
+// #include "ngscope/hdr/dciLib/resampler.h"
 
 
 extern bool go_exit;
 extern ngscope_mode_t mode;
 extern bool debug;
 
-int radio_init_and_start(srsran_rf_t* rf, 
-                    srsran_cell_t* cell, 
-                    prog_args_t prog_args, 
-                    cell_search_cfg_t* cell_detect_config, 
-                    float* search_cell_cfo){
+int extract_master_clock_rate(const char *args, int *rate_hz){
+
+    if (!args || !rate_hz){
+        return 0;
+    }
+
+    const char *key = "master_clock_rate=";
+    const char *found = strstr(args,key);
+
+    if (!found){
+        return 0;
+    }
+
+    const char *value_start = found + strlen(key);
+
+    char *end_ptr;
+    double rate = strtod(value_start, &end_ptr);
+    if (end_ptr == value_start){
+        return 0;
+    }
+
+    if (*end_ptr != '\0' && *end_ptr != ',' && *end_ptr != ' '){
+        return 0;
+    }
+
+    *rate_hz = (int) rate;
+    return 1;
+}
+
+
+int radio_init_and_start(srsran_rf_t* rf,
+                    srsran_cell_t* cell,
+                    prog_args_t prog_args,
+                    cell_search_cfg_t* cell_detect_config,
+                    float* search_cell_cfo,
+                    rf_resampler_t *resampler){
     int ret;
+
+    int mcr = 23040000;
+    int mcr_res = extract_master_clock_rate(prog_args.rf_args, &mcr);
+
+    printf("Master clock rate found: %d, using %.02f MHz\n", mcr_res, (float)mcr/1e6);
 
     if (mode != REPLAY){
 
@@ -54,11 +91,11 @@ int radio_init_and_start(srsran_rf_t* rf,
         srsran_rf_set_rx_gain(rf, srsran_rf_get_rx_gain(rf));
         cell_detect_config->init_agc = srsran_rf_get_rx_gain(rf);
       }
-    
+
 
     /* set receiver frequency */
-      if (debug)
-        printf("DEBUG: Tunning receiver to %.3f MHz\n", (prog_args.rf_freq + prog_args.file_offset_freq) / 1000000);
+      // if (debug)
+    printf("DEBUG: Tunning receiver to %.3f MHz\n", (prog_args.rf_freq + prog_args.file_offset_freq) / 1e6);
       srsran_rf_set_rx_freq(rf, prog_args.rf_nof_rx_ant, prog_args.rf_freq + prog_args.file_offset_freq);
     }
 
@@ -88,25 +125,43 @@ int radio_init_and_start(srsran_rf_t* rf,
     }
     if (debug)
       printf("DEBUG: FOUND AND DECODED MIB\n");
+    printf("Found cell:\n\tnof_prb:\t%d\n\tnof_ports:\t%d\n\tid:\t%d\n",cell->nof_prb,cell->nof_ports,cell->id);
 
     if (mode != REPLAY){
 
       /* set sampling frequency */
       int srate = srsran_sampling_freq_hz(cell->nof_prb);
-      if (srate != -1) {
-        if (debug)
-          printf("DEBUG: Setting sampling rate %.2f MHz\n", (float)srate / 1000000);
-        float srate_rf = srsran_rf_set_rx_srate(rf, (double)srate);
-        if (debug)
-          printf("DEBUG: srate_rf:%f\n",srate_rf);
-        if (srate_rf != srate) {
-          ERROR("Could not set sampling rate");
+
+
+      if (srate == -1){
+          ERROR("Invalid number of PRB %d", cell->nof_prb);
           exit(-1);
-        }
-      } else {
-        ERROR("Invalid number of PRB %d", cell->nof_prb);
-        exit(-1);
       }
+
+      if (mcr % srate != 0){
+          printf("Resample needed: master clock rate %.02f MHz not divisible by desired sampling rate %.02f MHz\n", (float) mcr / 1e6, (float) srate / 1e6);
+          int resample_rate_hz = find_resample_rate_hz(srate, mcr);
+          if (resample_rate_hz == -1){
+              ERROR("Could not find suitable resample rate\n");
+              exit(-1);
+          }
+          printf("Found resample rate %.02f MHz for sample rate %.02f MHz and master clock rate %.02f MHz\n", (float) resample_rate_hz/ 1e6, (float) srate/ 1e6, (float) mcr / 1e6);
+          rf_resampler_init(resampler, srate, resample_rate_hz, SRSRAN_SF_LEN(srsran_symbol_sz(cell->nof_prb)));
+          srate = resample_rate_hz;
+        }
+
+        // if (debug)
+        // srate = 15000 * 2048;
+        printf("DEBUG: Setting sampling rate %.3f MHz\n", (float)srate / 1e6);
+        float srate_rf = srsran_rf_set_rx_srate(rf, (double)srate);
+        printf("DEBUG: Received srate is %.3f MHz\n", (float)srate_rf / 1e6);
+        if (debug)
+            printf("DEBUG: srate_rf:%f\n",srate_rf);
+        if (srate_rf != srate) {
+            ERROR("Could not set sampling rate");
+            exit(-1);
+        }
+
       // start rx stream
       srsran_rf_start_rx_stream(rf, false);
     }

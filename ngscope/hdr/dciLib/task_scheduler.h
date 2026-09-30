@@ -19,6 +19,7 @@ extern "C" {
 #endif
 
 #include "ngscope_def.h"
+// #include "resampler.h"
 #include "radio.h"
 
 #define MAX_TMP_BUFFER 60
@@ -38,6 +39,7 @@ typedef struct{
     srsran_cell_t       cell;
     srsran_ue_sync_t    ue_sync;
     prog_args_t         prog_args;
+    rf_resampler_t      resampler;
 }ngscope_task_scheduler_t;
 
 typedef struct{
@@ -47,7 +49,7 @@ typedef struct{
 }cell_args_t;
 
 void* task_scheduler_thread(void* p);
- 
+
 #ifdef __cplusplus
 }
 #endif

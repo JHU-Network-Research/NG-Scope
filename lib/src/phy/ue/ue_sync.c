@@ -845,11 +845,11 @@ static int receive_samples(srsran_ue_sync_t* q, cf_t* input_buffer[SRSRAN_MAX_CH
     ptr[i] = &input_buffer[i][q->next_rf_sample_offset];
   }
   // srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
-  
-  bool do_agc = q->recv_callback_agc &&  q->do_agc && 
-    ((q->state == SF_FIND) || 
-      ((q->mode == SYNC_MODE_PSS) && 
-      ((q->sfind.frame_type == SRSRAN_FDD && (q->sf_idx == 0 || q->sf_idx == 5)) || (q->sfind.frame_type == SRSRAN_TDD && (q->sf_idx == 1 || q->sf_idx == 6))) && 
+
+  bool do_agc = q->recv_callback_agc &&  q->do_agc &&
+    ((q->state == SF_FIND) ||
+      ((q->mode == SYNC_MODE_PSS) &&
+      ((q->sfind.frame_type == SRSRAN_FDD && (q->sf_idx == 0 || q->sf_idx == 5)) || (q->sfind.frame_type == SRSRAN_TDD && (q->sf_idx == 1 || q->sf_idx == 6))) &&
       (q->do_agc && (q->agc_period == 0 || (q->agc_period && (q->frame_total_cnt % q->agc_period) == 0)))
     ));
 
@@ -864,7 +864,7 @@ static int receive_samples(srsran_ue_sync_t* q, cf_t* input_buffer[SRSRAN_MAX_CH
       return SRSRAN_ERROR;
     }
   }
-  
+
   // if (q->recv_callback){
   //   fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
   //   if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
@@ -952,7 +952,7 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
             //   case SRSRAN_SYNC_FOUND_NOSPACE:
             //     fprintf(stdout, "SYNC FOUND NOSPACE: ret=%d\n", ret);
             //     break;
-            //   case SRSRAN_SYNC_ERROR: 
+            //   case SRSRAN_SYNC_ERROR:
             //     fprintf(stdout, "SYNC ERROR: ret=%d\n", ret);
             //     break;
             //   case SRSRAN_SYNC_FOUND:

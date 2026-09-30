@@ -308,10 +308,11 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
 
     // Copy the prameters
     task_scheduler->prog_args = prog_args;
+    task_scheduler->resampler.enabled = 0;
 
     // First of all, start the radio and get the cell information
     radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args,
-                                                &cell_detect_config, &search_cell_cfo);
+                                                &cell_detect_config, &search_cell_cfo, &task_scheduler->resampler);
 
     // Copy the cell info to the
     pthread_mutex_lock(&cell_mutex);

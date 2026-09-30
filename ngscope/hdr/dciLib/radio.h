@@ -22,11 +22,16 @@ extern "C" {
 
 #include "parse_args.h"
 //#include "rf_utils.h"
-int radio_init_and_start(srsran_rf_t* rf, 
-                    srsran_cell_t* cell, 
-                    prog_args_t prog_args, 
+#include "resampler.h"
+
+int extract_master_clock_rate(const char* args, int *rate_mhz);
+
+int radio_init_and_start(srsran_rf_t* rf,
+                    srsran_cell_t* cell,
+                    prog_args_t prog_args,
                     cell_search_cfg_t* cell_detect_config,
-                    float* search_cell_cfo);
+                    float* search_cell_cfo,
+                    rf_resampler_t *resampler);
 
 int radio_stop(srsran_rf_t* rf);
 #ifdef __cplusplus

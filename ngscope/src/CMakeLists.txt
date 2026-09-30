@@ -47,7 +47,9 @@ target_link_libraries(ngscope ${SRSRAN_SOURCES}
                               ${CMAKE_THREAD_LIBS_INIT}
                               ${Boost_LIBRARIES}
                               ${LIBCONFIG_LIBRARY}
-                              ${ATOMIC_LIBS})
+                              ${ATOMIC_LIBS}
+                              "/usr/local/lib/libliquid.so"
+                              "/usr/local/lib/libliquid.a")
 
 target_link_libraries(remote_client   ${SRSRAN_SOURCES}
                               ${CMAKE_THREAD_LIBS_INIT}
@@ -68,4 +70,3 @@ if (RPATH)
 endif (RPATH)
 
 install(TARGETS ngscope DESTINATION ${RUNTIME_DIR})
-

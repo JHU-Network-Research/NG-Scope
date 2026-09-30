@@ -126,10 +126,10 @@ int rf_mib_decoder(srsran_rf_t*       rf,
   int srate = srsran_sampling_freq_hz(SRSRAN_UE_MIB_NOF_PRB);
 
   if (mode != REPLAY){
-    INFO("Setting sampling frequency %.2f MHz for PSS search", (float)srate / 1000000);
-    printf("Setting sampling frequency %.2f MHz for PSS search\n", (float)srate / 1000000);
+    INFO("Setting sampling frequency %.3f MHz for PSS search", (float)srate / 1000000);
+    printf("Setting sampling frequency %.3f MHz for PSS search\n", (float)srate / 1000000);
     double res = srsran_rf_set_rx_srate(rf, (float)srate);
-    printf("Set samping frequency to %.2f MHz with result %.2f MHz\n", (float)srate / 1000000, (float)res / 1000000);
+    printf("Set samping frequency to %.3f MHz with result %.3f MHz\n", (float)srate / 1000000, (float)res / 1000000);
 
     INFO("Starting receiver...");
     printf("DEBUG: Starting receiver\n");

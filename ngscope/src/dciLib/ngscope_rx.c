@@ -90,7 +90,7 @@ bool init_record(const char* path, uint32_t buf_size_gb, uint32_t nof_ports, dou
   record_ring_buffer_init(&record_buf, buf_size, path);
 
   rx_record_header_t hdr;
-  hdr.nof_rx_antenna = nof_ports;
+  hdr.nof_rx_antenna = nof_ports; // SRSRAN_MAX_PORTS; // nof_ports;
   hdr.rf_freq = rf_freq;
 
   record_ring_buffer_insert(&record_buf, &hdr, sizeof(hdr));
@@ -360,6 +360,12 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
     if (mode == NORMAL || mode == RECORD){
         if (debug)
             printf("DEBUG: MODE is normal or record\n");
+
+        // if (){
+
+        // }else{
+        //     n = srsran_rf_recv_with_time_multi(h, ptr, nsamples, true, &t->full_secs, &t->frac_secs);
+        // }
         n = srsran_rf_recv_with_time_multi(h, ptr, nsamples, true, &t->full_secs, &t->frac_secs);
         // return n;
         if (debug)
@@ -391,6 +397,7 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             record_ring_buffer_insert(&record_buf, &hdr, sizeof(hdr));
             nrecorded += (sizeof(hdr));
             for (int i = 0; i < sdr_nof_ports; i++){
+            // for (int i = 0; i < SRSRAN_MAX_PORTS; i++){
                 record_ring_buffer_insert(&record_buf, ptr[i], sizeof(cf_t)*n);
                 nrecorded += (sizeof(cf_t)*n);
             }
