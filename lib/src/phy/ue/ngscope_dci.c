@@ -51,8 +51,6 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
     // }
 
     if (srsran_ue_dl_dci_to_pdsch_grant(q,sf, cfg, dci_dl, dci_dl_grant)) {
-        if (dci_msg->format == SRSRAN_DCI_FORMAT2)
-            ERROR("Unpacking dl dci to pdsch grant");
         return SRSRAN_ERROR;
     }
 

@@ -294,7 +294,7 @@ bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
     if (hdr != NULL){
 
         int n = fread(hdr, sizeof(rx_record_header_t), 1, replay_fh);
-        printf("Size of header: %d\n", sizeof(rx_record_header_t));
+        printf("Size of header: %ld\n", sizeof(rx_record_header_t));
         printf("Read replay header with result %d\n", n);
         printf("\tnof_rx_antenna:\t%d\n", hdr->nof_rx_antenna);
         printf("\trf_freq:\t%f\n",hdr->rf_freq);
