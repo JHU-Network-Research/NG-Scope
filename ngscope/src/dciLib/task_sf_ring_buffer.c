@@ -13,6 +13,8 @@
 
 #include "ngscope/hdr/dciLib/task_sf_ring_buffer.h"
 
+bool __attribute__((weak)) debug = false;
+
 int task_sf_ring_buffer_init(task_tmp_buffer_t* q, int max_num_samples){
 	/********************** Set up the tmp buffer **********************/
     q->header  	= 0;
@@ -26,6 +28,9 @@ int task_sf_ring_buffer_init(task_tmp_buffer_t* q, int max_num_samples){
             q->sf_buf[i].IQ_buffer[j] = srsran_vec_cf_malloc(max_num_samples);
         }
     }
+
+	if (debug)
+		printf("SF_RING_BUFFER: Created buffer with capacity %d\n", max_num_samples);
 	return 0;
 }
 
@@ -42,17 +47,23 @@ int task_sf_ring_buffer_put(task_tmp_buffer_t* q,
 							cf_t* buffers[SRSRAN_MAX_CHANNELS],
 							uint32_t sfn, 
 							uint32_t sf_idx,
+							uint64_t collection_time,
 							int rf_nof_rx_ant,
 							int max_num_samples)
 {
 	// we do nothing if the buffer is full
-	if(q->full) return 0;
+	if(q->full){
+		if (debug)
+			printf("SF_RING_BUFFER: cannot add task sfn=%d,sf_idx=%d, buffer is full\n", sfn, sf_idx);
+		return 0;
+	}
 
 	/* Now we put the data into the buffer */
 
 	//printf("Nof buffer:%d %d\n", task_tmp_buffer.header, task_tmp_buffer.nof_buf);
 	q->sf_buf[q->header].sf_idx   = sf_idx;
 	q->sf_buf[q->header].sfn      = sfn;
+	q->sf_buf[q->header].collection_time = collection_time;
 	for(int p=0; p<rf_nof_rx_ant; p++){
 		memcpy(q->sf_buf[q->header].IQ_buffer[p], 
 								buffers[p], max_num_samples*sizeof(cf_t));
@@ -65,6 +76,9 @@ int task_sf_ring_buffer_put(task_tmp_buffer_t* q,
 	if(q->len == MAX_TMP_BUFFER){
 		q->full = true;  // the buffer is full
 	}
+
+	if (debug)
+		printf("SF_RING_BUFFER: Added task sfn=%d,sf_idx=%d, new buffer length is %d (full=%d)\n",sfn, sf_idx,q->len, q->full);
 	return 1;
 }
 
@@ -77,6 +91,9 @@ int task_sf_ring_buffer_get(task_tmp_buffer_t* q){
 	if(q->len < MAX_TMP_BUFFER){
 		q->full = false;
 	}
+
+	if (debug)
+		printf("SF_RING_BUFFER: Removed task new buffer length is %d (full=%d)\n",q->len, q->full);
 	return 0;
 }
 

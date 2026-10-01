@@ -56,11 +56,13 @@ SRSRAN_API int srsran_ra_dl_dci_to_grant_wo_mimo_yx(const srsran_cell_t*   cell,
                                          srsran_tm_t            tm,
                                          bool                   pdsch_use_tbs_index_alt,
                                          const srsran_dci_dl_t* dci,
-                                         srsran_pdsch_grant_t*  grant);
+                                         srsran_pdsch_grant_t*  grant,
+                                         uint32_t*              out_L_crb,
+                                         uint32_t*              out_RB_start);
 
 
 SRSRAN_API int
-srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci, srsran_pdsch_grant_t* grant, uint32_t nof_prb);
+srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci, srsran_pdsch_grant_t* grant, uint32_t nof_prb, uint32_t *out_L_crb, uint32_t *out_RB_start);
 
 /** Functions used by the eNodeB scheduler */
 SRSRAN_API uint32_t srsran_ra_dl_approx_nof_re(const srsran_cell_t* cell, uint32_t nof_prb, uint32_t nof_ctrl_symbols);

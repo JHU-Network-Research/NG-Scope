@@ -63,7 +63,16 @@ IF(UHD_FOUND)
   # Set required variables
   set(CMAKE_REQUIRED_INCLUDES ${UHD_INCLUDE_DIRS})
   set(CMAKE_REQUIRED_FLAGS "${CMAKE_CXX_FLAGS} -L${UHD_LIBRARY_DIR}")
-  set(CMAKE_REQUIRED_LIBRARIES uhd boost_program_options boost_system)
+  set(CMAKE_REQUIRED_LIBRARIES uhd boost_program_options)
+
+  # Boost.System is header-only since Boost 1.69 and is not shipped at all by newer
+  # distributions; only add it when the compiled library actually exists, otherwise the
+  # checks below would fail to link and silently disable the UHD features they probe for.
+  find_library(UHD_BOOST_SYSTEM_LIBRARY NAMES boost_system)
+  if(UHD_BOOST_SYSTEM_LIBRARY)
+    list(APPEND CMAKE_REQUIRED_LIBRARIES boost_system)
+  endif(UHD_BOOST_SYSTEM_LIBRARY)
+  mark_as_advanced(UHD_BOOST_SYSTEM_LIBRARY)
 
   # Checks whether the UHD driver supports X300 reset from srsRAN. This functionality requires changing the function
   # `x300_make_ctrl_iface_enet` visibility in the file `uhd/host/lib/usrp/x300_fw_ctrl.cpp`. This can be accomplished

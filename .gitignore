@@ -1,0 +1,10 @@
+build/
+.idea/
+build-docker/
+recordings/
+# Replay harness: keep the scripts and config templates, not the multi-gigabyte run outputs.
+measurements/*
+!measurements/*.sh
+!measurements/*.toml
+!measurements/README.md
+__pycache__/

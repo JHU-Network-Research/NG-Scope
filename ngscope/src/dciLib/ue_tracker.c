@@ -13,6 +13,9 @@
 #include "ngscope/hdr/dciLib/ue_tracker.h"
 #include "ngscope/hdr/dciLib/ngscope_util.h"
 
+extern bool debug;
+extern bool silent;
+
 // inti the structure
 void ngscope_ue_tracker_init(ngscope_ue_tracker_t* q){
 	for(int i=0; i<65535; i++){
@@ -175,7 +178,8 @@ void ngscope_ue_tracker_enqueue_ue_rnti(ngscope_ue_tracker_t* q, uint32_t tti, u
 	if(tti_difference(q->ue_last_active[rnti], tti) < ACTIVE_TTI_T || 
 			q->ue_cnt[rnti] > ACTIVE_UE_CNT_THD){
 		q->active_ue_list[rnti] = true;
-		//printf("tti:%d found active UE: cnt:%d \n", tti, q->ue_cnt[rnti]);
+		if (debug)
+			printf("DEBUG: tti=%d found active UE: cnt=%d \n", tti, q->ue_cnt[rnti]);
 	}
 		
 	// then we update its last active tti
@@ -184,9 +188,31 @@ void ngscope_ue_tracker_enqueue_ue_rnti(ngscope_ue_tracker_t* q, uint32_t tti, u
 	// check whether we need to update the top N
 	bool updated; 
 	updated = update_ue_tracker_topN(q, rnti);
-
-	//printf("TTI:%d enqueue rnti:%d is active:%d ue_cnt:%d updated inside the TopN:%d\n", tti, rnti, q->active_ue_list[rnti], q->ue_cnt[rnti], updated);
+	if (debug)
+		printf("DEBUG: TTI=%d enqueue rnti=%d is active=%d ue_cnt=%d updated inside the TopN=%d\n", tti, rnti, q->active_ue_list[rnti], q->ue_cnt[rnti], updated);
     return;
+}
+
+// Seed an RNTI observed in a Random Access Response. See ue_tracker.h for why this
+// deliberately does less than ngscope_ue_tracker_enqueue_ue_rnti().
+void ngscope_ue_tracker_seed_rach_rnti(ngscope_ue_tracker_t* q, uint32_t tti, uint16_t rnti){
+	if(rnti == 0){
+		return;
+	}
+	if(q->ue_cnt[rnti] == 0){
+		q->ue_enter_time[rnti] = tti;
+	}
+	q->ue_cnt[rnti]++;
+	q->ue_dl_cnt[rnti]++;
+
+	// Only mark it as recently seen. active_ue_list and top_N are left to the normal
+	// enqueue path, which requires a real PDCCH decode.
+	q->ue_last_active[rnti] = tti;
+
+	if (debug)
+		printf("DEBUG: TTI=%d seeded RACH rnti=%d ue_cnt=%d active=%d\n",
+				tti, rnti, q->ue_cnt[rnti], q->active_ue_list[rnti]);
+	return;
 }
 
 void ngscope_ue_tracker_update_per_tti(ngscope_ue_tracker_t* q, uint32_t tti){
@@ -197,11 +223,14 @@ void ngscope_ue_tracker_update_per_tti(ngscope_ue_tracker_t* q, uint32_t tti){
 }
 
 void ngscope_ue_tracker_info(ngscope_ue_tracker_t* q, uint32_t tti){
-	printf("TTI:%d Nof active ue:%d ", tti, q->nof_active_ue);
-	for(int i=0; i<TOPN; i++){
-		printf("%d|%d ", q->top_N_ue_rnti[i], q->top_N_ue_freq[i]);
+
+	if (!silent){
+		printf("TTI:%d Nof active ue:%d ", tti, q->nof_active_ue);
+		for(int i=0; i<TOPN; i++){
+			printf("%d|%d ", q->top_N_ue_rnti[i], q->top_N_ue_freq[i]);
+		}
+		printf("\n");
 	}
-	printf("\n");
 	return;
 }
 

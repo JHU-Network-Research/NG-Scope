@@ -22,11 +22,18 @@
 #include "srsran/phy/ue/ue_dl.h"
 
 #include "srsran/srsran.h"
+// #include "dciLib/ngscope_rx.h"
+#include <srsran/phy/common/phy_common.h>
 #include <string.h>
+#include "dciLib/rach_filter.h"
+// #include "srsran/phy/ue/ngscope_consistency.h"
 
 #define CURRENT_FFTSIZE srsran_symbol_sz(q->cell.nof_prb)
 #define CURRENT_SFLEN_RE SRSRAN_NOF_RE(q->cell)
 #define MAX_SFLEN_RE SRSRAN_SF_LEN_RE(max_prb, q->cell.cp)
+
+bool __attribute__((weak)) debug = false;
+// extern ngscope_mode_t mode;
 
 const static srsran_dci_format_t ue_dci_formats[8][2] = {
     /* Mode 1 */ {SRSRAN_DCI_FORMAT1A, SRSRAN_DCI_FORMAT1},
@@ -55,6 +62,9 @@ const static uint32_t mi_tdd_table[7][10] = {{2, 1, 0, 0, 0, 2, 1, 0, 0, 0},  //
                                              {0, 0, 0, 0, 0, 0, 0, 0, 1, 1},  // ul/dl 4
                                              {0, 0, 0, 0, 0, 0, 0, 0, 1, 0},  // ul/dl 5
                                              {1, 1, 0, 0, 0, 1, 1, 0, 0, 1}}; // ul/dl 6
+
+
+// extern ngscope_mode_t  mode;
 
 #define MI_VALUE(sf_idx) ((q->cell.frame_type == SRSRAN_FDD) ? 1 : mi_tdd_table[sf->tdd_config.sf_config][sf_idx])
 #define MI_IDX(sf_idx)                                                                                                 \
@@ -398,13 +408,14 @@ static bool find_dci(srsran_dci_msg_t* dci_msg, uint32_t nof_dci_msg, srsran_dci
 
   return found;
 }
-
+// JH modified for proper L checking?
 static bool dci_location_is_allocated(srsran_ue_dl_t* q, srsran_dci_location_t new_loc)
 {
   for (uint32_t i = 0; i < q->nof_allocated_locations; i++) {
     uint32_t L    = 1 << q->allocated_locations[i].L; // bit shift to translate from aggregation level to # CCEs
     uint32_t new_L = 1 << new_loc.L;
     uint32_t ncce = q->allocated_locations[i].ncce;
+    // fprintf(stderr, "Checking [ncce=%d,L=%d] against allocated location [ncce=%d,L=%d]\n", new_loc.ncce, new_L, ncce, L);
     if ((ncce <= new_loc.ncce && new_loc.ncce < ncce + L) || // if new location starts in within an existing allocation
         (new_loc.ncce <= ncce &&
          ncce < new_loc.ncce + new_L)) { // or an existing allocation starts within the new location
@@ -520,17 +531,17 @@ static int dci_blind_search(srsran_ue_dl_t*     q,
   return nof_dci;
 }
 
-/* Check whether the locations of decoded DCI with RNTI is valid 
- * by valid we mean the location of the DCI follows the 3gpp standard 
- * nof_cce: the total number control channel element (CCE) 
+/* Check whether the locations of decoded DCI with RNTI is valid
+ * by valid we mean the location of the DCI follows the 3gpp standard
+ * nof_cce: the total number control channel element (CCE)
  * nsubframe: subframe index
  * rnti: the RNTI of the decoded dci
  * this_ncce: the ncce of the decoded dci
  */
 
-// Check the UE-specific search space 
-uint32_t srsran_ngscope_ue_locations_ncce_check_ue_specific(uint32_t nof_cce, uint32_t nsubframe, uint16_t rnti, 
-                                                                    uint32_t this_ncce) 
+// Check the UE-specific search space
+uint32_t srsran_ngscope_ue_locations_ncce_check_ue_specific(uint32_t nof_cce, uint32_t nsubframe, uint16_t rnti,
+                                                                    uint32_t this_ncce)
 {
     int l; // this must be int because of the for(;;--) loop
     uint32_t i, L, m;
@@ -563,9 +574,9 @@ uint32_t srsran_ngscope_ue_locations_ncce_check_ue_specific(uint32_t nof_cce, ui
     return 0;
 }
 
-// Check the common search space 
-uint32_t srsran_ngscope_ue_locations_ncce_check_common(uint32_t nof_cce, uint32_t nsubframe, uint16_t rnti, 
-                                                                    uint32_t this_ncce) 
+// Check the common search space
+uint32_t srsran_ngscope_ue_locations_ncce_check_common(uint32_t nof_cce, uint32_t nsubframe, uint16_t rnti,
+                                                                    uint32_t this_ncce)
 {
     int l; // this must be int because of the for(;;--) loop
     uint32_t i, L;
@@ -593,7 +604,7 @@ static uint32_t srsran_ngscope_is_common_space(srsran_dci_format_t format){
         // both common and ue specific space
         return 0;
     }else if(format == SRSRAN_DCI_FORMAT1 || format == SRSRAN_DCI_FORMAT1B
-       || format == SRSRAN_DCI_FORMAT1D || format == SRSRAN_DCI_FORMAT2 
+       || format == SRSRAN_DCI_FORMAT1D || format == SRSRAN_DCI_FORMAT2
        || format == SRSRAN_DCI_FORMAT2A || format == SRSRAN_DCI_FORMAT2B ){
         return 1;
     }else if(format == SRSRAN_DCI_FORMAT1C ){
@@ -623,6 +634,8 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
       }
       if (dci_location_is_allocated(q, search_space->loc[l])) {
         INFO("Skipping location L=%d, ncce=%d. Already allocated", search_space->loc[l].L, search_space->loc[l].ncce);
+        if (debug)
+          printf("DEBUG: skipping location TTI=%d, L=%d, ncce=%d, ss_loc_idx=%d, mean_llr=%.3f. Already allocated\n", sf->tti,search_space->loc[l].L, search_space->loc[l].ncce, l, search_space->loc[l].mean_llr);
         continue;
       }
       for (uint32_t f = 0; f < search_space->nof_formats; f++) {
@@ -632,6 +645,16 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
              search_space->loc[l].L,
              l,
              search_space->nof_locations);
+        if (debug)
+          printf("DEBUG: TTI=%d, searching format=%s, ncce=%d, L=%d, ss_loc_idx=%d, nof_loc=%d, mean_llr=%.3f\n",
+            sf->tti,
+            srsran_dci_format_string(search_space->formats[f]),
+            search_space->loc[l].ncce,
+            search_space->loc[l].L,
+            l,
+            search_space->nof_locations,
+            search_space->loc[l].mean_llr
+          );
 
         // Try to decode a valid DCI msg
         dci_msg[nof_dci].location = search_space->loc[l];
@@ -639,13 +662,37 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         dci_msg[nof_dci].rnti     = 0;
 
         float decode_prob = 0;
-        //if (srsran_pdcch_decode_msg(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci])) {
         if (srsran_pdcch_decode_msg_yx(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob)) {
           ERROR("Error decoding DCI msg");
           return SRSRAN_ERROR;
-        }else{
-            //printf("PROB:%f\n", decode_prob);
         }
+
+        // P/SI/RA-RNTIs must be format 1A or 1C
+        if (!SRSRAN_RNTI_ISUSER(dci_msg[nof_dci].rnti) && !SRSRAN_RNTI_ISMBSFN(dci_msg[nof_dci].rnti)){
+            if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT1A && dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT1C){
+                continue;
+            }
+        }
+        // if (dci_msg[nof_dci].rnti == 4 && )
+
+
+        /* Thread-bound: uses the calling decoder thread's RF device, and only filters when
+         * that device set rach_filter_only. Previously this hardcoded rf_idx 0 and ran
+         * unconditionally, so cells 1..3 were filtered against cell 0's RNTI set and the
+         * blind search dropped unicast DCIs even with rach_filter_only off. */
+        if (!ngscope_rach_filter_pass_bound(dci_msg[nof_dci].rnti)){
+            // JH TODO confirm this is working as expected? Also I don't love binding thread to specific RF antennas.
+            // This may not scale super well.
+          // printf("Filtering invalid dci: %d\n", dci_msg[nof_dci].rnti);
+          continue;
+        }
+
+        // Skip DCIs for unsupported formats
+        // if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
+        //     continue;
+        // }
+
+
       	dci_msg[nof_dci].decode_prob = decode_prob;
         // Check if RNTI is matched
         //if ((dci_msg[nof_dci].nof_bits > 0) && decode_prob > 50 ) {
@@ -654,28 +701,39 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
           float corr = srsran_pdcch_msg_corr(&q->pdcch, &dci_msg[nof_dci]);
           dci_msg[nof_dci].corr = corr;
           //printf("corr:%f\n", corr);
+          if (debug)
+            printf("DEBUG: Decoded message with TTI=%d, format=%s, ncce=%d, L=%d, "
+        "ss_loc_idx=%d, nof_loc=%d, rnti=%d, mean_llr=%.3f, "
+        "decode_prob=%.3f, nof_bits=%d, corr=%.3f\n",
+      sf->tti, srsran_dci_format_string(search_space->formats[f]),
+      search_space->loc[l].ncce, search_space->loc[l].L,
+      l, search_space->nof_locations, dci_msg[nof_dci].rnti,
+      search_space->loc[l].mean_llr, decode_prob,
+      dci_msg[nof_dci].nof_bits, corr);
+
+
           // Skip candidate if the threshold is not reached
           // 0.5 is set from pdcch_test
-          if (!isnormal(corr) || corr < 0.4f) { // JH: I found that 0.4 eliminated most spurious DCIs while pruning the fewest correct DCIs.
-            //printf("Corr skip!\n");
-            continue;
-          }
+//           if (!isnormal(corr) || corr < 0.4f) { // JH: I found that 0.4 eliminated most spurious DCIs while pruning the fewest correct DCIs.
+//             //printf("Corr skip!\n");
+//             continue;
+//           }
 
-          // When searching for format 1A, we also need to consider format 0         
-          //if(search_space->formats[f]  == SRSRAN_DCI_FORMAT1A){
-          //    srsran_dci_format_t decoded_format = (dci_msg[nof_dci].payload[0] == 0) ? SRSRAN_DCI_FORMAT0 : SRSRAN_DCI_FORMAT1A;
-          //    //printf("dci_msg format:%d decode format:%d\n", dci_msg[nof_dci].format, decoded_format);
-          //    if ( dci_msg[nof_dci].format != decoded_format ){
-          //      dci_msg[nof_dci].format = decoded_format; 
-          //    }
+          // JH CORR_FILTER
+          // if (!isnormal(corr) || corr <= 0.5f) {
+          //   //printf("Corr skip!\n");
+          //   if (debug)
+          //     printf("DEBUG: Skipping message at TTI=%d, format=%s, ncce=%d, L=%d, rnti=%d, because corr=%.3f (< 0.5)\n",
+          //   sf->tti, srsran_dci_format_string(search_space->formats[f]), search_space->loc[l].ncce, search_space->loc[l].L, dci_msg[nof_dci].rnti, corr);
+          //   continue;
           // }
 
-          int ue_specific = srsran_ngscope_ue_locations_ncce_check_ue_specific(nof_cce, 
-                                        sf->tti % 10, dci_msg[nof_dci].rnti, dci_msg[nof_dci].location.ncce); 
+          int ue_specific = srsran_ngscope_ue_locations_ncce_check_ue_specific(nof_cce,
+                                        sf->tti % 10, dci_msg[nof_dci].rnti, dci_msg[nof_dci].location.ncce);
 
-          int common_space = srsran_ngscope_ue_locations_ncce_check_common(nof_cce, 
-                                        sf->tti % 10, dci_msg[nof_dci].rnti, dci_msg[nof_dci].location.ncce); 
-          
+          int common_space = srsran_ngscope_ue_locations_ncce_check_common(nof_cce,
+                                        sf->tti % 10, dci_msg[nof_dci].rnti, dci_msg[nof_dci].location.ncce);
+
         //  // Skip if the message location doesn't match with its search space
           uint32_t is_common = srsran_ngscope_is_common_space(dci_msg[nof_dci].format);
           if(is_common == 0){
@@ -702,21 +760,21 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         }
       }
     }
-  
+
   return nof_dci;
 }
 
 
-bool srsran_ngscope_space_match_yx(uint16_t rnti, 
-                                    uint32_t nof_cce, 
-                                    uint32_t sf_idx, 
-                                    uint32_t ncce, 
+bool srsran_ngscope_space_match_yx(uint16_t rnti,
+                                    uint32_t nof_cce,
+                                    uint32_t sf_idx,
+                                    uint32_t ncce,
                                     srsran_dci_format_t format)
-{ 
-    int ue_specific = srsran_ngscope_ue_locations_ncce_check_ue_specific(nof_cce, 
-                                sf_idx, rnti, ncce); 
-    int common_space = srsran_ngscope_ue_locations_ncce_check_common(nof_cce, 
-                                sf_idx, rnti, ncce); 
+{
+    int ue_specific = srsran_ngscope_ue_locations_ncce_check_ue_specific(nof_cce,
+                                sf_idx, rnti, ncce);
+    int common_space = srsran_ngscope_ue_locations_ncce_check_common(nof_cce,
+                                sf_idx, rnti, ncce);
 
     //  // Skip if the message location doesn't match with its search space
     uint32_t is_common = srsran_ngscope_is_common_space(format);
@@ -956,6 +1014,75 @@ srsran_dci_dl_t dci_dl[SRSRAN_MAX_DCI_MSG]
   return nof_msg;
 }
 
+/* Search a caller-supplied set of DCI formats in this RNTI's UE-specific search space, and
+ * optionally Format1A in the common search space.
+ *
+ * srsran_ue_dl_find_dl_dci() derives its format set from dl_cfg->cfg.tm via ue_dci_formats[],
+ * which yields exactly two formats -- {1A, 2} for TM4. That is right for a UE whose
+ * transmission mode you know. A downlink sniffer does not: a UE stays in TM1/TM2 until an
+ * RRCConnectionReconfiguration that only follows a completed SecurityModeCommand, so its
+ * pre-security traffic is scheduled with Format1/1A while ngscope, pinning TM4 for the cell's
+ * port count, searched only {1A, 2} and never looked for Format1 at all.
+ *
+ * Common SS is Format1A only, matching find_dl_ul_dci_type_crnti() above and 36.213 Table
+ * 7.1-5: a C-RNTI monitors only Format0/1A there. It is where Msg4 to a temporary C-RNTI
+ * lives, and dl_cfg->cfg.dci_common_ss is false everywhere in ngscope, so that search never
+ * happened either -- hence an explicit flag here rather than reading the config field.
+ *
+ * Bookkeeping matches srsran_ue_dl_find_dl_dci() exactly: pending_ul_dci_count and
+ * nof_allocated_locations are reset per call, so one tracked UE's claimed PDCCH locations
+ * cannot make dci_location_is_allocated() skip candidates for the next UE scanned.
+ */
+int srsran_ue_dl_find_dl_dci_formats(srsran_ue_dl_t*            q,
+                                     srsran_dl_sf_cfg_t*        sf,
+                                     srsran_ue_dl_cfg_t*        dl_cfg,
+                                     uint16_t                   rnti,
+                                     const srsran_dci_format_t* ue_formats,
+                                     uint32_t                   nof_ue_formats,
+                                     bool                       search_common_1a,
+                                     srsran_dci_dl_t            dci_dl[SRSRAN_MAX_DCI_MSG])
+{
+  if (q == NULL || sf == NULL || dl_cfg == NULL || ue_formats == NULL || nof_ue_formats == 0 ||
+      nof_ue_formats > SRSRAN_MAX_FORMATS) {
+    return SRSRAN_ERROR_INVALID_INPUTS;
+  }
+
+  set_mi_value(q, sf, dl_cfg);
+
+  srsran_dci_msg_t dci_msg[SRSRAN_MAX_DCI_MSG] = {};
+
+  q->pending_ul_dci_count    = 0;
+  q->nof_allocated_locations = 0;
+
+  int nof_msg = find_dci_ss(q, sf, dl_cfg, rnti, dci_msg, ue_formats, nof_ue_formats, true);
+  if (nof_msg < 0) {
+    return nof_msg;
+  }
+
+  /* find_dl_ul_dci_type_crnti() writes the common-SS results at &dci_msg[nof_dci_msg] without
+   * checking that room is left; with SRSRAN_MAX_DCI_MSG == 5 a full UE-SS pass overruns the
+   * array. Skip the pass instead, and let the caller see that it was skipped. */
+  if (search_common_1a && nof_msg < SRSRAN_MAX_DCI_MSG) {
+    const int ret = find_dci_ss(q, sf, dl_cfg, rnti, &dci_msg[nof_msg], common_formats, 1, false);
+    if (ret < 0) {
+      return ret;
+    }
+    nof_msg += ret;
+  }
+
+  if (nof_msg > SRSRAN_MAX_DCI_MSG) {
+    nof_msg = SRSRAN_MAX_DCI_MSG;
+  }
+
+  for (int i = 0; i < nof_msg; i++) {
+    if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, &dl_cfg->cfg.dci, &dci_msg[i], &dci_dl[i])) {
+      ERROR("Unpacking DL DCI");
+      return SRSRAN_ERROR;
+    }
+  }
+  return nof_msg;
+}
+
 int srsran_ue_dl_dci_to_pdsch_grant(srsran_ue_dl_t*       q,
                                     srsran_dl_sf_cfg_t*   sf,
                                     srsran_ue_dl_cfg_t*   cfg,
@@ -966,18 +1093,20 @@ int srsran_ue_dl_dci_to_pdsch_grant(srsran_ue_dl_t*       q,
 }
 
 /****************************************************************************
- *In NG-Scope, we igore the MIMO related parameters(such as pmi). 
- * We igore because that the current hasn't implemented some MIMO type (e.g., 4x2) yet  
+ *In NG-Scope, we igore the MIMO related parameters(such as pmi).
+ * We igore because that the current hasn't implemented some MIMO type (e.g., 4x2) yet
  * and will report error when decoding those MIMO configurations
  * We don't want that so we igore those errors by not configure the parameters
- *******************************************************************************/ 
+ *******************************************************************************/
 int srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(srsran_ue_dl_t*       q,
                                     srsran_dl_sf_cfg_t*   sf,
                                     srsran_ue_dl_cfg_t*   cfg,
                                     srsran_dci_dl_t*      dci,
-                                    srsran_pdsch_grant_t* grant)
+                                    srsran_pdsch_grant_t* grant,
+                                    uint32_t*             out_L_crb,
+                                    uint32_t*             out_RB_start)
 {
-  return srsran_ra_dl_dci_to_grant_wo_mimo_yx(&q->cell, sf, cfg->cfg.tm, cfg->cfg.pdsch.use_tbs_index_alt, dci, grant);
+  return srsran_ra_dl_dci_to_grant_wo_mimo_yx(&q->cell, sf, cfg->cfg.tm, cfg->cfg.pdsch.use_tbs_index_alt, dci, grant, out_L_crb, out_RB_start);
 }
 
 
@@ -1802,7 +1931,7 @@ int srsran_ue_dl_find_and_decode(srsran_ue_dl_t*     q,
 }
 void copy_single_dl_dci(ngscope_dci_msg_t* 		dci_array,
 						srsran_dci_location_t 	loc,
-                        float 					decode_prob, 
+                        float 					decode_prob,
 						float 					corr,
                         srsran_dci_dl_t* 		dci_dl,
                         srsran_pdsch_grant_t* 	dci_dl_grant)
@@ -1812,12 +1941,12 @@ void copy_single_dl_dci(ngscope_dci_msg_t* 		dci_array,
     dci_array->harq    = dci_dl->pid;
     dci_array->nof_tb  = dci_dl_grant->nof_tb;
     dci_array->dl      = true;
- 
+
     dci_array->decode_prob  = decode_prob;
     dci_array->corr         = corr;
 
     dci_array->loc       	= loc;
-   
+
     // transport block 1
     dci_array->tb[0].mcs      = dci_dl_grant->tb[0].mcs_idx;
     dci_array->tb[0].tbs      = dci_dl_grant->tb[0].tbs;
@@ -1839,7 +1968,7 @@ void copy_single_dl_dci(ngscope_dci_msg_t* 		dci_array,
 
 void copy_single_ul_dci(ngscope_dci_msg_t* 			dci_array,
 							srsran_dci_location_t 	loc,
-							float 					decode_prob, 
+							float 					decode_prob,
 							float 					corr,
 							srsran_dci_ul_t* 		dci_ul,
 							srsran_pusch_grant_t* 	dci_ul_grant)
@@ -1857,7 +1986,7 @@ void copy_single_ul_dci(ngscope_dci_msg_t* 			dci_array,
     //dci_array->tb[0].ndi      = dci_ul_grant->tb.ndi;
 
     dci_array->loc       			= loc;
-	
+
     dci_array->phich.n_dmrs   		=  dci_ul->n_dmrs;
     dci_array->phich.n_prb_tilde   	= dci_ul_grant->n_prb_tilde[0];
 
@@ -1896,13 +2025,13 @@ int srsran_ue_decode_dci_yx(srsran_ue_dl_t*     q,
 		mi_set_len = 1;
 	}
 
-	// Currently we assume FDD only 
+	// Currently we assume FDD only
 	srsran_ue_dl_set_mi_auto(q);
 
 	// Blind search PHICH mi value
 	ret = 0;
 	if ((ret = srsran_ue_dl_decode_fft_estimate(q, sf, cfg)) < 0) {
-		return ret; 
+		return ret;
 	}
 
 	srsran_dci_location_t 	loc = {};
@@ -1910,15 +2039,15 @@ int srsran_ue_decode_dci_yx(srsran_ue_dl_t*     q,
 	ret = srsran_ue_dl_find_dl_dci(q, sf, cfg, targetRNTI, dci_dl);
 	if (ret == 1) {
 		//printf("FOUND DL DCI: tti:%d rnti:%d format:%d\n", sf->tti, dci_res->dci_dl[0].rnti, dci_res->dci_dl[0].format);
-		if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, &pdsch_cfg->grant)) {
+		if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, &pdsch_cfg->grant, NULL, NULL)) {
 			ERROR("Error unpacking DCI");
 			return SRSRAN_ERROR;
 		}else{
-			//printf("FOUND DL DCI: tti:%d\tnof_prb:%d\tnof_tb:%d\ttbs1:%d\ttbs2:%d\tmcs1:%d\tmcs2:%d\n", sf->tti, pdsch_cfg->grant.nof_prb, 
+			//printf("FOUND DL DCI: tti:%d\tnof_prb:%d\tnof_tb:%d\ttbs1:%d\ttbs2:%d\tmcs1:%d\tmcs2:%d\n", sf->tti, pdsch_cfg->grant.nof_prb,
 		//		pdsch_cfg->grant.nof_tb, pdsch_cfg->grant.tb[0].tbs, pdsch_cfg->grant.tb[1].tbs, pdsch_cfg->grant.tb[0].mcs_idx, pdsch_cfg->grant.tb[1].mcs_idx);
 			/* Copy single dci message */
 			copy_single_dl_dci(&dci_res->dl_msg[dci_res->nof_dl_dci], loc, 0, 0, &dci_dl[0], &pdsch_cfg->grant);
-			dci_res->nof_dl_dci += 1; 
+			dci_res->nof_dl_dci += 1;
 		}
 	}else{
 		//printf("NO DCI found in dl!\n");
@@ -1940,9 +2069,9 @@ int srsran_ue_decode_dci_yx(srsran_ue_dl_t*     q,
 			return SRSRAN_ERROR;
 		}else{
 			copy_single_ul_dci(&dci_res->ul_msg[dci_res->nof_ul_dci], loc, 0, 0, &dci_ul[0], &dci_ul_grant);
-			dci_res->nof_ul_dci += 1; 
+			dci_res->nof_ul_dci += 1;
 		}
-		//printf("FOUND UL DCI: tti:%d\tnof_prb:%d\tnof_tb:%d\ttbs1:%d\ttbs2:%d\tmcs1:%d\tmcs2:%d\n", sf->tti, dci_res->ul_msg[0].prb, 
+		//printf("FOUND UL DCI: tti:%d\tnof_prb:%d\tnof_tb:%d\ttbs1:%d\ttbs2:%d\tmcs1:%d\tmcs2:%d\n", sf->tti, dci_res->ul_msg[0].prb,
 	//		dci_res->ul_msg[0].nof_tb, dci_res->ul_msg[0].tb[0].tbs, dci_res->ul_msg[0].tb[1].tbs, dci_res->ul_msg[0].tb[0].mcs, dci_res->ul_msg[0].tb[1].tbs);
 	}
 

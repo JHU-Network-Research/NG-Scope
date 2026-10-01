@@ -109,6 +109,9 @@ srsran_pdcch_decode_msg(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cf
 SRSRAN_API int
 srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob);
 
+// SRSRAN_API int
+// srsran_pdcch_decode_msg_jh(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob, float* agreement, float* repeat);
+
 
 /**
  * @brief Computes decoded DCI correlation. It encodes the given DCI message and compares it with the received LLRs

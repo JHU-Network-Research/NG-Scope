@@ -1192,6 +1192,366 @@ static int srsran_predecoding_ccd_2x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
   }
   return SRSRAN_SUCCESS;
 }
+// In lib/src/phy/mimo/precoding.c
+//
+int srsran_predecoding_ccd_4x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
+                                    cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                    cf_t* x[SRSRAN_MAX_LAYERS],
+                                    int    nof_symbols,
+                                    float  scaling,
+                                    float  noise_estimate)
+{
+  float norm = 2.0f / scaling;
+  const cf_t phase[4] = {1.0f, -_Complex_I, -1.0f, _Complex_I};
+
+  // Debug: print first few channel values
+  static int debug_count = 0;
+  if (debug_count < 0) {
+    printf("4x2 CDD MMSE: nof_symbols=%d, scaling=%.3f, noise=%.6f\n",
+           nof_symbols, scaling, noise_estimate);
+    printf("  h[0][0][0] = %.4f + %.4fj\n", crealf(h[0][0][0]), cimagf(h[0][0][0]));
+    printf("  h[1][0][0] = %.4f + %.4fj\n", crealf(h[1][0][0]), cimagf(h[1][0][0]));
+    printf("  h[2][0][0] = %.4f + %.4fj\n", crealf(h[2][0][0]), cimagf(h[2][0][0]));
+    printf("  h[3][0][0] = %.4f + %.4fj\n", crealf(h[3][0][0]), cimagf(h[3][0][0]));
+    printf("  y[0][0] = %.4f + %.4fj\n", crealf(y[0][0]), cimagf(y[0][0]));
+    printf("  y[1][0] = %.4f + %.4fj\n", crealf(y[1][0]), cimagf(y[1][0]));
+    debug_count++;
+  }
+
+  for (int i = 0; i < nof_symbols; i++) {
+    cf_t d = phase[i & 3];
+
+    cf_t v0_rx0 = 0.5f * (h[0][0][i] + h[1][0][i]);
+    cf_t v0_rx1 = 0.5f * (h[0][1][i] + h[1][1][i]);
+    cf_t v1_rx0 = 0.5f * (h[2][0][i] - h[3][0][i]) * d;
+    cf_t v1_rx1 = 0.5f * (h[2][1][i] - h[3][1][i]) * d;
+
+    cf_t h00 = (v0_rx0 + v1_rx0) * (float)M_SQRT1_2;
+    cf_t h10 = (v0_rx1 + v1_rx1) * (float)M_SQRT1_2;
+    cf_t h01 = (v0_rx0 - v1_rx0) * (float)M_SQRT1_2;
+    cf_t h11 = (v0_rx1 - v1_rx1) * (float)M_SQRT1_2;
+
+    srsran_mat_2x2_mmse_gen(y[0][i], y[1][i], h00, h01, h10, h11, &x[0][i], &x[1][i], noise_estimate, norm);
+  }
+
+  // Debug: print first output
+  if (debug_count < 0) {
+    printf("  x[0][0] = %.4f + %.4fj\n", crealf(x[0][0]), cimagf(x[0][0]));
+    printf("  x[1][0] = %.4f + %.4fj\n", crealf(x[1][0]), cimagf(x[1][0]));
+    debug_count++;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+static int srsran_predecoding_ccd_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
+                                               cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                               cf_t*  x[SRSRAN_MAX_LAYERS],
+                                               float* csi[SRSRAN_MAX_CODEWORDS],
+                                               int    nof_symbols,
+                                               float  scaling,
+                                               float  noise_estimate)
+{
+  if (noise_estimate < 0.01f) {
+    noise_estimate = 0.01f;
+  }
+
+  // printf("[4x2 CDD] nof_symbols=%d, scaling=%.3f\n", nof_symbols, scaling);
+
+  // Check port powers
+  float h_pwr[4] = {0};
+  for (int i = 0; i < 100 && i < nof_symbols; i++) {
+    for (int p = 0; p < 4; p++) {
+      h_pwr[p] += cabsf(h[p][0][i])*cabsf(h[p][0][i]) + cabsf(h[p][1][i])*cabsf(h[p][1][i]);
+    }
+  }
+  int check_n = (nof_symbols < 100) ? nof_symbols : 100;
+  // for (int p = 0; p < 4; p++) h_pwr[p] /= check_n;
+  // printf("[4x2 CDD] Port powers: P0=%.2f P1=%.2f P2=%.2f P3=%.2f\n",
+  //        h_pwr[0], h_pwr[1], h_pwr[2], h_pwr[3]);
+
+  // Check received signal power
+  float y_pwr[2] = {0};
+  for (int i = 0; i < 100 && i < nof_symbols; i++) {
+    y_pwr[0] += cabsf(y[0][i]) * cabsf(y[0][i]);
+    y_pwr[1] += cabsf(y[1][i]) * cabsf(y[1][i]);
+  }
+  y_pwr[0] /= check_n;
+  y_pwr[1] /= check_n;
+  // printf("[4x2 CDD] Received signal power: Y0=%.2f Y1=%.2f\n", y_pwr[0], y_pwr[1]);
+
+  // // Print first few channel estimates for inspection
+  // printf("[4x2 CDD] First 5 channel estimates h[port][rx][i]:\n");
+  // for (int i = 0; i < 5; i++) {
+  //   printf("  i=%d: h00=(%.2f,%.2f) h10=(%.2f,%.2f) h01=(%.2f,%.2f) h11=(%.2f,%.2f)\n",
+  //          i,
+  //          crealf(h[0][0][i]), cimagf(h[0][0][i]),
+  //          crealf(h[1][0][i]), cimagf(h[1][0][i]),
+  //          crealf(h[0][1][i]), cimagf(h[0][1][i]),
+  //          crealf(h[1][1][i]), cimagf(h[1][1][i]));
+  //   printf("       h20=(%.2f,%.2f) h30=(%.2f,%.2f) h21=(%.2f,%.2f) h31=(%.2f,%.2f)\n",
+  //          crealf(h[2][0][i]), cimagf(h[2][0][i]),
+  //          crealf(h[3][0][i]), cimagf(h[3][0][i]),
+  //          crealf(h[2][1][i]), cimagf(h[2][1][i]),
+  //          crealf(h[3][1][i]), cimagf(h[3][1][i]));
+  // }
+
+  // // Print first few received symbols
+  // printf("[4x2 CDD] First 5 received symbols:\n");
+  // for (int i = 0; i < 5; i++) {
+  //   printf("  i=%d: y0=(%.2f,%.2f) y1=(%.2f,%.2f)\n",
+  //          i, crealf(y[0][i]), cimagf(y[0][i]),
+  //          crealf(y[1][i]), cimagf(y[1][i]));
+  // }
+
+  // Try simple MRC with just the strongest single channel (diagnostic)
+  // Find which h[p][r] has most power
+  int best_p = 0, best_r = 0;
+  float best_pwr = 0;
+  for (int p = 0; p < 4; p++) {
+    for (int r = 0; r < 2; r++) {
+      float pwr = 0;
+      for (int i = 0; i < check_n; i++) {
+        pwr += cabsf(h[p][r][i]) * cabsf(h[p][r][i]);
+      }
+      if (pwr > best_pwr) {
+        best_pwr = pwr;
+        best_p = p;
+        best_r = r;
+      }
+    }
+  }
+  // printf("[4x2 CDD] Strongest channel: h[%d][%d] with power %.2f\n", best_p, best_r, best_pwr/check_n);
+
+  // // Try single-tap equalization with strongest channel as diagnostic
+  // printf("[4x2 CDD] Single-tap equalization test (using h[%d][%d] on y[%d]):\n", best_p, best_r, best_r);
+  // for (int i = 0; i < 10; i++) {
+  //   cf_t h_best = h[best_p][best_r][i];
+  //   cf_t y_best = y[best_r][i];
+  //   cf_t eq = y_best * conjf(h_best) / (cabsf(h_best)*cabsf(h_best) + 0.01f);
+  //   printf("  i=%d: h=(%.2f,%.2f) y=(%.2f,%.2f) eq=(%.2f,%.2f) |eq|=%.2f\n",
+  //          i, crealf(h_best), cimagf(h_best),
+  //          crealf(y_best), cimagf(y_best),
+  //          crealf(eq), cimagf(eq), cabsf(eq));
+  // }
+
+  // // Now try proper 2x2 MIMO with ports 0,1
+  // printf("[4x2 CDD] 2x2 MIMO equalization (ports 0,1):\n");
+
+  int good_count = 0;
+  for (int i = 0; i < nof_symbols; i++) {
+    // No CDD for now - let's see raw equalization
+    cf_t H00 = h[0][0][i];
+    cf_t H01 = h[1][0][i];
+    cf_t H10 = h[0][1][i];
+    cf_t H11 = h[1][1][i];
+
+    // ZF equalization: x = H^-1 * y
+    cf_t det = H00 * H11 - H01 * H10;
+    if (cabsf(det) < 1e-6f) {
+      det = 1e-6f;
+    }
+
+    cf_t inv_det = 1.0f / det;
+    cf_t x0 = (H11 * y[0][i] - H01 * y[1][i]) * inv_det;
+    cf_t x1 = (-H10 * y[0][i] + H00 * y[1][i]) * inv_det;
+
+    x[0][i] = x0 * scaling;
+    x[1][i] = x1 * scaling;
+
+    float mag0 = cabsf(x0);
+    float mag1 = cabsf(x1);
+    if (mag0 > 0.5f && mag0 < 1.5f && mag1 > 0.5f && mag1 < 1.5f) {
+      good_count++;
+    }
+
+    if (csi[0]) csi[0][i] = cabsf(det);
+    if (csi[1]) csi[1][i] = cabsf(det);
+  }
+
+  // printf("[4x2 CDD] ZF 2x2 (ports 0,1) QPSK-like: %d/%d (%.1f%%)\n",
+  //        good_count, nof_symbols, 100.0f*good_count/nof_symbols);
+
+  // Also try with ports 2,3
+  good_count = 0;
+  for (int i = 0; i < nof_symbols; i++) {
+    cf_t H00 = h[2][0][i];
+    cf_t H01 = h[3][0][i];
+    cf_t H10 = h[2][1][i];
+    cf_t H11 = h[3][1][i];
+
+    cf_t det = H00 * H11 - H01 * H10;
+    if (cabsf(det) < 1e-6f) det = 1e-6f;
+
+    cf_t inv_det = 1.0f / det;
+    cf_t x0 = (H11 * y[0][i] - H01 * y[1][i]) * inv_det;
+    cf_t x1 = (-H10 * y[0][i] + H00 * y[1][i]) * inv_det;
+
+    float mag0 = cabsf(x0);
+    float mag1 = cabsf(x1);
+    if (mag0 > 0.5f && mag0 < 1.5f && mag1 > 0.5f && mag1 < 1.5f) {
+      good_count++;
+    }
+  }
+  // printf("[4x2 CDD] ZF 2x2 (ports 2,3) QPSK-like: %d/%d (%.1f%%)\n",
+  //        good_count, nof_symbols, 100.0f*good_count/nof_symbols);
+
+  // // Print first 10 equalized for inspection
+  // printf("[4x2 CDD] First 10 ZF equalized (ports 0,1):\n");
+  // for (int i = 0; i < 10; i++) {
+  //   printf("  (%.2f,%.2f) (%.2f,%.2f)\n",
+  //          crealf(x[0][i]), cimagf(x[0][i]),
+  //          crealf(x[1][i]), cimagf(x[1][i]));
+  // }
+
+  return nof_symbols;
+}
+
+// int srsran_predecoding_ccd_4x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
+//                                     cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+//                                     cf_t* x[SRSRAN_MAX_LAYERS],
+//                                     int    nof_symbols,
+//                                     float  scaling,
+//                                     float  noise_estimate)
+// {
+//   // 4-port CDD per TS 36.211 Table 6.3.4.2.3-1
+//   // W = (1/2) * [1  0;  1  0;  0  1;  0 -1] * D(i) * U
+//   // D(i) = diag([1, e^{-jπi/2}]) cycles {1, -j, -1, j}
+//   // U = (1/sqrt(2)) * [1  1;  1 -1]
+
+//   // Pre-compute phase factors
+//   const cf_t phase[4] = {1.0f, -_Complex_I, -1.0f, _Complex_I};
+
+//   for (int i = 0; i < nof_symbols; i++) {
+//     // Get delay phase for this subcarrier
+//     cf_t d = phase[i & 3];  // i mod 4
+
+//     // Effective channel for layer 0 (before U mixing):
+//     // h_eff_l0_rx = (h[0][rx] + h[1][rx]) / 2
+
+//     // Effective channel for layer 1 (before U mixing):
+//     // h_eff_l1_rx = (h[2][rx] - h[3][rx]) * d / 2
+
+//     // After U matrix multiplication:
+//     // h00 = (h_l0 + h_l1) / sqrt(2), h10 = (h_l0 - h_l1) / sqrt(2)
+
+//     cf_t h_l0 = 0.5f * (h[0][0][i] + h[1][0][i]);
+//     cf_t h_l1 = 0.5f * (h[2][0][i] - h[3][0][i]) * d;
+
+//     cf_t h00 = (h_l0 + h_l1) * M_SQRT1_2;
+//     cf_t h10 = (h_l0 - h_l1) * M_SQRT1_2;
+
+//     h_l0 = 0.5f * (h[0][1][i] + h[1][1][i]);
+//     h_l1 = 0.5f * (h[2][1][i] - h[3][1][i]) * d;
+
+//     cf_t h01 = (h_l0 + h_l1) * M_SQRT1_2;
+//     cf_t h11 = (h_l0 - h_l1) * M_SQRT1_2;
+
+//     // Standard 2x2 MMSE equalization
+//     cf_t h00_conj = conjf(h00);
+//     cf_t h01_conj = conjf(h01);
+//     cf_t h10_conj = conjf(h10);
+//     cf_t h11_conj = conjf(h11);
+
+//     float norm0 = crealf(h00) * crealf(h00) + cimagf(h00) * cimagf(h00) +
+//                   crealf(h01) * crealf(h01) + cimagf(h01) * cimagf(h01);
+//     float norm1 = crealf(h10) * crealf(h10) + cimagf(h10) * cimagf(h10) +
+//                   crealf(h11) * crealf(h11) + cimagf(h11) * cimagf(h11);
+
+//     cf_t cross = h00_conj * h10 + h01_conj * h11;
+
+//     // MMSE: (H^H * H + σ²I)^-1 * H^H
+//     float det_re = (norm0 + noise_estimate) * (norm1 + noise_estimate) -
+//                    (crealf(cross) * crealf(cross) + cimagf(cross) * cimagf(cross));
+
+//     if (fabsf(det_re) < 1e-10f) {
+//       x[0][i] = 0;
+//       x[1][i] = 0;
+//       continue;
+//     }
+
+//     float inv_det = scaling / det_re;
+
+//     cf_t w00 = ((norm1 + noise_estimate) * h00_conj - conjf(cross) * h10_conj) * inv_det;
+//     cf_t w01 = ((norm1 + noise_estimate) * h01_conj - conjf(cross) * h11_conj) * inv_det;
+//     cf_t w10 = ((norm0 + noise_estimate) * h10_conj - cross * h00_conj) * inv_det;
+//     cf_t w11 = ((norm0 + noise_estimate) * h11_conj - cross * h01_conj) * inv_det;
+
+//     x[0][i] = w00 * y[0][i] + w01 * y[1][i];
+//     x[1][i] = w10 * y[0][i] + w11 * y[1][i];
+//   }
+
+//   return nof_symbols;
+// }
+
+// // Simple 4x2 CDD - Direct extension of 2x2 pattern
+// int srsran_predecoding_ccd_4x2_mmse_csi(cf_t* y[SRSRAN_MAX_PORTS],
+//                                         cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+//                                         cf_t* x[SRSRAN_MAX_LAYERS],
+//                                         float* csi[SRSRAN_MAX_CODEWORDS],
+//                                         int    nof_symbols,
+//                                         float  scaling,
+//                                         float  noise_estimate)
+// {
+//   // 4-port CDD per TS 36.211 Table 6.3.4.2.3-1
+//   const cf_t phase[4] = {1.0f, -_Complex_I, -1.0f, _Complex_I};
+
+//   for (int i = 0; i < nof_symbols; i++) {
+//     cf_t d = phase[i & 3];
+
+//     cf_t h_l0 = 0.5f * (h[0][0][i] + h[1][0][i]);
+//     cf_t h_l1 = 0.5f * (h[2][0][i] - h[3][0][i]) * d;
+
+//     cf_t h00 = (h_l0 + h_l1) * M_SQRT1_2;
+//     cf_t h10 = (h_l0 - h_l1) * M_SQRT1_2;
+
+//     h_l0 = 0.5f * (h[0][1][i] + h[1][1][i]);
+//     h_l1 = 0.5f * (h[2][1][i] - h[3][1][i]) * d;
+
+//     cf_t h01 = (h_l0 + h_l1) * M_SQRT1_2;
+//     cf_t h11 = (h_l0 - h_l1) * M_SQRT1_2;
+
+//     cf_t h00_conj = conjf(h00);
+//     cf_t h01_conj = conjf(h01);
+//     cf_t h10_conj = conjf(h10);
+//     cf_t h11_conj = conjf(h11);
+
+//     float norm0 = crealf(h00) * crealf(h00) + cimagf(h00) * cimagf(h00) +
+//                   crealf(h01) * crealf(h01) + cimagf(h01) * cimagf(h01);
+//     float norm1 = crealf(h10) * crealf(h10) + cimagf(h10) * cimagf(h10) +
+//                   crealf(h11) * crealf(h11) + cimagf(h11) * cimagf(h11);
+
+//     cf_t cross = h00_conj * h10 + h01_conj * h11;
+
+//     float det_re = (norm0 + noise_estimate) * (norm1 + noise_estimate) -
+//                    (crealf(cross) * crealf(cross) + cimagf(cross) * cimagf(cross));
+
+//     if (fabsf(det_re) < 1e-10f) {
+//       x[0][i] = 0;
+//       x[1][i] = 0;
+//       csi[0][i] = 0;
+//       csi[1][i] = 0;
+//       continue;
+//     }
+
+//     float inv_det = scaling / det_re;
+
+//     cf_t w00 = ((norm1 + noise_estimate) * h00_conj - conjf(cross) * h10_conj) * inv_det;
+//     cf_t w01 = ((norm1 + noise_estimate) * h01_conj - conjf(cross) * h11_conj) * inv_det;
+//     cf_t w10 = ((norm0 + noise_estimate) * h10_conj - cross * h00_conj) * inv_det;
+//     cf_t w11 = ((norm0 + noise_estimate) * h11_conj - cross * h01_conj) * inv_det;
+
+//     x[0][i] = w00 * y[0][i] + w01 * y[1][i];
+//     x[1][i] = w10 * y[0][i] + w11 * y[1][i];
+
+//     csi[0][i] = (norm0 + noise_estimate) * inv_det;
+//     csi[1][i] = (norm1 + noise_estimate) * inv_det;
+//   }
+
+//   return nof_symbols;
+// }
+
+
 
 int srsran_predecoding_ccd_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
                                 cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
@@ -1215,8 +1575,12 @@ int srsran_predecoding_ccd_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
       ERROR("Error predecoding CCD: Invalid number of layers %d", nof_layers);
       return -1;
     }
-  } else if (nof_ports == 4) {
-    ERROR("Error predecoding CCD: Only 2 ports supported");
+  } else if (nof_ports == 4 && nof_rxant == 2) {
+      if (csi && csi[0])
+        return srsran_predecoding_ccd_4x2_mmse_csi(y, h, x, csi, nof_symbols, scaling, noise_estimate);
+      else {
+        return srsran_predecoding_ccd_4x2_mmse(y, h, x, nof_symbols, scaling, noise_estimate);
+      }
   } else {
     ERROR("Error predecoding CCD: Invalid combination of ports %d and rx antennax %d", nof_ports, nof_rxant);
   }
@@ -1333,6 +1697,349 @@ static int srsran_predecoding_multiplex_2x2_zf_csi(cf_t*  y[SRSRAN_MAX_PORTS],
   return SRSRAN_SUCCESS;
 }
 
+static int srsran_predecoding_multiplex_4x1_zf_csi(cf_t*  y[SRSRAN_MAX_PORTS],
+                                                    cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                                    cf_t*  x[SRSRAN_MAX_LAYERS],
+                                                    float* csi,
+                                                    int    codebook_idx,
+                                                    int    nof_symbols,
+                                                    float  scaling)
+{
+  float norm = 0.5f / scaling;
+
+  int i = 0;
+
+#if SRSRAN_SIMD_CF_SIZE != 0
+  for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
+    simd_cf_t h00 = srsran_simd_cfi_load(&h[0][0][i]);
+    simd_cf_t h01 = srsran_simd_cfi_load(&h[0][1][i]);
+    simd_cf_t h02 = srsran_simd_cfi_load(&h[0][2][i]);
+    simd_cf_t h03 = srsran_simd_cfi_load(&h[0][3][i]);
+    simd_cf_t h10 = srsran_simd_cfi_load(&h[1][0][i]);
+    simd_cf_t h11 = srsran_simd_cfi_load(&h[1][1][i]);
+    simd_cf_t h12 = srsran_simd_cfi_load(&h[1][2][i]);
+    simd_cf_t h13 = srsran_simd_cfi_load(&h[1][3][i]);
+
+    simd_cf_t y0 = srsran_simd_cfi_load(&y[0][i]);
+    simd_cf_t y1 = srsran_simd_cfi_load(&y[1][i]);
+
+    simd_cf_t h_eff0, h_eff1;
+
+    switch (codebook_idx) {
+      case 0:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 1:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 2:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 3:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 4:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 5:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), h13));
+        break;
+      case 6:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 7:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02)), srsran_simd_cf_add(srsran_simd_cf_mulj(h01), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12)), srsran_simd_cf_add(srsran_simd_cf_mulj(h11), h13));
+        break;
+      case 8:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 9:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 10:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 11:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 12:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h13)));
+        break;
+      case 13:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h03), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), srsran_simd_cf_mulj(h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h13), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), srsran_simd_cf_mulj(h11)));
+        break;
+      case 14:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_sub(h03, h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_sub(h13, h11)));
+        break;
+      case 15:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h03), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h02)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h13), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h12)));
+        break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    simd_cf_t h_eff0_conj = srsran_simd_cf_conj(h_eff0);
+    simd_cf_t h_eff1_conj = srsran_simd_cf_conj(h_eff1);
+
+    simd_cf_t numer = srsran_simd_cf_add(srsran_simd_cf_prod(h_eff0_conj, y0),
+                                          srsran_simd_cf_prod(h_eff1_conj, y1));
+
+    simd_f_t h_eff0_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff0, h_eff0_conj));
+    simd_f_t h_eff1_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff1, h_eff1_conj));
+    simd_f_t denom = srsran_simd_f_add(h_eff0_sq, h_eff1_sq);
+
+    simd_f_t csi_scale = srsran_simd_f_set1(norm * norm);
+    simd_f_t csi_val = srsran_simd_f_mul(denom, csi_scale);
+    srsran_simd_f_store(&csi[i], csi_val);
+
+    simd_f_t inv_denom = srsran_simd_f_rcp(denom);
+    simd_f_t inv_denom_norm = srsran_simd_f_mul(inv_denom, srsran_simd_f_set1(norm));
+    simd_cf_t x0 = srsran_simd_cf_mul(numer, inv_denom_norm);
+
+    srsran_simd_cfi_store(&x[0][i], x0);
+  }
+#endif
+
+  for (; i < nof_symbols; i++) {
+    cf_t h00 = h[0][0][i], h01 = h[0][1][i], h02 = h[0][2][i], h03 = h[0][3][i];
+    cf_t h10 = h[1][0][i], h11 = h[1][1][i], h12 = h[1][2][i], h13 = h[1][3][i];
+
+    cf_t h_eff0, h_eff1;
+
+    switch (codebook_idx) {
+      case 0:  h_eff0 = h00 + h01 + h02 + h03;
+               h_eff1 = h10 + h11 + h12 + h13; break;
+      case 1:  h_eff0 = h00 + h01 + _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 + _Complex_I*(h12 + h13); break;
+      case 2:  h_eff0 = h00 + h01 - h02 - h03;
+               h_eff1 = h10 + h11 - h12 - h13; break;
+      case 3:  h_eff0 = h00 + h01 - _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 - _Complex_I*(h12 + h13); break;
+      case 4:  h_eff0 = h00 + _Complex_I*h01 + h02 + _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 + h12 + _Complex_I*h13; break;
+      case 5:  h_eff0 = h00 + _Complex_I*h01 + _Complex_I*h02 - h03;
+               h_eff1 = h10 + _Complex_I*h11 + _Complex_I*h12 - h13; break;
+      case 6:  h_eff0 = h00 + _Complex_I*h01 - h02 - _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 - h12 - _Complex_I*h13; break;
+      case 7:  h_eff0 = h00 + _Complex_I*h01 - _Complex_I*h02 + h03;
+               h_eff1 = h10 + _Complex_I*h11 - _Complex_I*h12 + h13; break;
+      case 8:  h_eff0 = h00 - h01 + h02 - h03;
+               h_eff1 = h10 - h11 + h12 - h13; break;
+      case 9:  h_eff0 = h00 - h01 + _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 + _Complex_I*(h12 - h13); break;
+      case 10: h_eff0 = h00 - h01 - h02 + h03;
+               h_eff1 = h10 - h11 - h12 + h13; break;
+      case 11: h_eff0 = h00 - h01 - _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 - _Complex_I*(h12 - h13); break;
+      case 12: h_eff0 = h00 - _Complex_I*h01 + h02 - _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 + h12 - _Complex_I*h13; break;
+      case 13: h_eff0 = h00 - _Complex_I*h01 + _Complex_I*h02 + h03;
+               h_eff1 = h10 - _Complex_I*h11 + _Complex_I*h12 + h13; break;
+      case 14: h_eff0 = h00 - _Complex_I*h01 - h02 + _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 - h12 + _Complex_I*h13; break;
+      case 15: h_eff0 = h00 - _Complex_I*h01 - _Complex_I*h02 - h03;
+               h_eff1 = h10 - _Complex_I*h11 - _Complex_I*h12 - h13; break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    float denom = crealf(h_eff0 * conjf(h_eff0)) + crealf(h_eff1 * conjf(h_eff1));
+    csi[i] = denom * norm * norm;
+
+    cf_t numer = conjf(h_eff0) * y[0][i] + conjf(h_eff1) * y[1][i];
+    x[0][i] = numer * norm / denom;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+static int srsran_predecoding_multiplex_4x2_zf_csi(cf_t* y[SRSRAN_MAX_PORTS],
+                                                    cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                                    cf_t* x[SRSRAN_MAX_LAYERS],
+                                                    float* csi[SRSRAN_MAX_CODEWORDS],
+                                                    int   codebook_idx,
+                                                    int   nof_symbols,
+                                                    float scaling)
+{
+  float norm = 0.5f / scaling;
+
+  for (int i = 0; i < nof_symbols; i++) {
+    // Get channel coefficients: h[rx][tx]
+    cf_t h00 = h[0][0][i];
+    cf_t h01 = h[0][1][i];
+    cf_t h02 = h[0][2][i];
+    cf_t h03 = h[0][3][i];
+    cf_t h10 = h[1][0][i];
+    cf_t h11 = h[1][1][i];
+    cf_t h12 = h[1][2][i];
+    cf_t h13 = h[1][3][i];
+
+    // Compute effective 2x2 channel H_eff = H * W based on codebook index
+    cf_t h_eff00, h_eff01, h_eff10, h_eff11;
+
+    switch (codebook_idx) {
+      case 0:  // W = [1,0; 0,1; 1,0; 0,-1]/2
+        h_eff00 = h00 + h02;
+        h_eff01 = h01 - h03;
+        h_eff10 = h10 + h12;
+        h_eff11 = h11 - h13;
+        break;
+      case 1:  // W = [1,0; 0,1; 1,0; 0,1]/2
+        h_eff00 = h00 + h02;
+        h_eff01 = h01 + h03;
+        h_eff10 = h10 + h12;
+        h_eff11 = h11 + h13;
+        break;
+      case 2:  // W = [1,0; 0,1; -1,0; 0,1]/2
+        h_eff00 = h00 - h02;
+        h_eff01 = h01 + h03;
+        h_eff10 = h10 - h12;
+        h_eff11 = h11 + h13;
+        break;
+      case 3:  // W = [1,0; 0,1; -1,0; 0,-1]/2
+        h_eff00 = h00 - h02;
+        h_eff01 = h01 - h03;
+        h_eff10 = h10 - h12;
+        h_eff11 = h11 - h13;
+        break;
+      case 4:  // W = [1,0; 0,1; 0,1; 1,0]/2
+        h_eff00 = h00 + h03;
+        h_eff01 = h01 + h02;
+        h_eff10 = h10 + h13;
+        h_eff11 = h11 + h12;
+        break;
+      case 5:  // W = [1,0; 0,1; 0,1; -1,0]/2
+        h_eff00 = h00 - h03;
+        h_eff01 = h01 + h02;
+        h_eff10 = h10 - h13;
+        h_eff11 = h11 + h12;
+        break;
+      case 6:  // W = [1,0; 0,1; 0,-1; 1,0]/2
+        h_eff00 = h00 + h03;
+        h_eff01 = h01 - h02;
+        h_eff10 = h10 + h13;
+        h_eff11 = h11 - h12;
+        break;
+      case 7:  // W = [1,0; 0,1; 0,-1; -1,0]/2
+        h_eff00 = h00 - h03;
+        h_eff01 = h01 - h02;
+        h_eff10 = h10 - h13;
+        h_eff11 = h11 - h12;
+        break;
+      case 8:  // W = [1,0; 0,1; j,0; 0,j]/2
+        h_eff00 = h00 + _Complex_I * h02;
+        h_eff01 = h01 + _Complex_I * h03;
+        h_eff10 = h10 + _Complex_I * h12;
+        h_eff11 = h11 + _Complex_I * h13;
+        break;
+      case 9:  // W = [1,0; 0,1; j,0; 0,-j]/2
+        h_eff00 = h00 + _Complex_I * h02;
+        h_eff01 = h01 - _Complex_I * h03;
+        h_eff10 = h10 + _Complex_I * h12;
+        h_eff11 = h11 - _Complex_I * h13;
+        break;
+      case 10: // W = [1,0; 0,1; -j,0; 0,j]/2
+        h_eff00 = h00 - _Complex_I * h02;
+        h_eff01 = h01 + _Complex_I * h03;
+        h_eff10 = h10 - _Complex_I * h12;
+        h_eff11 = h11 + _Complex_I * h13;
+        break;
+      case 11: // W = [1,0; 0,1; -j,0; 0,-j]/2
+        h_eff00 = h00 - _Complex_I * h02;
+        h_eff01 = h01 - _Complex_I * h03;
+        h_eff10 = h10 - _Complex_I * h12;
+        h_eff11 = h11 - _Complex_I * h13;
+        break;
+      case 12: // W = [1,0; 0,1; 0,j; j,0]/2
+        h_eff00 = h00 + _Complex_I * h03;
+        h_eff01 = h01 + _Complex_I * h02;
+        h_eff10 = h10 + _Complex_I * h13;
+        h_eff11 = h11 + _Complex_I * h12;
+        break;
+      case 13: // W = [1,0; 0,1; 0,j; -j,0]/2
+        h_eff00 = h00 - _Complex_I * h03;
+        h_eff01 = h01 + _Complex_I * h02;
+        h_eff10 = h10 - _Complex_I * h13;
+        h_eff11 = h11 + _Complex_I * h12;
+        break;
+      case 14: // W = [1,0; 0,1; 0,-j; j,0]/2
+        h_eff00 = h00 + _Complex_I * h03;
+        h_eff01 = h01 - _Complex_I * h02;
+        h_eff10 = h10 + _Complex_I * h13;
+        h_eff11 = h11 - _Complex_I * h12;
+        break;
+      case 15: // W = [1,0; 0,1; 0,-j; -j,0]/2
+        h_eff00 = h00 - _Complex_I * h03;
+        h_eff01 = h01 - _Complex_I * h02;
+        h_eff10 = h10 - _Complex_I * h13;
+        h_eff11 = h11 - _Complex_I * h12;
+        break;
+      default:
+        ERROR("Invalid codebook index %d for 4x2 transmission", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    // Compute ZF equalization with CSI inline
+    // det = h_eff00*h_eff11 - h_eff01*h_eff10
+    cf_t det = h_eff00 * h_eff11 - h_eff01 * h_eff10;
+    float det_sqr = __real__(det * conjf(det));
+
+    // Avoid division by zero
+    if (det_sqr < 1e-10f) {
+      x[0][i] = 0;
+      x[1][i] = 0;
+      csi[0][i] = 0;
+      csi[1][i] = 0;
+      continue;
+    }
+
+    cf_t det_conj = conjf(det);
+
+    // Inverse matrix elements (scaled by det*)
+    // H_inv = [h_eff11, -h_eff01; -h_eff10, h_eff00] / det
+    cf_t inv00 = h_eff11 * det_conj / det_sqr;
+    cf_t inv01 = -h_eff01 * det_conj / det_sqr;
+    cf_t inv10 = -h_eff10 * det_conj / det_sqr;
+    cf_t inv11 = h_eff00 * det_conj / det_sqr;
+
+    // Equalize: x = H_inv * y
+    cf_t y0 = y[0][i];
+    cf_t y1 = y[1][i];
+
+    x[0][i] = norm * (inv00 * y0 + inv01 * y1);
+    x[1][i] = norm * (inv10 * y0 + inv11 * y1);
+
+    // CSI = 1 / ||row of H_inv||^2 (noise enhancement factor)
+    float csi0_inv = crealf(inv00) * crealf(inv00) + cimagf(inv00) * cimagf(inv00) +
+                     crealf(inv01) * crealf(inv01) + cimagf(inv01) * cimagf(inv01);
+    float csi1_inv = crealf(inv10) * crealf(inv10) + cimagf(inv10) * cimagf(inv10) +
+                     crealf(inv11) * crealf(inv11) + cimagf(inv11) * cimagf(inv11);
+
+    csi[0][i] = (csi0_inv > 1e-10f) ? (1.0f / csi0_inv) : 0.0f;
+    csi[1][i] = (csi1_inv > 1e-10f) ? (1.0f / csi1_inv) : 0.0f;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
 // Generic implementation of ZF 2x2 Spatial Multiplexity equalizer
 static int srsran_predecoding_multiplex_2x2_zf(cf_t* y[SRSRAN_MAX_PORTS],
                                                cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
@@ -1430,6 +2137,410 @@ static int srsran_predecoding_multiplex_2x2_zf(cf_t* y[SRSRAN_MAX_PORTS],
 
     srsran_mat_2x2_zf_gen(y[0][i], y[1][i], h00, h01, h10, h11, &x[0][i], &x[1][i], norm);
   }
+  return SRSRAN_SUCCESS;
+}
+
+
+
+static int srsran_predecoding_multiplex_4x1_zf(cf_t*  y[SRSRAN_MAX_PORTS],
+                                               cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                               cf_t*  x[SRSRAN_MAX_LAYERS],
+                                               int    codebook_idx,
+                                               int    nof_symbols,
+                                               float  scaling)
+{
+  float norm = 0.5f / scaling;
+
+  int i = 0;
+
+#if SRSRAN_SIMD_CF_SIZE != 0
+  for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
+    simd_cf_t h00 = srsran_simd_cfi_load(&h[0][0][i]);
+    simd_cf_t h01 = srsran_simd_cfi_load(&h[0][1][i]);
+    simd_cf_t h02 = srsran_simd_cfi_load(&h[0][2][i]);
+    simd_cf_t h03 = srsran_simd_cfi_load(&h[0][3][i]);
+    simd_cf_t h10 = srsran_simd_cfi_load(&h[1][0][i]);
+    simd_cf_t h11 = srsran_simd_cfi_load(&h[1][1][i]);
+    simd_cf_t h12 = srsran_simd_cfi_load(&h[1][2][i]);
+    simd_cf_t h13 = srsran_simd_cfi_load(&h[1][3][i]);
+
+    simd_cf_t y0 = srsran_simd_cfi_load(&y[0][i]);
+    simd_cf_t y1 = srsran_simd_cfi_load(&y[1][i]);
+
+    simd_cf_t h_eff0, h_eff1;
+
+    // Codebook indices 0-15 for single layer, 4 antennas
+    // W vectors from 3GPP 36.211 Table 6.3.4.2.3-2
+    // Pattern: W = [1, u, v, uv]^T where u,v ∈ {1, j, -1, -j}
+    switch (codebook_idx) {
+      case 0:  // [1, 1, 1, 1]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 1:  // [1, 1, j, j]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 2:  // [1, 1, -1, -1]
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 3:  // [1, 1, -j, -j]
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 4:  // [1, j, 1, j]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 5:  // [1, j, j, -1]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), h13));
+        break;
+      case 6:  // [1, j, -1, -j]
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 7:  // [1, j, -j, 1]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02)), srsran_simd_cf_add(srsran_simd_cf_mulj(h01), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12)), srsran_simd_cf_add(srsran_simd_cf_mulj(h11), h13));
+        break;
+      case 8:  // [1, -1, 1, -1]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 9:  // [1, -1, j, -j]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 10: // [1, -1, -1, 1]
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 11: // [1, -1, -j, j]
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 12: // [1, -j, 1, -j]
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h13)));
+        break;
+      case 13: // [1, -j, j, 1]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h03), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), srsran_simd_cf_mulj(h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h13), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), srsran_simd_cf_mulj(h11)));
+        break;
+      case 14: // [1, -j, -1, j]
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_sub(h03, h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_sub(h13, h11)));
+        break;
+      case 15: // [1, -j, -j, -1]
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h03), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h02)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h13), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h12)));
+        break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    // MRC: x = (h_eff0* · y0 + h_eff1* · y1) / (|h_eff0|² + |h_eff1|²)
+    simd_cf_t h_eff0_conj = srsran_simd_cf_conj(h_eff0);
+    simd_cf_t h_eff1_conj = srsran_simd_cf_conj(h_eff1);
+
+    simd_cf_t numer = srsran_simd_cf_add(srsran_simd_cf_prod(h_eff0_conj, y0),
+                                          srsran_simd_cf_prod(h_eff1_conj, y1));
+
+    simd_f_t h_eff0_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff0, h_eff0_conj));
+    simd_f_t h_eff1_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff1, h_eff1_conj));
+    simd_f_t denom = srsran_simd_f_add(h_eff0_sq, h_eff1_sq);
+
+    simd_f_t inv_denom = srsran_simd_f_rcp(denom);
+    simd_f_t inv_denom_norm = srsran_simd_f_mul(inv_denom, srsran_simd_f_set1(norm));
+    simd_cf_t x0 = srsran_simd_cf_mul(numer, inv_denom_norm);
+
+    srsran_simd_cfi_store(&x[0][i], x0);
+  }
+#endif
+
+  // Scalar remainder
+  for (; i < nof_symbols; i++) {
+    cf_t h00 = h[0][0][i], h01 = h[0][1][i], h02 = h[0][2][i], h03 = h[0][3][i];
+    cf_t h10 = h[1][0][i], h11 = h[1][1][i], h12 = h[1][2][i], h13 = h[1][3][i];
+
+    cf_t h_eff0, h_eff1;
+
+    switch (codebook_idx) {
+      case 0:  h_eff0 = h00 + h01 + h02 + h03;
+               h_eff1 = h10 + h11 + h12 + h13; break;
+      case 1:  h_eff0 = h00 + h01 + _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 + _Complex_I*(h12 + h13); break;
+      case 2:  h_eff0 = h00 + h01 - h02 - h03;
+               h_eff1 = h10 + h11 - h12 - h13; break;
+      case 3:  h_eff0 = h00 + h01 - _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 - _Complex_I*(h12 + h13); break;
+      case 4:  h_eff0 = h00 + _Complex_I*h01 + h02 + _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 + h12 + _Complex_I*h13; break;
+      case 5:  h_eff0 = h00 + _Complex_I*h01 + _Complex_I*h02 - h03;
+               h_eff1 = h10 + _Complex_I*h11 + _Complex_I*h12 - h13; break;
+      case 6:  h_eff0 = h00 + _Complex_I*h01 - h02 - _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 - h12 - _Complex_I*h13; break;
+      case 7:  h_eff0 = h00 + _Complex_I*h01 - _Complex_I*h02 + h03;
+               h_eff1 = h10 + _Complex_I*h11 - _Complex_I*h12 + h13; break;
+      case 8:  h_eff0 = h00 - h01 + h02 - h03;
+               h_eff1 = h10 - h11 + h12 - h13; break;
+      case 9:  h_eff0 = h00 - h01 + _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 + _Complex_I*(h12 - h13); break;
+      case 10: h_eff0 = h00 - h01 - h02 + h03;
+               h_eff1 = h10 - h11 - h12 + h13; break;
+      case 11: h_eff0 = h00 - h01 - _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 - _Complex_I*(h12 - h13); break;
+      case 12: h_eff0 = h00 - _Complex_I*h01 + h02 - _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 + h12 - _Complex_I*h13; break;
+      case 13: h_eff0 = h00 - _Complex_I*h01 + _Complex_I*h02 + h03;
+               h_eff1 = h10 - _Complex_I*h11 + _Complex_I*h12 + h13; break;
+      case 14: h_eff0 = h00 - _Complex_I*h01 - h02 + _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 - h12 + _Complex_I*h13; break;
+      case 15: h_eff0 = h00 - _Complex_I*h01 - _Complex_I*h02 - h03;
+               h_eff1 = h10 - _Complex_I*h11 - _Complex_I*h12 - h13; break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    float denom = crealf(h_eff0 * conjf(h_eff0)) + crealf(h_eff1 * conjf(h_eff1));
+    cf_t numer = conjf(h_eff0) * y[0][i] + conjf(h_eff1) * y[1][i];
+    x[0][i] = numer * norm / denom;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+
+static int srsran_predecoding_multiplex_4x2_zf(cf_t*  y[SRSRAN_MAX_PORTS],
+                                               cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                               cf_t*  x[SRSRAN_MAX_LAYERS],
+                                               int    codebook_idx,
+                                               int    nof_symbols,
+                                               float  scaling)
+{
+  float norm = 0.5f / scaling;
+
+  int i = 0;
+
+#if SRSRAN_SIMD_CF_SIZE != 0
+  for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
+    simd_cf_t h00 = srsran_simd_cfi_load(&h[0][0][i]);
+    simd_cf_t h01 = srsran_simd_cfi_load(&h[0][1][i]);
+    simd_cf_t h02 = srsran_simd_cfi_load(&h[0][2][i]);
+    simd_cf_t h03 = srsran_simd_cfi_load(&h[0][3][i]);
+    simd_cf_t h10 = srsran_simd_cfi_load(&h[1][0][i]);
+    simd_cf_t h11 = srsran_simd_cfi_load(&h[1][1][i]);
+    simd_cf_t h12 = srsran_simd_cfi_load(&h[1][2][i]);
+    simd_cf_t h13 = srsran_simd_cfi_load(&h[1][3][i]);
+
+    simd_cf_t y0 = srsran_simd_cfi_load(&y[0][i]);
+    simd_cf_t y1 = srsran_simd_cfi_load(&y[1][i]);
+
+    // Compute effective channel H_eff = H * W (2x2 result)
+    // H_eff[0][0] = h00*w00 + h01*w10 + h02*w20 + h03*w30  (RX0, Layer0)
+    // H_eff[0][1] = h00*w01 + h01*w11 + h02*w21 + h03*w31  (RX0, Layer1)
+    // H_eff[1][0] = h10*w00 + h11*w10 + h12*w20 + h13*w30  (RX1, Layer0)
+    // H_eff[1][1] = h10*w01 + h11*w11 + h12*w21 + h13*w31  (RX1, Layer1)
+    simd_cf_t h_eff00, h_eff01, h_eff10, h_eff11;
+
+    switch (codebook_idx) {
+      case 0:  // W = [1,0; 0,1; 1,0; 0,-1]
+        h_eff00 = srsran_simd_cf_add(h00, h02);
+        h_eff01 = srsran_simd_cf_sub(h01, h03);
+        h_eff10 = srsran_simd_cf_add(h10, h12);
+        h_eff11 = srsran_simd_cf_sub(h11, h13);
+        break;
+      case 1:  // W = [1,0; 0,1; 1,0; 0,1]
+        h_eff00 = srsran_simd_cf_add(h00, h02);
+        h_eff01 = srsran_simd_cf_add(h01, h03);
+        h_eff10 = srsran_simd_cf_add(h10, h12);
+        h_eff11 = srsran_simd_cf_add(h11, h13);
+        break;
+      case 2:  // W = [1,0; 0,1; -1,0; 0,1]
+        h_eff00 = srsran_simd_cf_sub(h00, h02);
+        h_eff01 = srsran_simd_cf_add(h01, h03);
+        h_eff10 = srsran_simd_cf_sub(h10, h12);
+        h_eff11 = srsran_simd_cf_add(h11, h13);
+        break;
+      case 3:  // W = [1,0; 0,1; -1,0; 0,-1]
+        h_eff00 = srsran_simd_cf_sub(h00, h02);
+        h_eff01 = srsran_simd_cf_sub(h01, h03);
+        h_eff10 = srsran_simd_cf_sub(h10, h12);
+        h_eff11 = srsran_simd_cf_sub(h11, h13);
+        break;
+      case 4:  // W = [1,0; 0,1; 0,-1; 1,0]
+        h_eff00 = srsran_simd_cf_sub(h00, h02);  // h00 + 0 - h02*1 + 0 -> wait, w20=-1 for col0
+        // Actually: col0 = [1,0,0,1], col1 = [0,1,-1,0]
+        h_eff00 = srsran_simd_cf_add(h00, h03);
+        h_eff01 = srsran_simd_cf_sub(h01, h02);
+        h_eff10 = srsran_simd_cf_add(h10, h13);
+        h_eff11 = srsran_simd_cf_sub(h11, h12);
+        break;
+      case 5:  // W = [1,0; 0,1; 0,1; 1,0]
+        h_eff00 = srsran_simd_cf_add(h00, h03);
+        h_eff01 = srsran_simd_cf_add(h01, h02);
+        h_eff10 = srsran_simd_cf_add(h10, h13);
+        h_eff11 = srsran_simd_cf_add(h11, h12);
+        break;
+      case 6:  // W = [1,0; 0,1; 0,1; -1,0]
+        h_eff00 = srsran_simd_cf_sub(h00, h03);
+        h_eff01 = srsran_simd_cf_add(h01, h02);
+        h_eff10 = srsran_simd_cf_sub(h10, h13);
+        h_eff11 = srsran_simd_cf_add(h11, h12);
+        break;
+      case 7:  // W = [1,0; 0,1; 0,-1; -1,0]
+        h_eff00 = srsran_simd_cf_sub(h00, h03);
+        h_eff01 = srsran_simd_cf_sub(h01, h02);
+        h_eff10 = srsran_simd_cf_sub(h10, h13);
+        h_eff11 = srsran_simd_cf_sub(h11, h12);
+        break;
+      case 8:  // W = [1,0; 0,1; j,0; 0,j]
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 9:  // W = [1,0; 0,1; j,0; 0,-j]
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 10: // W = [1,0; 0,1; -j,0; 0,j]
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 11: // W = [1,0; 0,1; -j,0; 0,-j]
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 12: // W = [1,0; 0,1; 0,j; j,0]
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h12));
+        break;
+      case 13: // W = [1,0; 0,1; 0,-j; j,0]
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h12));
+        break;
+      case 14: // W = [1,0; 0,1; 0,j; -j,0]
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h12));
+        break;
+      case 15: // W = [1,0; 0,1; 0,-j; -j,0]
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h12));
+        break;
+      default:
+        ERROR("Invalid codebook index %d for dual layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    // Solve 2x2 system using ZF
+    simd_cf_t x0, x1;
+    srsran_mat_2x2_zf_simd(y0, y1, h_eff00, h_eff01, h_eff10, h_eff11, &x0, &x1, norm);
+
+    srsran_simd_cfi_store(&x[0][i], x0);
+    srsran_simd_cfi_store(&x[1][i], x1);
+  }
+#endif
+
+  // Scalar remainder
+  for (; i < nof_symbols; i++) {
+    cf_t h00 = h[0][0][i], h01 = h[0][1][i], h02 = h[0][2][i], h03 = h[0][3][i];
+    cf_t h10 = h[1][0][i], h11 = h[1][1][i], h12 = h[1][2][i], h13 = h[1][3][i];
+
+    cf_t h_eff00, h_eff01, h_eff10, h_eff11;
+
+    switch (codebook_idx) {
+      case 0:
+        h_eff00 = h00 + h02;           h_eff01 = h01 - h03;
+        h_eff10 = h10 + h12;           h_eff11 = h11 - h13;
+        break;
+      case 1:
+        h_eff00 = h00 + h02;           h_eff01 = h01 + h03;
+        h_eff10 = h10 + h12;           h_eff11 = h11 + h13;
+        break;
+      case 2:
+        h_eff00 = h00 - h02;           h_eff01 = h01 + h03;
+        h_eff10 = h10 - h12;           h_eff11 = h11 + h13;
+        break;
+      case 3:
+        h_eff00 = h00 - h02;           h_eff01 = h01 - h03;
+        h_eff10 = h10 - h12;           h_eff11 = h11 - h13;
+        break;
+      case 4:
+        h_eff00 = h00 + h03;           h_eff01 = h01 - h02;
+        h_eff10 = h10 + h13;           h_eff11 = h11 - h12;
+        break;
+      case 5:
+        h_eff00 = h00 + h03;           h_eff01 = h01 + h02;
+        h_eff10 = h10 + h13;           h_eff11 = h11 + h12;
+        break;
+      case 6:
+        h_eff00 = h00 - h03;           h_eff01 = h01 + h02;
+        h_eff10 = h10 - h13;           h_eff11 = h11 + h12;
+        break;
+      case 7:
+        h_eff00 = h00 - h03;           h_eff01 = h01 - h02;
+        h_eff10 = h10 - h13;           h_eff11 = h11 - h12;
+        break;
+      case 8:
+        h_eff00 = h00 + _Complex_I*h02; h_eff01 = h01 + _Complex_I*h03;
+        h_eff10 = h10 + _Complex_I*h12; h_eff11 = h11 + _Complex_I*h13;
+        break;
+      case 9:
+        h_eff00 = h00 + _Complex_I*h02; h_eff01 = h01 - _Complex_I*h03;
+        h_eff10 = h10 + _Complex_I*h12; h_eff11 = h11 - _Complex_I*h13;
+        break;
+      case 10:
+        h_eff00 = h00 - _Complex_I*h02; h_eff01 = h01 + _Complex_I*h03;
+        h_eff10 = h10 - _Complex_I*h12; h_eff11 = h11 + _Complex_I*h13;
+        break;
+      case 11:
+        h_eff00 = h00 - _Complex_I*h02; h_eff01 = h01 - _Complex_I*h03;
+        h_eff10 = h10 - _Complex_I*h12; h_eff11 = h11 - _Complex_I*h13;
+        break;
+      case 12:
+        h_eff00 = h00 + _Complex_I*h03; h_eff01 = h01 + _Complex_I*h02;
+        h_eff10 = h10 + _Complex_I*h13; h_eff11 = h11 + _Complex_I*h12;
+        break;
+      case 13:
+        h_eff00 = h00 + _Complex_I*h03; h_eff01 = h01 - _Complex_I*h02;
+        h_eff10 = h10 + _Complex_I*h13; h_eff11 = h11 - _Complex_I*h12;
+        break;
+      case 14:
+        h_eff00 = h00 - _Complex_I*h03; h_eff01 = h01 + _Complex_I*h02;
+        h_eff10 = h10 - _Complex_I*h13; h_eff11 = h11 + _Complex_I*h12;
+        break;
+      case 15:
+        h_eff00 = h00 - _Complex_I*h03; h_eff01 = h01 - _Complex_I*h02;
+        h_eff10 = h10 - _Complex_I*h13; h_eff11 = h11 - _Complex_I*h12;
+        break;
+      default:
+        ERROR("Invalid codebook index %d for dual layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    srsran_mat_2x2_zf_gen(y[0][i], y[1][i], h_eff00, h_eff01, h_eff10, h_eff11,
+                          &x[0][i], &x[1][i], norm);
+  }
+
   return SRSRAN_SUCCESS;
 }
 
@@ -1539,6 +2650,1101 @@ static int srsran_predecoding_multiplex_2x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
   return SRSRAN_SUCCESS;
 }
 
+static int srsran_predecoding_multiplex_4x1_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
+                                                     cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                                     cf_t*  x[SRSRAN_MAX_LAYERS],
+                                                     float* csi,
+                                                     int    codebook_idx,
+                                                     int    nof_symbols,
+                                                     float  scaling,
+                                                     float  noise_estimate)
+{
+  float norm = 0.5f / scaling;
+
+  int i = 0;
+
+#if SRSRAN_SIMD_CF_SIZE != 0
+  simd_f_t noise_simd = srsran_simd_f_set1(noise_estimate);
+
+  for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
+    simd_cf_t h00 = srsran_simd_cfi_load(&h[0][0][i]);
+    simd_cf_t h01 = srsran_simd_cfi_load(&h[0][1][i]);
+    simd_cf_t h02 = srsran_simd_cfi_load(&h[0][2][i]);
+    simd_cf_t h03 = srsran_simd_cfi_load(&h[0][3][i]);
+    simd_cf_t h10 = srsran_simd_cfi_load(&h[1][0][i]);
+    simd_cf_t h11 = srsran_simd_cfi_load(&h[1][1][i]);
+    simd_cf_t h12 = srsran_simd_cfi_load(&h[1][2][i]);
+    simd_cf_t h13 = srsran_simd_cfi_load(&h[1][3][i]);
+
+    simd_cf_t y0 = srsran_simd_cfi_load(&y[0][i]);
+    simd_cf_t y1 = srsran_simd_cfi_load(&y[1][i]);
+
+    simd_cf_t h_eff0, h_eff1;
+
+    switch (codebook_idx) {
+      case 0:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 1:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 2:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 3:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 4:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 5:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), h13));
+        break;
+      case 6:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 7:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02)), srsran_simd_cf_add(srsran_simd_cf_mulj(h01), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12)), srsran_simd_cf_add(srsran_simd_cf_mulj(h11), h13));
+        break;
+      case 8:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 9:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 10:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 11:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 12:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h13)));
+        break;
+      case 13:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h03), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), srsran_simd_cf_mulj(h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h13), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), srsran_simd_cf_mulj(h11)));
+        break;
+      case 14:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_sub(h03, h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_sub(h13, h11)));
+        break;
+      case 15:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h03), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h02)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h13), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h12)));
+        break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    simd_cf_t h_eff0_conj = srsran_simd_cf_conj(h_eff0);
+    simd_cf_t h_eff1_conj = srsran_simd_cf_conj(h_eff1);
+
+    simd_cf_t numer = srsran_simd_cf_add(srsran_simd_cf_prod(h_eff0_conj, y0),
+                                          srsran_simd_cf_prod(h_eff1_conj, y1));
+
+    simd_f_t h_eff0_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff0, h_eff0_conj));
+    simd_f_t h_eff1_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff1, h_eff1_conj));
+    simd_f_t chan_pwr = srsran_simd_f_add(h_eff0_sq, h_eff1_sq);
+    simd_f_t denom = srsran_simd_f_add(chan_pwr, noise_simd);
+
+    // CSI = chan_pwr / denom * norm^2
+    simd_f_t csi_val = srsran_simd_f_mul(srsran_simd_f_mul(chan_pwr, srsran_simd_f_rcp(denom)),
+                                          srsran_simd_f_set1(norm * norm));
+    srsran_simd_f_store(&csi[i], csi_val);
+
+    simd_f_t inv_denom = srsran_simd_f_rcp(denom);
+    simd_f_t inv_denom_norm = srsran_simd_f_mul(inv_denom, srsran_simd_f_set1(norm));
+    simd_cf_t x0 = srsran_simd_cf_mul(numer, inv_denom_norm);
+
+    srsran_simd_cfi_store(&x[0][i], x0);
+  }
+#endif
+
+  for (; i < nof_symbols; i++) {
+    cf_t h00 = h[0][0][i], h01 = h[0][1][i], h02 = h[0][2][i], h03 = h[0][3][i];
+    cf_t h10 = h[1][0][i], h11 = h[1][1][i], h12 = h[1][2][i], h13 = h[1][3][i];
+
+    cf_t h_eff0, h_eff1;
+
+    switch (codebook_idx) {
+      case 0:  h_eff0 = h00 + h01 + h02 + h03;
+               h_eff1 = h10 + h11 + h12 + h13; break;
+      case 1:  h_eff0 = h00 + h01 + _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 + _Complex_I*(h12 + h13); break;
+      case 2:  h_eff0 = h00 + h01 - h02 - h03;
+               h_eff1 = h10 + h11 - h12 - h13; break;
+      case 3:  h_eff0 = h00 + h01 - _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 - _Complex_I*(h12 + h13); break;
+      case 4:  h_eff0 = h00 + _Complex_I*h01 + h02 + _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 + h12 + _Complex_I*h13; break;
+      case 5:  h_eff0 = h00 + _Complex_I*h01 + _Complex_I*h02 - h03;
+               h_eff1 = h10 + _Complex_I*h11 + _Complex_I*h12 - h13; break;
+      case 6:  h_eff0 = h00 + _Complex_I*h01 - h02 - _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 - h12 - _Complex_I*h13; break;
+      case 7:  h_eff0 = h00 + _Complex_I*h01 - _Complex_I*h02 + h03;
+               h_eff1 = h10 + _Complex_I*h11 - _Complex_I*h12 + h13; break;
+      case 8:  h_eff0 = h00 - h01 + h02 - h03;
+               h_eff1 = h10 - h11 + h12 - h13; break;
+      case 9:  h_eff0 = h00 - h01 + _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 + _Complex_I*(h12 - h13); break;
+      case 10: h_eff0 = h00 - h01 - h02 + h03;
+               h_eff1 = h10 - h11 - h12 + h13; break;
+      case 11: h_eff0 = h00 - h01 - _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 - _Complex_I*(h12 - h13); break;
+      case 12: h_eff0 = h00 - _Complex_I*h01 + h02 - _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 + h12 - _Complex_I*h13; break;
+      case 13: h_eff0 = h00 - _Complex_I*h01 + _Complex_I*h02 + h03;
+               h_eff1 = h10 - _Complex_I*h11 + _Complex_I*h12 + h13; break;
+      case 14: h_eff0 = h00 - _Complex_I*h01 - h02 + _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 - h12 + _Complex_I*h13; break;
+      case 15: h_eff0 = h00 - _Complex_I*h01 - _Complex_I*h02 - h03;
+               h_eff1 = h10 - _Complex_I*h11 - _Complex_I*h12 - h13; break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    float chan_pwr = crealf(h_eff0 * conjf(h_eff0)) + crealf(h_eff1 * conjf(h_eff1));
+    float denom = chan_pwr + noise_estimate;
+
+    csi[i] = (chan_pwr / denom) * norm * norm;
+
+    cf_t numer = conjf(h_eff0) * y[0][i] + conjf(h_eff1) * y[1][i];
+    x[0][i] = numer * norm / denom;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+// Test: Compute effective 2x2 channel for codebook 15 and solve
+// Test: Compute effective 2x2 channel for codebook 15 and solve
+static void test_codebook15_effective_channel(cf_t *y[SRSRAN_MAX_PORTS],
+                                               cf_t *h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                               cf_t *x[SRSRAN_MAX_LAYERS],
+                                               int nof_symbols)
+{
+    // Codebook 15: W = 1/2 * [1  1; 1 -1; 1  1; 1 -1]
+    // Port 0,2 transmit (x0+x1)/2
+    // Port 1,3 transmit (x0-x1)/2
+    //
+    // y_rx0 = h00*(x0+x1)/2 + h10*(x0-x1)/2 + h20*(x0+x1)/2 + h30*(x0-x1)/2
+    // y_rx1 = h01*(x0+x1)/2 + h11*(x0-x1)/2 + h21*(x0+x1)/2 + h31*(x0-x1)/2
+    //
+    // Rearranging:
+    // y_rx0 = [(h00+h20+h10+h30)/2]*x0 + [(h00+h20-h10-h30)/2]*x1
+    // y_rx1 = [(h01+h21+h11+h31)/2]*x0 + [(h01+h21-h11-h31)/2]*x1
+
+    int qpsk_count = 0;
+    int qpsk_count_mmse = 0;
+
+    // First do forward verification for first few symbols
+    printf("Forward verification (y_recon should match y_actual):\n");
+    for (int i = 0; i < 5 && i < nof_symbols; i++) {
+        cf_t h00 = h[0][0][i];
+        cf_t h01 = h[0][1][i];
+        cf_t h10 = h[1][0][i];
+        cf_t h11 = h[1][1][i];
+        cf_t h20 = h[2][0][i];
+        cf_t h21 = h[2][1][i];
+        cf_t h30 = h[3][0][i];
+        cf_t h31 = h[3][1][i];
+
+        cf_t h02_sum = h00 + h20;
+        cf_t h13_sum = h10 + h30;
+        cf_t h02_sum_rx1 = h01 + h21;
+        cf_t h13_sum_rx1 = h11 + h31;
+
+        cf_t Heff00 = (h02_sum + h13_sum) * 0.5f;
+        cf_t Heff01 = (h02_sum - h13_sum) * 0.5f;
+        cf_t Heff10 = (h02_sum_rx1 + h13_sum_rx1) * 0.5f;
+        cf_t Heff11 = (h02_sum_rx1 - h13_sum_rx1) * 0.5f;
+
+        // ZF equalization
+        cf_t y0 = y[0][i];
+        cf_t y1 = y[1][i];
+        cf_t det = Heff00 * Heff11 - Heff01 * Heff10;
+
+        cf_t x0_zf, x1_zf;
+        if (cabsf(det) > 1e-9f) {
+            x0_zf = (Heff11 * y0 - Heff01 * y1) / det;
+            x1_zf = (Heff00 * y1 - Heff10 * y0) / det;
+        } else {
+            x0_zf = 0;
+            x1_zf = 0;
+        }
+
+        // Reconstruct y from equalized x
+        cf_t y0_recon = Heff00 * x0_zf + Heff01 * x1_zf;
+        cf_t y1_recon = Heff10 * x0_zf + Heff11 * x1_zf;
+
+        printf("  RE[%d]:\n", i);
+        printf("    H_eff = [[%.2f%+.2fj, %.2f%+.2fj], [%.2f%+.2fj, %.2f%+.2fj]]\n",
+               crealf(Heff00), cimagf(Heff00), crealf(Heff01), cimagf(Heff01),
+               crealf(Heff10), cimagf(Heff10), crealf(Heff11), cimagf(Heff11));
+        printf("    det = %.3f%+.3fj (|det|=%.3f)\n", crealf(det), cimagf(det), cabsf(det));
+        printf("    y_actual = (%.2f%+.2fj), (%.2f%+.2fj)\n",
+               crealf(y0), cimagf(y0), crealf(y1), cimagf(y1));
+        printf("    y_recon  = (%.2f%+.2fj), (%.2f%+.2fj)\n",
+               crealf(y0_recon), cimagf(y0_recon), crealf(y1_recon), cimagf(y1_recon));
+        printf("    x_zf     = (%.2f%+.2fj), (%.2f%+.2fj)\n",
+               crealf(x0_zf), cimagf(x0_zf), crealf(x1_zf), cimagf(x1_zf));
+    }
+
+    // Now do full equalization with both ZF and MMSE
+    float noise_reg = 0.1f;  // MMSE regularization
+
+    for (int i = 0; i < nof_symbols; i++) {
+        cf_t h00 = h[0][0][i];
+        cf_t h01 = h[0][1][i];
+        cf_t h10 = h[1][0][i];
+        cf_t h11 = h[1][1][i];
+        cf_t h20 = h[2][0][i];
+        cf_t h21 = h[2][1][i];
+        cf_t h30 = h[3][0][i];
+        cf_t h31 = h[3][1][i];
+
+        cf_t h02_sum = h00 + h20;
+        cf_t h13_sum = h10 + h30;
+        cf_t h02_sum_rx1 = h01 + h21;
+        cf_t h13_sum_rx1 = h11 + h31;
+
+        cf_t Heff00 = (h02_sum + h13_sum) * 0.5f;
+        cf_t Heff01 = (h02_sum - h13_sum) * 0.5f;
+        cf_t Heff10 = (h02_sum_rx1 + h13_sum_rx1) * 0.5f;
+        cf_t Heff11 = (h02_sum_rx1 - h13_sum_rx1) * 0.5f;
+
+        cf_t y0 = y[0][i];
+        cf_t y1 = y[1][i];
+
+        // === ZF Equalization ===
+        cf_t det = Heff00 * Heff11 - Heff01 * Heff10;
+        cf_t x0_zf, x1_zf;
+        if (cabsf(det) > 1e-9f) {
+            x0_zf = (Heff11 * y0 - Heff01 * y1) / det;
+            x1_zf = (Heff00 * y1 - Heff10 * y0) / det;
+        } else {
+            x0_zf = 0;
+            x1_zf = 0;
+        }
+
+        // === MMSE Equalization ===
+        // x = (H^H * H + noise*I)^-1 * H^H * y
+        cf_t HtH00 = conjf(Heff00)*Heff00 + conjf(Heff10)*Heff10 + noise_reg;
+        cf_t HtH01 = conjf(Heff00)*Heff01 + conjf(Heff10)*Heff11;
+        cf_t HtH10 = conjf(Heff01)*Heff00 + conjf(Heff11)*Heff10;
+        cf_t HtH11 = conjf(Heff01)*Heff01 + conjf(Heff11)*Heff11 + noise_reg;
+
+        cf_t Hty0 = conjf(Heff00)*y0 + conjf(Heff10)*y1;
+        cf_t Hty1 = conjf(Heff01)*y0 + conjf(Heff11)*y1;
+
+        cf_t det_mmse = HtH00*HtH11 - HtH01*HtH10;
+        cf_t x0_mmse, x1_mmse;
+        if (cabsf(det_mmse) > 1e-9f) {
+            x0_mmse = (HtH11*Hty0 - HtH01*Hty1) / det_mmse;
+            x1_mmse = (HtH00*Hty1 - HtH10*Hty0) / det_mmse;
+        } else {
+            x0_mmse = 0;
+            x1_mmse = 0;
+        }
+
+        // Store ZF result
+        x[0][i] = x0_zf;
+        x[1][i] = x1_zf;
+
+        // Check QPSK-like for ZF
+        float re0 = crealf(x0_zf);
+        float im0 = cimagf(x0_zf);
+        float re1 = crealf(x1_zf);
+        float im1 = cimagf(x1_zf);
+
+        if (fabsf(fabsf(re0) - fabsf(im0)) < 0.3f * (fabsf(re0) + fabsf(im0) + 0.01f) &&
+            fabsf(fabsf(re1) - fabsf(im1)) < 0.3f * (fabsf(re1) + fabsf(im1) + 0.01f)) {
+            qpsk_count++;
+        }
+
+        // Check QPSK-like for MMSE
+        re0 = crealf(x0_mmse);
+        im0 = cimagf(x0_mmse);
+        re1 = crealf(x1_mmse);
+        im1 = cimagf(x1_mmse);
+
+        if (fabsf(fabsf(re0) - fabsf(im0)) < 0.3f * (fabsf(re0) + fabsf(im0) + 0.01f) &&
+            fabsf(fabsf(re1) - fabsf(im1)) < 0.3f * (fabsf(re1) + fabsf(im1) + 0.01f)) {
+            qpsk_count_mmse++;
+        }
+    }
+
+    printf("\nCodebook15 effective channel results:\n");
+    printf("  ZF   QPSK-like = %.1f%%\n", 100.0f * qpsk_count / nof_symbols);
+    printf("  MMSE QPSK-like = %.1f%% (noise_reg=%.2f)\n", 100.0f * qpsk_count_mmse / nof_symbols, noise_reg);
+
+    // Print first 5 equalized symbols (ZF)
+    printf("First 5 ZF equalized symbols:\n");
+    for (int i = 0; i < 5 && i < nof_symbols; i++) {
+        printf("  x[0][%d]=(%.3f%+.3fj)  x[1][%d]=(%.3f%+.3fj)\n",
+               i, crealf(x[0][i]), cimagf(x[0][i]),
+               i, crealf(x[1][i]), cimagf(x[1][i]));
+    }
+}
+
+// Test with swapped layers
+static void test_codebook15_swapped_layers(cf_t *y[SRSRAN_MAX_PORTS],
+                                           cf_t *h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                           cf_t *x[SRSRAN_MAX_LAYERS],
+                                           int nof_symbols)
+{
+    int qpsk_count = 0;
+
+    for (int i = 0; i < nof_symbols; i++) {
+        cf_t h00 = h[0][0][i];
+        cf_t h01 = h[0][1][i];
+        cf_t h10 = h[1][0][i];
+        cf_t h11 = h[1][1][i];
+        cf_t h20 = h[2][0][i];
+        cf_t h21 = h[2][1][i];
+        cf_t h30 = h[3][0][i];
+        cf_t h31 = h[3][1][i];
+
+        cf_t h02_sum = h00 + h20;
+        cf_t h13_sum = h10 + h30;
+        cf_t h02_sum_rx1 = h01 + h21;
+        cf_t h13_sum_rx1 = h11 + h31;
+
+        // SWAP: Try x1 with first column, x0 with second column
+        cf_t Heff00 = (h02_sum - h13_sum) * 0.5f;  // was Heff01
+        cf_t Heff01 = (h02_sum + h13_sum) * 0.5f;  // was Heff00
+        cf_t Heff10 = (h02_sum_rx1 - h13_sum_rx1) * 0.5f;  // was Heff11
+        cf_t Heff11 = (h02_sum_rx1 + h13_sum_rx1) * 0.5f;  // was Heff10
+
+        cf_t y0 = y[0][i];
+        cf_t y1 = y[1][i];
+
+        cf_t det = Heff00 * Heff11 - Heff01 * Heff10;
+        if (cabsf(det) > 1e-9f) {
+            x[0][i] = (Heff11 * y0 - Heff01 * y1) / det;
+            x[1][i] = (Heff00 * y1 - Heff10 * y0) / det;
+        } else {
+            x[0][i] = 0;
+            x[1][i] = 0;
+        }
+
+        float re0 = crealf(x[0][i]);
+        float im0 = cimagf(x[0][i]);
+        float re1 = crealf(x[1][i]);
+        float im1 = cimagf(x[1][i]);
+
+        if (fabsf(fabsf(re0) - fabsf(im0)) < 0.3f * (fabsf(re0) + fabsf(im0) + 0.01f) &&
+            fabsf(fabsf(re1) - fabsf(im1)) < 0.3f * (fabsf(re1) + fabsf(im1) + 0.01f)) {
+            qpsk_count++;
+        }
+    }
+
+    printf("Codebook15 SWAPPED layers: QPSK-like = %.1f%%\n",
+           100.0f * qpsk_count / nof_symbols);
+
+    printf("First 5 swapped equalized symbols:\n");
+    for (int i = 0; i < 5 && i < nof_symbols; i++) {
+        printf("  x[0][%d]=(%.3f%+.3fj)  x[1][%d]=(%.3f%+.3fj)\n",
+               i, crealf(x[0][i]), cimagf(x[0][i]),
+               i, crealf(x[1][i]), cimagf(x[1][i]));
+    }
+}
+
+static void test_all_codebook_indices(cf_t *y[SRSRAN_MAX_PORTS],
+                                      cf_t *h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                      cf_t *x[SRSRAN_MAX_LAYERS],
+                                      int nof_symbols)
+{
+    // 4-port 2-layer codebook from 36.211 Table 6.3.4.2.3-2
+    // Each entry is [w00 w01 w10 w11 w20 w21 w30 w31] for W = [w0 w1] where w0=[w00;w10;w20;w30]
+    // Normalized by 1/2
+
+    const cf_t j = I;
+
+    // u vectors for codebook (from 36.211)
+    cf_t u[16][4] = {
+        {1,  1,  1,  1},      // u0
+        {1,  1,  1, -1},      // u1  (actually phase varies)
+        {1,  1, -1,  1},      // u2
+        {1,  1, -1, -1},      // u3
+        {1,  1,  j,  j},      // u4
+        {1,  1,  j, -j},      // u5
+        {1,  1, -j,  j},      // u6
+        {1,  1, -j, -j},      // u7
+        {1, -1,  1,  1},      // u8
+        {1, -1,  1, -1},      // u9
+        {1, -1, -1,  1},      // u10
+        {1, -1, -1, -1},      // u11
+        {1, -1,  j,  j},      // u12
+        {1, -1,  j, -j},      // u13
+        {1, -1, -j,  j},      // u14
+        {1, -1, -j, -j},      // u15
+    };
+
+    printf("\nBrute-force testing all 16 codebook indices:\n");
+
+    for (int cb = 0; cb < 16; cb++) {
+        // For 2-layer, W = 1/2 * [u_n  u_n_tilde] where columns are paired
+        // Actually the pairing depends on the codebook structure
+        // For simplicity, test W = 1/2 * [u_cb  u_cb_rotated]
+
+        // Let's use the actual 36.211 structure:
+        // W_n = 1/2 * [e1  e2] * [1  1; 1 -1; phi_n  -phi_n; phi_n  phi_n] or similar
+
+        // For now, test identity-like: layer0->port0+port2, layer1->port1+port3
+        // with phase from codebook
+
+        cf_t phase = u[cb][2];  // Use 3rd element as phase for ports 2,3
+
+        int qpsk_count = 0;
+
+        for (int i = 0; i < nof_symbols; i++) {
+            cf_t h00 = h[0][0][i];
+            cf_t h01 = h[0][1][i];
+            cf_t h10 = h[1][0][i];
+            cf_t h11 = h[1][1][i];
+            cf_t h20 = h[2][0][i];
+            cf_t h21 = h[2][1][i];
+            cf_t h30 = h[3][0][i];
+            cf_t h31 = h[3][1][i];
+
+            // Try: W = 1/2 * [1 0; 0 1; phase 0; 0 phase]
+            // So port0=x0/2, port1=x1/2, port2=phase*x0/2, port3=phase*x1/2
+            cf_t Heff00 = (h00 + phase*h20) * 0.5f;
+            cf_t Heff01 = (h10 + phase*h30) * 0.5f;
+            cf_t Heff10 = (h01 + phase*h21) * 0.5f;
+            cf_t Heff11 = (h11 + phase*h31) * 0.5f;
+
+            cf_t y0 = y[0][i];
+            cf_t y1 = y[1][i];
+
+            cf_t det = Heff00 * Heff11 - Heff01 * Heff10;
+            cf_t x0, x1;
+            if (cabsf(det) > 1e-9f) {
+                x0 = (Heff11 * y0 - Heff01 * y1) / det;
+                x1 = (Heff00 * y1 - Heff10 * y0) / det;
+            } else {
+                x0 = 0;
+                x1 = 0;
+            }
+
+            float re0 = crealf(x0);
+            float im0 = cimagf(x0);
+            float re1 = crealf(x1);
+            float im1 = cimagf(x1);
+
+            if (fabsf(fabsf(re0) - fabsf(im0)) < 0.3f * (fabsf(re0) + fabsf(im0) + 0.01f) &&
+                fabsf(fabsf(re1) - fabsf(im1)) < 0.3f * (fabsf(re1) + fabsf(im1) + 0.01f)) {
+                qpsk_count++;
+            }
+        }
+
+        printf("  CB%2d (phase=%.1f%+.1fj): QPSK-like = %.1f%%\n",
+               cb, crealf(phase), cimagf(phase), 100.0f * qpsk_count / nof_symbols);
+    }
+}
+
+static void analyze_channel_structure(cf_t *h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                      cf_t *y[SRSRAN_MAX_PORTS],
+                                      int nof_symbols)
+{
+    printf("\n========== CHANNEL STRUCTURE ANALYSIS ==========\n");
+
+    // Check if channel varies smoothly (real channel) or randomly (wrong CE)
+    printf("Channel variation between adjacent REs (should be small for real channel):\n");
+    for (int p = 0; p < 4; p++) {
+        float total_diff = 0;
+        for (int i = 1; i < 100 && i < nof_symbols; i++) {
+            cf_t diff = h[p][0][i] - h[p][0][i-1];
+            total_diff += cabsf(diff);
+        }
+        float avg_diff = total_diff / 99.0f;
+        float avg_mag = 0;
+        for (int i = 0; i < 100 && i < nof_symbols; i++) {
+            avg_mag += cabsf(h[p][0][i]);
+        }
+        avg_mag /= 100.0f;
+        printf("  Port %d: avg_diff=%.3f, avg_mag=%.3f, ratio=%.3f\n",
+               p, avg_diff, avg_mag, avg_diff/avg_mag);
+    }
+
+    // Check if y varies more than H (data should vary, channel should be smooth)
+    printf("\nReceived signal y variation:\n");
+    float y_diff = 0;
+    float y_mag = 0;
+    for (int i = 1; i < 100 && i < nof_symbols; i++) {
+        y_diff += cabsf(y[0][i] - y[0][i-1]);
+        y_mag += cabsf(y[0][i]);
+    }
+    printf("  y[rx0]: avg_diff=%.3f, avg_mag=%.3f, ratio=%.3f\n",
+           y_diff/99.0f, y_mag/100.0f, (y_diff/99.0f)/(y_mag/100.0f));
+
+    // Check phase rotation across subcarriers (timing offset would cause linear phase)
+    printf("\nPhase progression check (linear = timing offset):\n");
+    for (int p = 0; p < 2; p++) {
+        printf("  Port %d phases: ", p);
+        for (int i = 0; i < 12 && i < nof_symbols; i++) {
+            float phase = cargf(h[p][0][i]) * 180.0f / M_PI;
+            printf("%.0f ", phase);
+        }
+        printf("\n");
+    }
+
+    // Try to detect if there's a constant phase offset between CE and data
+    // If y = H*W*x, and x is QPSK, then y/H should cluster around W*x values
+    printf("\nRaw y/h ratio (should show structure if CE is correct):\n");
+    for (int i = 0; i < 10 && i < nof_symbols; i++) {
+        cf_t ratio0 = y[0][i] / h[0][0][i];
+        cf_t ratio1 = y[0][i] / h[1][0][i];
+        printf("  RE[%d]: y/h0=(%.2f,%.2f) y/h1=(%.2f,%.2f)\n",
+               i, crealf(ratio0), cimagf(ratio0), crealf(ratio1), cimagf(ratio1));
+    }
+
+    printf("================================================\n");
+}
+
+// static int srsran_predecoding_multiplex_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
+//                                                      cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+//                                                      cf_t*  x[SRSRAN_MAX_LAYERS],
+//                                                      float* csi[SRSRAN_MAX_CODEWORDS],
+//                                                      int    codebook_idx,
+//                                                      int    nof_symbols,
+//                                                      float  scaling,
+//                                                      float  noise_estimate)
+// {
+// printf("Processing 4x2 multiplexing MIMO using CSI with codebook_idx=%d, nof_symbols=%d, scaling=%.02f, noise_estimate=%.02f\n", codebook_idx, nof_symbols, scaling, noise_estimate);
+//   static int first_call = 0;
+//   if (first_call) {
+//     first_call = 0;
+
+//     printf("\n========== CHANNEL ESTIMATE ANALYSIS ==========\n");
+//     printf("codebook_idx=%d, nof_symbols=%d\n\n", codebook_idx, nof_symbols);
+
+//     // Check first 10 RE's channel estimates in detail
+//     printf("First 10 REs - Channel estimates h[port][rx]:\n");
+//     for (int i = 0; i < 10 && i < nof_symbols; i++) {
+//       printf("RE[%d]:\n", i);
+//       printf("  p0: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
+//              crealf(h[0][0][i]), cimagf(h[0][0][i]),
+//              crealf(h[0][1][i]), cimagf(h[0][1][i]));
+//       printf("  p1: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
+//              crealf(h[1][0][i]), cimagf(h[1][0][i]),
+//              crealf(h[1][1][i]), cimagf(h[1][1][i]));
+//       printf("  p2: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
+//              crealf(h[2][0][i]), cimagf(h[2][0][i]),
+//              crealf(h[2][1][i]), cimagf(h[2][1][i]));
+//       printf("  p3: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
+//              crealf(h[3][0][i]), cimagf(h[3][0][i]),
+//              crealf(h[3][1][i]), cimagf(h[3][1][i]));
+//       printf("  y:  rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
+//              crealf(y[0][i]), cimagf(y[0][i]),
+//              crealf(y[1][i]), cimagf(y[1][i]));
+//     }
+
+//     // Check for patterns - are ports 2,3 copies of 0,1?
+//     printf("\nCorrelation check - are ports 2,3 duplicates of 0,1?\n");
+//     cf_t corr_20 = 0, corr_31 = 0;
+//     float pwr_0 = 0, pwr_1 = 0, pwr_2 = 0, pwr_3 = 0;
+//     int n_check = (nof_symbols < 100) ? nof_symbols : 100;
+
+//     for (int i = 0; i < n_check; i++) {
+//       corr_20 += h[2][0][i] * conjf(h[0][0][i]);
+//       corr_31 += h[3][0][i] * conjf(h[1][0][i]);
+//       pwr_0 += cabsf(h[0][0][i]) * cabsf(h[0][0][i]);
+//       pwr_1 += cabsf(h[1][0][i]) * cabsf(h[1][0][i]);
+//       pwr_2 += cabsf(h[2][0][i]) * cabsf(h[2][0][i]);
+//       pwr_3 += cabsf(h[3][0][i]) * cabsf(h[3][0][i]);
+//     }
+
+//     float norm_corr_20 = cabsf(corr_20) / sqrtf(pwr_0 * pwr_2 + 1e-10f);
+//     float norm_corr_31 = cabsf(corr_31) / sqrtf(pwr_1 * pwr_3 + 1e-10f);
+
+//     printf("  Correlation p2 vs p0: %.3f (1.0 = identical)\n", norm_corr_20);
+//     printf("  Correlation p3 vs p1: %.3f (1.0 = identical)\n", norm_corr_31);
+
+//     // Check if ports 2,3 are all zeros
+//     int zero_count_2 = 0, zero_count_3 = 0;
+//     for (int i = 0; i < n_check; i++) {
+//       if (cabsf(h[2][0][i]) < 1e-6f && cabsf(h[2][1][i]) < 1e-6f) zero_count_2++;
+//       if (cabsf(h[3][0][i]) < 1e-6f && cabsf(h[3][1][i]) < 1e-6f) zero_count_3++;
+//     }
+//     printf("  Port 2 zero count: %d/%d\n", zero_count_2, n_check);
+//     printf("  Port 3 zero count: %d/%d\n", zero_count_3, n_check);
+
+//     // Try simple 2x2 with just ports 0,1 to see if that works at all
+//     printf("\nTest: Simple 2x2 ZF with ports 0,1 only (no codebook):\n");
+//     int qpsk_01 = 0;
+//     for (int i = 0; i < n_check; i++) {
+//       cf_t H00 = h[0][0][i];
+//       cf_t H01 = h[1][0][i];
+//       cf_t H10 = h[0][1][i];
+//       cf_t H11 = h[1][1][i];
+
+//       cf_t det = H00*H11 - H01*H10;
+//       float det_sq = crealf(det)*crealf(det) + cimagf(det)*cimagf(det);
+//       if (det_sq < 1e-12f) continue;
+
+//       cf_t inv_det = conjf(det) / det_sq;
+//       cf_t x0 = inv_det * (H11*y[0][i] - H01*y[1][i]);
+//       cf_t x1 = inv_det * (-H10*y[0][i] + H00*y[1][i]);
+
+//       if (cabsf(x0) > 0.5f && cabsf(x0) < 1.0f) qpsk_01++;
+//       if (cabsf(x1) > 0.5f && cabsf(x1) < 1.0f) qpsk_01++;
+//     }
+//     printf("  QPSK-like with p0,p1 direct: %.1f%%\n", 100.0f*qpsk_01/(2*n_check));
+
+//     // What if this is actually a 2-port transmission being decoded as 4-port?
+//     printf("\nTest: What if eNB is actually transmitting 2-port?\n");
+//     printf("  Try decoding as 2x2 TM4 codebook 0 (ports 0,1):\n");
+
+//     // 2-port codebook index 0: W = 1/sqrt(2) * [1, 1; 1, -1]
+//     int qpsk_2port = 0;
+//     for (int i = 0; i < n_check; i++) {
+//       // H_eff = H * W for 2-port
+//       cf_t H00 = 0.7071f * (h[0][0][i] + h[1][0][i]);
+//       cf_t H01 = 0.7071f * (h[0][0][i] - h[1][0][i]);
+//       cf_t H10 = 0.7071f * (h[0][1][i] + h[1][1][i]);
+//       cf_t H11 = 0.7071f * (h[0][1][i] - h[1][1][i]);
+
+//       cf_t det = H00*H11 - H01*H10;
+//       float det_sq = crealf(det)*crealf(det) + cimagf(det)*cimagf(det);
+//       if (det_sq < 1e-12f) continue;
+
+//       cf_t inv_det = conjf(det) / det_sq;
+//       cf_t x0 = inv_det * (H11*y[0][i] - H01*y[1][i]);
+//       cf_t x1 = inv_det * (-H10*y[0][i] + H00*y[1][i]);
+
+//       if (cabsf(x0) > 0.5f && cabsf(x0) < 1.0f) qpsk_2port++;
+//       if (cabsf(x1) > 0.5f && cabsf(x1) < 1.0f) qpsk_2port++;
+//     }
+//     printf("  QPSK-like with 2-port codebook 0: %.1f%%\n", 100.0f*qpsk_2port/(2*n_check));
+
+//     // Try all 2-port codebook indices
+//     printf("\nTest all 2-port codebook indices:\n");
+//     for (int cb = 0; cb < 4; cb++) {
+//       // 2-port rank-2 codebook (36.211 Table 6.3.4.2.3-1)
+//       cf_t W00, W01, W10, W11;
+//       float n2 = 0.7071f;  // 1/sqrt(2)
+
+//       switch(cb) {
+//         case 0: W00=n2; W01=n2;  W10=n2;  W11=-n2; break;  // [1,1;1,-1]/sqrt(2)
+//         case 1: W00=n2; W01=n2;  W10=n2*_Complex_I; W11=-n2*_Complex_I; break;
+//         case 2: W00=n2; W01=-n2; W10=n2;  W11=n2;  break;
+//         case 3: W00=n2; W01=-n2; W10=n2*_Complex_I; W11=n2*_Complex_I; break;
+//       }
+
+//       int qpsk_cb = 0;
+//       for (int i = 0; i < n_check; i++) {
+//         cf_t H00 = h[0][0][i]*W00 + h[1][0][i]*W10;
+//         cf_t H01 = h[0][0][i]*W01 + h[1][0][i]*W11;
+//         cf_t H10 = h[0][1][i]*W00 + h[1][1][i]*W10;
+//         cf_t H11 = h[0][1][i]*W01 + h[1][1][i]*W11;
+
+//         cf_t det = H00*H11 - H01*H10;
+//         float det_sq = crealf(det)*crealf(det) + cimagf(det)*cimagf(det);
+//         if (det_sq < 1e-12f) continue;
+
+//         cf_t inv_det = conjf(det) / det_sq;
+//         cf_t x0 = inv_det * (H11*y[0][i] - H01*y[1][i]);
+//         cf_t x1 = inv_det * (-H10*y[0][i] + H00*y[1][i]);
+
+//         if (cabsf(x0) > 0.5f && cabsf(x0) < 1.0f) qpsk_cb++;
+//         if (cabsf(x1) > 0.5f && cabsf(x1) < 1.0f) qpsk_cb++;
+//       }
+//       printf("  2-port CB%d: %.1f%%\n", cb, 100.0f*qpsk_cb/(2*n_check));
+//     }
+
+//     printf("==============================================\n\n");
+//   }
+
+//   // ... rest of function unchanged
+//   static const cf_t W[16][4][2] = {
+//     [0]  = {{1, 1}, {-1, 1}, {-1, 1}, {-1, 1}},
+//     [1]  = {{1, 1}, {-_Complex_I, _Complex_I}, {-1, 1}, {_Complex_I, -_Complex_I}},
+//     [2]  = {{1, 1}, {1, -1}, {-1, 1}, {1, -1}},
+//     [3]  = {{1, 1}, {_Complex_I, -_Complex_I}, {-1, 1}, {-_Complex_I, _Complex_I}},
+//     [4]  = {{1, 1}, {-1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}},
+//     [5]  = {{1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}, {-1, 1}},
+//     [6]  = {{1, 1}, {1, -1}, {-_Complex_I, _Complex_I}, {-1, 1}},
+//     [7]  = {{1, 1}, {_Complex_I, -_Complex_I}, {-_Complex_I, _Complex_I}, {1, -1}},
+//     [8]  = {{1, 1}, {-1, 1}, {1, -1}, {1, -1}},
+//     [9]  = {{1, 1}, {-_Complex_I, _Complex_I}, {1, -1}, {-_Complex_I, _Complex_I}},
+//     [10] = {{1, 1}, {1, -1}, {1, -1}, {-1, 1}},
+//     [11] = {{1, 1}, {_Complex_I, -_Complex_I}, {1, -1}, {_Complex_I, -_Complex_I}},
+//     [12] = {{1, 1}, {-1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}},
+//     [13] = {{1, 1}, {-_Complex_I, _Complex_I}, {_Complex_I, -_Complex_I}, {1, -1}},
+//     [14] = {{1, 1}, {1, -1}, {_Complex_I, -_Complex_I}, {1, -1}},
+//     [15] = {{1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}, {-1, 1}},
+//   };
+
+//   if (codebook_idx < 0 || codebook_idx > 15) {
+//     ERROR("Wrong codebook_idx=%d", codebook_idx);
+//     return SRSRAN_ERROR;
+//   }
+
+//   if (codebook_idx == 15){
+//       // test_codebook15_effective_channel(y,h,x,nof_symbols);
+//       // test_codebook15_swapped_layers(y,h,x,nof_symbols);
+//       analyze_channel_structure(h,y,nof_symbols);
+//       test_all_codebook_indices(y,h,x,nof_symbols);
+//       return SRSRAN_SUCCESS;
+//   }
+
+//   const cf_t (*Wn)[2] = W[codebook_idx];
+//   const float norm = 0.5f;
+
+//   if (noise_estimate < 1e-6f) {
+//     noise_estimate = 0.01f;
+//   }
+
+//   for (int i = 0; i < nof_symbols; i++) {
+//     cf_t hp0r0 = h[0][0][i], hp1r0 = h[1][0][i], hp2r0 = h[2][0][i], hp3r0 = h[3][0][i];
+//     cf_t hp0r1 = h[0][1][i], hp1r1 = h[1][1][i], hp2r1 = h[2][1][i], hp3r1 = h[3][1][i];
+
+//     cf_t H00 = norm*(hp0r0*Wn[0][0] + hp1r0*Wn[1][0] + hp2r0*Wn[2][0] + hp3r0*Wn[3][0]);
+//     cf_t H01 = norm*(hp0r0*Wn[0][1] + hp1r0*Wn[1][1] + hp2r0*Wn[2][1] + hp3r0*Wn[3][1]);
+//     cf_t H10 = norm*(hp0r1*Wn[0][0] + hp1r1*Wn[1][0] + hp2r1*Wn[2][0] + hp3r1*Wn[3][0]);
+//     cf_t H11 = norm*(hp0r1*Wn[0][1] + hp1r1*Wn[1][1] + hp2r1*Wn[2][1] + hp3r1*Wn[3][1]);
+
+//     srsran_mat_2x2_mmse_csi_gen(y[0][i], y[1][i], H00, H01, H10, H11,
+//                                 &x[0][i], &x[1][i], &csi[0][i], &csi[1][i],
+//                                 noise_estimate, 1.0f/scaling);
+//   }
+
+//   return SRSRAN_SUCCESS;
+// }
+
+static int srsran_predecoding_multiplex_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
+                                                     cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                                     cf_t*  x[SRSRAN_MAX_LAYERS],
+                                                     float* csi[SRSRAN_MAX_CODEWORDS],
+                                                     int    codebook_idx,
+                                                     int    nof_symbols,
+                                                     float  scaling,
+                                                     float  noise_estimate)
+{
+  float norm = (float) 0.5 / scaling;
+  int i = 0;
+  static int debug_count = 0;
+  // printf("Processing 4x2 multiplexing MIMO using CSI with codebook_idx=%d, nof_symbols=%d, scaling=%.02f, noise_estimate=%.02f\n", codebook_idx, nof_symbols, scaling, noise_estimate);
+
+  // switch (codebook_idx) {
+  //     case 0:
+  //       norm = (float)M_SQRT2 / scaling;
+  //       break;
+  //       case 1:
+  //       case 2:
+  //           norm = 2.0f / scaling;
+  //           break;
+  //       default:
+  //           ERROR("Wrong codebook_idx=%d", codebook_idx);
+  //           return SRSRAN_ERROR;
+  // }
+
+  if (codebook_idx < 0 || codebook_idx > 15){
+      ERROR("Wrong codebook_idx=%d", codebook_idx);
+      return SRSRAN_ERROR;
+  }
+
+
+
+//   static const cf_t W[16][4][2] = {
+//       // Index 0: [1,1; -1,1; -1,1; -1,1]
+//       [0] = {{1, 1}, {-1, 1}, {-1, 1}, {-1, 1}},
+//       // Index 1: [1,1; -j,j; -1,1; j,-j]
+//       [1] = {{1, 1}, {-_Complex_I, _Complex_I}, {-1, 1}, {_Complex_I, -_Complex_I}},
+//       // Index 2: [1,1; 1,-1; -1,1; 1,-1]
+//       [2] = {{1, 1}, {1, -1}, {-1, 1}, {1, -1}},
+//       // Index 3: [1,1; j,-j; -1,1; -j,j]
+//       [3] = {{1, 1}, {_Complex_I, -_Complex_I}, {-1, 1}, {-_Complex_I, _Complex_I}},
+//       // Index 4: [1,1; -1,1; -j,j; -j,j]
+//       [4] = {{1, 1}, {-1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}},
+//       // Index 5: [1,1; -j,j; -j,j; -1,1]
+//       [5] = {{1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}, {-1, 1}},
+//       // Index 6: [1,1; 1,-1; -j,j; -1,1]
+//       [6] = {{1, 1}, {1, -1}, {-_Complex_I, _Complex_I}, {-1, 1}},
+//       // Index 7: [1,1; j,-j; -j,j; 1,-1]
+//       [7] = {{1, 1}, {_Complex_I, -_Complex_I}, {-_Complex_I, _Complex_I}, {1, -1}},
+//       // Index 8: [1,1; -1,1; 1,-1; 1,-1]
+//       [8] = {{1, 1}, {-1, 1}, {1, -1}, {1, -1}},
+//       // Index 9: [1,1; -j,j; 1,-1; -j,j]
+//       [9] = {{1, 1}, {-_Complex_I, _Complex_I}, {1, -1}, {-_Complex_I, _Complex_I}},
+//       // Index 10: [1,1; 1,-1; 1,-1; -1,1]
+//       [10] = {{1, 1}, {1, -1}, {1, -1}, {-1, 1}},
+//       // Index 11: [1,1; j,-j; 1,-1; j,-j]
+//       [11] = {{1, 1}, {_Complex_I, -_Complex_I}, {1, -1}, {_Complex_I, -_Complex_I}},
+//       // Index 12: [1,1; -1,1; j,-j; j,-j]
+//       [12] = {{1, 1}, {-1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}},
+//       // Index 13: [1,1; -j,j; j,-j; 1,-1]
+//       [13] = {{1, 1}, {-_Complex_I, _Complex_I}, {_Complex_I, -_Complex_I}, {1, -1}},
+//       // Index 14: [1,1; 1,-1; j,-j; 1,-1]
+//       [14] = {{1, 1}, {1, -1}, {_Complex_I, -_Complex_I}, {1, -1}},
+//       // Index 15: [1,1; j,-j; j,-j; -1,1]
+//       [15] = {{1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}, {-1, 1}},
+// };
+#if SRSRAN_SIMD_CF_SIZE != 0
+  for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
+    simd_cf_t h00i = srsran_simd_cfi_load(&h[0][0][i]);
+    simd_cf_t h01i = srsran_simd_cfi_load(&h[0][1][i]);
+    simd_cf_t h02i = srsran_simd_cfi_load(&h[0][2][i]);
+    simd_cf_t h03i = srsran_simd_cfi_load(&h[0][3][i]);
+    simd_cf_t h10i = srsran_simd_cfi_load(&h[1][0][i]);
+    simd_cf_t h11i = srsran_simd_cfi_load(&h[1][1][i]);
+    simd_cf_t h12i = srsran_simd_cfi_load(&h[1][2][i]);
+    simd_cf_t h13i = srsran_simd_cfi_load(&h[1][3][i]);
+
+    simd_cf_t y0 = srsran_simd_cfi_load(&y[0][i]);
+    simd_cf_t y1 = srsran_simd_cfi_load(&y[1][i]);
+
+    simd_cf_t h00, h01, h10, h11;
+
+    switch (codebook_idx) {
+      case 0:
+        h00 = srsran_simd_cf_add(h00i, h02i);
+        h01 = srsran_simd_cf_sub(h01i, h03i);
+        h10 = srsran_simd_cf_add(h10i, h12i);
+        h11 = srsran_simd_cf_sub(h11i, h13i);
+        break;
+      case 1:
+        h00 = srsran_simd_cf_add(h00i, h02i);
+        h01 = srsran_simd_cf_add(h01i, h03i);
+        h10 = srsran_simd_cf_add(h10i, h12i);
+        h11 = srsran_simd_cf_add(h11i, h13i);
+        break;
+      case 2:
+        h00 = srsran_simd_cf_sub(h00i, h02i);
+        h01 = srsran_simd_cf_add(h01i, h03i);
+        h10 = srsran_simd_cf_sub(h10i, h12i);
+        h11 = srsran_simd_cf_add(h11i, h13i);
+        break;
+      case 3:
+        h00 = srsran_simd_cf_sub(h00i, h02i);
+        h01 = srsran_simd_cf_sub(h01i, h03i);
+        h10 = srsran_simd_cf_sub(h10i, h12i);
+        h11 = srsran_simd_cf_sub(h11i, h13i);
+        break;
+      case 4:
+        h00 = srsran_simd_cf_add(h00i, h03i);
+        h01 = srsran_simd_cf_sub(h01i, h02i);
+        h10 = srsran_simd_cf_add(h10i, h13i);
+        h11 = srsran_simd_cf_sub(h11i, h12i);
+        break;
+      case 5:
+        h00 = srsran_simd_cf_add(h00i, h03i);
+        h01 = srsran_simd_cf_add(h01i, h02i);
+        h10 = srsran_simd_cf_add(h10i, h13i);
+        h11 = srsran_simd_cf_add(h11i, h12i);
+        break;
+      case 6:
+        h00 = srsran_simd_cf_sub(h00i, h03i);
+        h01 = srsran_simd_cf_add(h01i, h02i);
+        h10 = srsran_simd_cf_sub(h10i, h13i);
+        h11 = srsran_simd_cf_add(h11i, h12i);
+        break;
+      case 7:
+        h00 = srsran_simd_cf_sub(h00i, h03i);
+        h01 = srsran_simd_cf_sub(h01i, h02i);
+        h10 = srsran_simd_cf_sub(h10i, h13i);
+        h11 = srsran_simd_cf_sub(h11i, h12i);
+        break;
+      case 8:
+        h00 = srsran_simd_cf_add(h00i, srsran_simd_cf_mulj(h02i));
+        h01 = srsran_simd_cf_add(h01i, srsran_simd_cf_mulj(h03i));
+        h10 = srsran_simd_cf_add(h10i, srsran_simd_cf_mulj(h12i));
+        h11 = srsran_simd_cf_add(h11i, srsran_simd_cf_mulj(h13i));
+        break;
+      case 9:
+        h00 = srsran_simd_cf_add(h00i, srsran_simd_cf_mulj(h02i));
+        h01 = srsran_simd_cf_sub(h01i, srsran_simd_cf_mulj(h03i));
+        h10 = srsran_simd_cf_add(h10i, srsran_simd_cf_mulj(h12i));
+        h11 = srsran_simd_cf_sub(h11i, srsran_simd_cf_mulj(h13i));
+        break;
+      case 10:
+        h00 = srsran_simd_cf_sub(h00i, srsran_simd_cf_mulj(h02i));
+        h01 = srsran_simd_cf_add(h01i, srsran_simd_cf_mulj(h03i));
+        h10 = srsran_simd_cf_sub(h10i, srsran_simd_cf_mulj(h12i));
+        h11 = srsran_simd_cf_add(h11i, srsran_simd_cf_mulj(h13i));
+        break;
+      case 11:
+        h00 = srsran_simd_cf_sub(h00i, srsran_simd_cf_mulj(h02i));
+        h01 = srsran_simd_cf_sub(h01i, srsran_simd_cf_mulj(h03i));
+        h10 = srsran_simd_cf_sub(h10i, srsran_simd_cf_mulj(h12i));
+        h11 = srsran_simd_cf_sub(h11i, srsran_simd_cf_mulj(h13i));
+        break;
+      case 12:
+        h00 = srsran_simd_cf_add(h00i, srsran_simd_cf_mulj(h03i));
+        h01 = srsran_simd_cf_add(h01i, srsran_simd_cf_mulj(h02i));
+        h10 = srsran_simd_cf_add(h10i, srsran_simd_cf_mulj(h13i));
+        h11 = srsran_simd_cf_add(h11i, srsran_simd_cf_mulj(h12i));
+        break;
+      case 13:
+        h00 = srsran_simd_cf_add(h00i, srsran_simd_cf_mulj(h03i));
+        h01 = srsran_simd_cf_sub(h01i, srsran_simd_cf_mulj(h02i));
+        h10 = srsran_simd_cf_add(h10i, srsran_simd_cf_mulj(h13i));
+        h11 = srsran_simd_cf_sub(h11i, srsran_simd_cf_mulj(h12i));
+        break;
+      case 14:
+        h00 = srsran_simd_cf_sub(h00i, srsran_simd_cf_mulj(h03i));
+        h01 = srsran_simd_cf_add(h01i, srsran_simd_cf_mulj(h02i));
+        h10 = srsran_simd_cf_sub(h10i, srsran_simd_cf_mulj(h13i));
+        h11 = srsran_simd_cf_add(h11i, srsran_simd_cf_mulj(h12i));
+        break;
+      case 15:
+        h00 = srsran_simd_cf_sub(h00i, srsran_simd_cf_mulj(h03i));
+        h01 = srsran_simd_cf_sub(h01i, srsran_simd_cf_mulj(h02i));
+        h10 = srsran_simd_cf_sub(h10i, srsran_simd_cf_mulj(h13i));
+        h11 = srsran_simd_cf_sub(h11i, srsran_simd_cf_mulj(h12i));
+        break;
+      default:
+        ERROR("Invalid codebook index %d for dual layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    simd_cf_t x0, x1;
+    simd_f_t csi0, csi1;
+    srsran_mat_2x2_mmse_csi_simd(y0, y1, h00, h01, h10, h11,
+                                 &x0, &x1, &csi0, &csi1, noise_estimate, norm);
+
+    srsran_simd_cfi_store(&x[0][i], x0);
+    srsran_simd_cfi_store(&x[1][i], x1);
+    srsran_simd_f_store(&csi[0][i], csi0);
+    srsran_simd_f_store(&csi[1][i], csi1);
+  }
+#endif
+
+
+// Debug: Check input signal power
+  // if (debug_count < 5) {
+  //   float y0_pwr = 0, y1_pwr = 0;
+  //   float h_pwr[4][2] = {{0}};
+
+  //   for (int i = 0; i < nof_symbols && i < 100; i++) {
+  //     y0_pwr += crealf(y[0][i]) * crealf(y[0][i]) + cimagf(y[0][i]) * cimagf(y[0][i]);
+  //     y1_pwr += crealf(y[1][i]) * crealf(y[1][i]) + cimagf(y[1][i]) * cimagf(y[1][i]);
+
+  //     for (int p = 0; p < 4; p++) {
+  //       for (int r = 0; r < 2; r++) {
+  //         h_pwr[p][r] += crealf(h[p][r][i]) * crealf(h[p][r][i]) +
+  //                        cimagf(h[p][r][i]) * cimagf(h[p][r][i]);
+  //       }
+  //     }
+  //   }
+
+  //   int n = (nof_symbols < 100) ? nof_symbols : 100;
+  //   printf("\n=== 4x2 TM4 Debug (codebook=%d, nsym=%d, scale=%.3f, noise=%.6f) ===\n",
+  //          codebook_idx, nof_symbols, scaling, noise_estimate);
+  //   printf("Y power: y0=%.2f, y1=%.2f\n", y0_pwr/n, y1_pwr/n);
+  //   printf("H power [port][rx]:\n");
+  //   printf("  Port0: rx0=%.3f rx1=%.3f\n", h_pwr[0][0]/n, h_pwr[0][1]/n);
+  //   printf("  Port1: rx0=%.3f rx1=%.3f\n", h_pwr[1][0]/n, h_pwr[1][1]/n);
+  //   printf("  Port2: rx0=%.3f rx1=%.3f\n", h_pwr[2][0]/n, h_pwr[2][1]/n);
+  //   printf("  Port3: rx0=%.3f rx1=%.3f\n", h_pwr[3][0]/n, h_pwr[3][1]/n);
+
+  //   // Check if ports 2,3 have valid data (non-zero)
+  //   if (h_pwr[2][0]/n < 0.001 && h_pwr[2][1]/n < 0.001) {
+  //     printf("WARNING: Port 2 has no power - CE may not be extracted!\n");
+  //   }
+  //   if (h_pwr[3][0]/n < 0.001 && h_pwr[3][1]/n < 0.001) {
+  //     printf("WARNING: Port 3 has no power - CE may not be extracted!\n");
+  //   }
+  // }
+
+  // 4-port rank-2 codebook from 36.211 Table 6.3.4.2.3-2
+  static const cf_t W[16][4][2] = {
+    [0]  = {{1, 1}, {-1, 1}, {-1, 1}, {-1, 1}},
+    [1]  = {{1, 1}, {-_Complex_I, _Complex_I}, {-1, 1}, {_Complex_I, -_Complex_I}},
+    [2]  = {{1, 1}, {1, -1}, {-1, 1}, {1, -1}},
+    [3]  = {{1, 1}, {_Complex_I, -_Complex_I}, {-1, 1}, {-_Complex_I, _Complex_I}},
+    [4]  = {{1, 1}, {-1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}},
+    [5]  = {{1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}, {-1, 1}},
+    [6]  = {{1, 1}, {1, -1}, {-_Complex_I, _Complex_I}, {-1, 1}},
+    [7]  = {{1, 1}, {_Complex_I, -_Complex_I}, {-_Complex_I, _Complex_I}, {1, -1}},
+    [8]  = {{1, 1}, {-1, 1}, {1, -1}, {1, -1}},
+    [9]  = {{1, 1}, {-_Complex_I, _Complex_I}, {1, -1}, {-_Complex_I, _Complex_I}},
+    [10] = {{1, 1}, {1, -1}, {1, -1}, {-1, 1}},
+    [11] = {{1, 1}, {_Complex_I, -_Complex_I}, {1, -1}, {_Complex_I, -_Complex_I}},
+    [12] = {{1, 1}, {-1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}},
+    [13] = {{1, 1}, {-_Complex_I, _Complex_I}, {_Complex_I, -_Complex_I}, {1, -1}},
+    [14] = {{1, 1}, {1, -1}, {_Complex_I, -_Complex_I}, {1, -1}},
+    [15] = {{1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}, {-1, 1}},
+  };
+
+  const cf_t (*Wn)[2] = W[codebook_idx];
+  // float norm = 0.5f / scaling;
+
+  // Statistics for output
+  float x0_pwr = 0, x1_pwr = 0;
+  float x0_mag_sum = 0, x1_mag_sum = 0;
+  int qpsk_like_0 = 0, qpsk_like_1 = 0;
+
+  for (int i = 0; i < nof_symbols; i++) {
+    // Channel: h[port][rx][i]
+    cf_t h0r0 = h[0][0][i], h1r0 = h[1][0][i], h2r0 = h[2][0][i], h3r0 = h[3][0][i];
+    cf_t h0r1 = h[0][1][i], h1r1 = h[1][1][i], h2r1 = h[2][1][i], h3r1 = h[3][1][i];
+
+    // H_eff = H * W  (2x2)
+    // H_eff[rx][layer] = sum_port( h[port][rx] * W[port][layer] )
+    cf_t H00 = h0r0*Wn[0][0] + h1r0*Wn[1][0] + h2r0*Wn[2][0] + h3r0*Wn[3][0];
+    cf_t H01 = h0r0*Wn[0][1] + h1r0*Wn[1][1] + h2r0*Wn[2][1] + h3r0*Wn[3][1];
+    cf_t H10 = h0r1*Wn[0][0] + h1r1*Wn[1][0] + h2r1*Wn[2][0] + h3r1*Wn[3][0];
+    cf_t H11 = h0r1*Wn[0][1] + h1r1*Wn[1][1] + h2r1*Wn[2][1] + h3r1*Wn[3][1];
+
+    // MMSE equalization
+    srsran_mat_2x2_mmse_csi_gen(y[0][i], y[1][i], H00, H01, H10, H11,
+                                &x[0][i], &x[1][i], &csi[0][i], &csi[1][i],
+                                noise_estimate, norm);
+
+    // Collect stats
+    float mag0 = cabsf(x[0][i]);
+    float mag1 = cabsf(x[1][i]);
+    x0_pwr += mag0 * mag0;
+    x1_pwr += mag1 * mag1;
+    x0_mag_sum += mag0;
+    x1_mag_sum += mag1;
+
+    // Check if QPSK-like (magnitude near 1/sqrt(2) ≈ 0.707)
+    if (mag0 > 0.4f && mag0 < 1.2f) qpsk_like_0++;
+    if (mag1 > 0.4f && mag1 < 1.2f) qpsk_like_1++;
+  }
+
+  if (debug_count < 5) {
+    printf("Output stats:\n");
+    printf("  Layer0: avg_mag=%.3f, pwr=%.3f, QPSK-like=%d/%d (%.1f%%)\n",
+           x0_mag_sum/nof_symbols, x0_pwr/nof_symbols,
+           qpsk_like_0, nof_symbols, 100.0f*qpsk_like_0/nof_symbols);
+    printf("  Layer1: avg_mag=%.3f, pwr=%.3f, QPSK-like=%d/%d (%.1f%%)\n",
+           x1_mag_sum/nof_symbols, x1_pwr/nof_symbols,
+           qpsk_like_1, nof_symbols, 100.0f*qpsk_like_1/nof_symbols);
+
+    // Print first few symbols
+    printf("First 4 equalized symbols:\n");
+    for (int i = 0; i < 4 && i < nof_symbols; i++) {
+      printf("  [%d] x0=(%+.3f,%+.3f) mag=%.3f, x1=(%+.3f,%+.3f) mag=%.3f\n",
+             i, crealf(x[0][i]), cimagf(x[0][i]), cabsf(x[0][i]),
+             crealf(x[1][i]), cimagf(x[1][i]), cabsf(x[1][i]));
+    }
+
+    debug_count++;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
 static int srsran_predecoding_multiplex_2x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
                                                  cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
                                                  cf_t* x[SRSRAN_MAX_LAYERS],
@@ -1636,6 +3842,404 @@ static int srsran_predecoding_multiplex_2x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
 
     srsran_mat_2x2_mmse_gen(y[0][i], y[1][i], h00, h01, h10, h11, &x[0][i], &x[1][i], noise_estimate, norm);
   }
+  return SRSRAN_SUCCESS;
+}
+
+static int srsran_predecoding_multiplex_4x1_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
+                                                 cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                                 cf_t*  x[SRSRAN_MAX_LAYERS],
+                                                 int    codebook_idx,
+                                                 int    nof_symbols,
+                                                 float  scaling,
+                                                 float  noise_estimate)
+{
+  float norm = 0.5f / scaling;
+
+  int i = 0;
+
+#if SRSRAN_SIMD_CF_SIZE != 0
+  simd_f_t noise_simd = srsran_simd_f_set1(noise_estimate);
+
+  for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
+    simd_cf_t h00 = srsran_simd_cfi_load(&h[0][0][i]);
+    simd_cf_t h01 = srsran_simd_cfi_load(&h[0][1][i]);
+    simd_cf_t h02 = srsran_simd_cfi_load(&h[0][2][i]);
+    simd_cf_t h03 = srsran_simd_cfi_load(&h[0][3][i]);
+    simd_cf_t h10 = srsran_simd_cfi_load(&h[1][0][i]);
+    simd_cf_t h11 = srsran_simd_cfi_load(&h[1][1][i]);
+    simd_cf_t h12 = srsran_simd_cfi_load(&h[1][2][i]);
+    simd_cf_t h13 = srsran_simd_cfi_load(&h[1][3][i]);
+
+    simd_cf_t y0 = srsran_simd_cfi_load(&y[0][i]);
+    simd_cf_t y1 = srsran_simd_cfi_load(&y[1][i]);
+
+    simd_cf_t h_eff0, h_eff1;
+
+    switch (codebook_idx) {
+      case 0:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 1:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 2:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_add(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_add(h12, h13));
+        break;
+      case 3:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_add(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_add(h12, h13)));
+        break;
+      case 4:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 5:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), h13));
+        break;
+      case 6:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h01)), srsran_simd_cf_add(h02, srsran_simd_cf_mulj(h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h11)), srsran_simd_cf_add(h12, srsran_simd_cf_mulj(h13)));
+        break;
+      case 7:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02)), srsran_simd_cf_add(srsran_simd_cf_mulj(h01), h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12)), srsran_simd_cf_add(srsran_simd_cf_mulj(h11), h13));
+        break;
+      case 8:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 9:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 10:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_sub(h02, h03));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_sub(h12, h13));
+        break;
+      case 11:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h01), srsran_simd_cf_mulj(srsran_simd_cf_sub(h02, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h11), srsran_simd_cf_mulj(srsran_simd_cf_sub(h12, h13)));
+        break;
+      case 12:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_add(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h03)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_add(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h13)));
+        break;
+      case 13:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_add(h00, h03), srsran_simd_cf_sub(srsran_simd_cf_mulj(h02), srsran_simd_cf_mulj(h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_add(h10, h13), srsran_simd_cf_sub(srsran_simd_cf_mulj(h12), srsran_simd_cf_mulj(h11)));
+        break;
+      case 14:
+        h_eff0 = srsran_simd_cf_add(srsran_simd_cf_sub(h00, h02), srsran_simd_cf_mulj(srsran_simd_cf_sub(h03, h01)));
+        h_eff1 = srsran_simd_cf_add(srsran_simd_cf_sub(h10, h12), srsran_simd_cf_mulj(srsran_simd_cf_sub(h13, h11)));
+        break;
+      case 15:
+        h_eff0 = srsran_simd_cf_sub(srsran_simd_cf_sub(h00, h03), srsran_simd_cf_mulj(srsran_simd_cf_add(h01, h02)));
+        h_eff1 = srsran_simd_cf_sub(srsran_simd_cf_sub(h10, h13), srsran_simd_cf_mulj(srsran_simd_cf_add(h11, h12)));
+        break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    simd_cf_t h_eff0_conj = srsran_simd_cf_conj(h_eff0);
+    simd_cf_t h_eff1_conj = srsran_simd_cf_conj(h_eff1);
+
+    simd_cf_t numer = srsran_simd_cf_add(srsran_simd_cf_prod(h_eff0_conj, y0),
+                                          srsran_simd_cf_prod(h_eff1_conj, y1));
+
+    simd_f_t h_eff0_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff0, h_eff0_conj));
+    simd_f_t h_eff1_sq = srsran_simd_cf_re(srsran_simd_cf_prod(h_eff1, h_eff1_conj));
+    simd_f_t chan_pwr = srsran_simd_f_add(h_eff0_sq, h_eff1_sq);
+    simd_f_t denom = srsran_simd_f_add(chan_pwr, noise_simd);
+
+    simd_f_t inv_denom = srsran_simd_f_rcp(denom);
+    simd_f_t inv_denom_norm = srsran_simd_f_mul(inv_denom, srsran_simd_f_set1(norm));
+    simd_cf_t x0 = srsran_simd_cf_mul(numer, inv_denom_norm);
+
+    srsran_simd_cfi_store(&x[0][i], x0);
+  }
+#endif
+
+  for (; i < nof_symbols; i++) {
+    cf_t h00 = h[0][0][i], h01 = h[0][1][i], h02 = h[0][2][i], h03 = h[0][3][i];
+    cf_t h10 = h[1][0][i], h11 = h[1][1][i], h12 = h[1][2][i], h13 = h[1][3][i];
+
+    cf_t h_eff0, h_eff1;
+
+    switch (codebook_idx) {
+      case 0:  h_eff0 = h00 + h01 + h02 + h03;
+               h_eff1 = h10 + h11 + h12 + h13; break;
+      case 1:  h_eff0 = h00 + h01 + _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 + _Complex_I*(h12 + h13); break;
+      case 2:  h_eff0 = h00 + h01 - h02 - h03;
+               h_eff1 = h10 + h11 - h12 - h13; break;
+      case 3:  h_eff0 = h00 + h01 - _Complex_I*(h02 + h03);
+               h_eff1 = h10 + h11 - _Complex_I*(h12 + h13); break;
+      case 4:  h_eff0 = h00 + _Complex_I*h01 + h02 + _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 + h12 + _Complex_I*h13; break;
+      case 5:  h_eff0 = h00 + _Complex_I*h01 + _Complex_I*h02 - h03;
+               h_eff1 = h10 + _Complex_I*h11 + _Complex_I*h12 - h13; break;
+      case 6:  h_eff0 = h00 + _Complex_I*h01 - h02 - _Complex_I*h03;
+               h_eff1 = h10 + _Complex_I*h11 - h12 - _Complex_I*h13; break;
+      case 7:  h_eff0 = h00 + _Complex_I*h01 - _Complex_I*h02 + h03;
+               h_eff1 = h10 + _Complex_I*h11 - _Complex_I*h12 + h13; break;
+      case 8:  h_eff0 = h00 - h01 + h02 - h03;
+               h_eff1 = h10 - h11 + h12 - h13; break;
+      case 9:  h_eff0 = h00 - h01 + _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 + _Complex_I*(h12 - h13); break;
+      case 10: h_eff0 = h00 - h01 - h02 + h03;
+               h_eff1 = h10 - h11 - h12 + h13; break;
+      case 11: h_eff0 = h00 - h01 - _Complex_I*(h02 - h03);
+               h_eff1 = h10 - h11 - _Complex_I*(h12 - h13); break;
+      case 12: h_eff0 = h00 - _Complex_I*h01 + h02 - _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 + h12 - _Complex_I*h13; break;
+      case 13: h_eff0 = h00 - _Complex_I*h01 + _Complex_I*h02 + h03;
+               h_eff1 = h10 - _Complex_I*h11 + _Complex_I*h12 + h13; break;
+      case 14: h_eff0 = h00 - _Complex_I*h01 - h02 + _Complex_I*h03;
+               h_eff1 = h10 - _Complex_I*h11 - h12 + _Complex_I*h13; break;
+      case 15: h_eff0 = h00 - _Complex_I*h01 - _Complex_I*h02 - h03;
+               h_eff1 = h10 - _Complex_I*h11 - _Complex_I*h12 - h13; break;
+      default:
+        ERROR("Invalid codebook index %d for single layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    float chan_pwr = crealf(h_eff0 * conjf(h_eff0)) + crealf(h_eff1 * conjf(h_eff1));
+    float denom = chan_pwr + noise_estimate;
+
+    cf_t numer = conjf(h_eff0) * y[0][i] + conjf(h_eff1) * y[1][i];
+    x[0][i] = numer * norm / denom;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+static int srsran_predecoding_multiplex_4x2_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
+                                                 cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                                 cf_t*  x[SRSRAN_MAX_LAYERS],
+                                                 int    codebook_idx,
+                                                 int    nof_symbols,
+                                                 float  scaling,
+                                                 float  noise_estimate)
+{
+  float norm = 0.5f / scaling;
+
+  int i = 0;
+
+  // printf("Processing 4x2 multiplexing MIMO with codebook_idx=%d, nof_symbols=%d, scaling=%.02f, noise_estimate=%.02f\n", codebook_idx, nof_symbols, scaling, noise_estimate);
+
+
+#if SRSRAN_SIMD_CF_SIZE != 0
+  for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
+    simd_cf_t h00 = srsran_simd_cfi_load(&h[0][0][i]);
+    simd_cf_t h01 = srsran_simd_cfi_load(&h[0][1][i]);
+    simd_cf_t h02 = srsran_simd_cfi_load(&h[0][2][i]);
+    simd_cf_t h03 = srsran_simd_cfi_load(&h[0][3][i]);
+    simd_cf_t h10 = srsran_simd_cfi_load(&h[1][0][i]);
+    simd_cf_t h11 = srsran_simd_cfi_load(&h[1][1][i]);
+    simd_cf_t h12 = srsran_simd_cfi_load(&h[1][2][i]);
+    simd_cf_t h13 = srsran_simd_cfi_load(&h[1][3][i]);
+
+    simd_cf_t y0 = srsran_simd_cfi_load(&y[0][i]);
+    simd_cf_t y1 = srsran_simd_cfi_load(&y[1][i]);
+
+    simd_cf_t h_eff00, h_eff01, h_eff10, h_eff11;
+
+    switch (codebook_idx) {
+      case 0:
+        h_eff00 = srsran_simd_cf_add(h00, h02);
+        h_eff01 = srsran_simd_cf_sub(h01, h03);
+        h_eff10 = srsran_simd_cf_add(h10, h12);
+        h_eff11 = srsran_simd_cf_sub(h11, h13);
+        break;
+      case 1:
+        h_eff00 = srsran_simd_cf_add(h00, h02);
+        h_eff01 = srsran_simd_cf_add(h01, h03);
+        h_eff10 = srsran_simd_cf_add(h10, h12);
+        h_eff11 = srsran_simd_cf_add(h11, h13);
+        break;
+      case 2:
+        h_eff00 = srsran_simd_cf_sub(h00, h02);
+        h_eff01 = srsran_simd_cf_add(h01, h03);
+        h_eff10 = srsran_simd_cf_sub(h10, h12);
+        h_eff11 = srsran_simd_cf_add(h11, h13);
+        break;
+      case 3:
+        h_eff00 = srsran_simd_cf_sub(h00, h02);
+        h_eff01 = srsran_simd_cf_sub(h01, h03);
+        h_eff10 = srsran_simd_cf_sub(h10, h12);
+        h_eff11 = srsran_simd_cf_sub(h11, h13);
+        break;
+      case 4:
+        h_eff00 = srsran_simd_cf_add(h00, h03);
+        h_eff01 = srsran_simd_cf_sub(h01, h02);
+        h_eff10 = srsran_simd_cf_add(h10, h13);
+        h_eff11 = srsran_simd_cf_sub(h11, h12);
+        break;
+      case 5:
+        h_eff00 = srsran_simd_cf_add(h00, h03);
+        h_eff01 = srsran_simd_cf_add(h01, h02);
+        h_eff10 = srsran_simd_cf_add(h10, h13);
+        h_eff11 = srsran_simd_cf_add(h11, h12);
+        break;
+      case 6:
+        h_eff00 = srsran_simd_cf_sub(h00, h03);
+        h_eff01 = srsran_simd_cf_add(h01, h02);
+        h_eff10 = srsran_simd_cf_sub(h10, h13);
+        h_eff11 = srsran_simd_cf_add(h11, h12);
+        break;
+      case 7:
+        h_eff00 = srsran_simd_cf_sub(h00, h03);
+        h_eff01 = srsran_simd_cf_sub(h01, h02);
+        h_eff10 = srsran_simd_cf_sub(h10, h13);
+        h_eff11 = srsran_simd_cf_sub(h11, h12);
+        break;
+      case 8:
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 9:
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 10:
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 11:
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h02));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h03));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h12));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h13));
+        break;
+      case 12:
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h12));
+        break;
+      case 13:
+        h_eff00 = srsran_simd_cf_add(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_add(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h12));
+        break;
+      case 14:
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_add(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_add(h11, srsran_simd_cf_mulj(h12));
+        break;
+      case 15:
+        h_eff00 = srsran_simd_cf_sub(h00, srsran_simd_cf_mulj(h03));
+        h_eff01 = srsran_simd_cf_sub(h01, srsran_simd_cf_mulj(h02));
+        h_eff10 = srsran_simd_cf_sub(h10, srsran_simd_cf_mulj(h13));
+        h_eff11 = srsran_simd_cf_sub(h11, srsran_simd_cf_mulj(h12));
+        break;
+      default:
+        ERROR("Invalid codebook index %d for dual layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    simd_cf_t x0, x1;
+    srsran_mat_2x2_mmse_simd(y0, y1, h_eff00, h_eff01, h_eff10, h_eff11,
+                             &x0, &x1, noise_estimate, norm);
+
+    srsran_simd_cfi_store(&x[0][i], x0);
+    srsran_simd_cfi_store(&x[1][i], x1);
+  }
+#endif
+
+  for (; i < nof_symbols; i++) {
+    cf_t h00 = h[0][0][i], h01 = h[0][1][i], h02 = h[0][2][i], h03 = h[0][3][i];
+    cf_t h10 = h[1][0][i], h11 = h[1][1][i], h12 = h[1][2][i], h13 = h[1][3][i];
+
+    cf_t h_eff00, h_eff01, h_eff10, h_eff11;
+
+    switch (codebook_idx) {
+      case 0:
+        h_eff00 = h00 + h02;           h_eff01 = h01 - h03;
+        h_eff10 = h10 + h12;           h_eff11 = h11 - h13;
+        break;
+      case 1:
+        h_eff00 = h00 + h02;           h_eff01 = h01 + h03;
+        h_eff10 = h10 + h12;           h_eff11 = h11 + h13;
+        break;
+      case 2:
+        h_eff00 = h00 - h02;           h_eff01 = h01 + h03;
+        h_eff10 = h10 - h12;           h_eff11 = h11 + h13;
+        break;
+      case 3:
+        h_eff00 = h00 - h02;           h_eff01 = h01 - h03;
+        h_eff10 = h10 - h12;           h_eff11 = h11 - h13;
+        break;
+      case 4:
+        h_eff00 = h00 + h03;           h_eff01 = h01 - h02;
+        h_eff10 = h10 + h13;           h_eff11 = h11 - h12;
+        break;
+      case 5:
+        h_eff00 = h00 + h03;           h_eff01 = h01 + h02;
+        h_eff10 = h10 + h13;           h_eff11 = h11 + h12;
+        break;
+      case 6:
+        h_eff00 = h00 - h03;           h_eff01 = h01 + h02;
+        h_eff10 = h10 - h13;           h_eff11 = h11 + h12;
+        break;
+      case 7:
+        h_eff00 = h00 - h03;           h_eff01 = h01 - h02;
+        h_eff10 = h10 - h13;           h_eff11 = h11 - h12;
+        break;
+      case 8:
+        h_eff00 = h00 + _Complex_I*h02; h_eff01 = h01 + _Complex_I*h03;
+        h_eff10 = h10 + _Complex_I*h12; h_eff11 = h11 + _Complex_I*h13;
+        break;
+      case 9:
+        h_eff00 = h00 + _Complex_I*h02; h_eff01 = h01 - _Complex_I*h03;
+        h_eff10 = h10 + _Complex_I*h12; h_eff11 = h11 - _Complex_I*h13;
+        break;
+      case 10:
+        h_eff00 = h00 - _Complex_I*h02; h_eff01 = h01 + _Complex_I*h03;
+        h_eff10 = h10 - _Complex_I*h12; h_eff11 = h11 + _Complex_I*h13;
+        break;
+      case 11:
+        h_eff00 = h00 - _Complex_I*h02; h_eff01 = h01 - _Complex_I*h03;
+        h_eff10 = h10 - _Complex_I*h12; h_eff11 = h11 - _Complex_I*h13;
+        break;
+      case 12:
+        h_eff00 = h00 + _Complex_I*h03; h_eff01 = h01 + _Complex_I*h02;
+        h_eff10 = h10 + _Complex_I*h13; h_eff11 = h11 + _Complex_I*h12;
+        break;
+      case 13:
+        h_eff00 = h00 + _Complex_I*h03; h_eff01 = h01 - _Complex_I*h02;
+        h_eff10 = h10 + _Complex_I*h13; h_eff11 = h11 - _Complex_I*h12;
+        break;
+      case 14:
+        h_eff00 = h00 - _Complex_I*h03; h_eff01 = h01 + _Complex_I*h02;
+        h_eff10 = h10 - _Complex_I*h13; h_eff11 = h11 + _Complex_I*h12;
+        break;
+      case 15:
+        h_eff00 = h00 - _Complex_I*h03; h_eff01 = h01 - _Complex_I*h02;
+        h_eff10 = h10 - _Complex_I*h13; h_eff11 = h11 - _Complex_I*h12;
+        break;
+      default:
+        ERROR("Invalid codebook index %d for dual layer 4-antenna", codebook_idx);
+        return SRSRAN_ERROR;
+    }
+
+    srsran_mat_2x2_mmse_gen(y[0][i], y[1][i], h_eff00, h_eff01, h_eff10, h_eff11,
+                            &x[0][i], &x[1][i], noise_estimate, norm);
+  }
+
   return SRSRAN_SUCCESS;
 }
 
@@ -1850,9 +4454,55 @@ static int srsran_predecoding_multiplex(cf_t*  y[SRSRAN_MAX_PORTS],
       }
     }
   } else if (nof_ports == 4) {
-    ERROR("Error predecoding multiplex: not implemented for %d Tx ports", nof_ports);
+    // return SRSRAN_ERROR;
+    if (nof_layers == 1){
+        switch(mimo_decoder){
+            case SRSRAN_MIMO_DECODER_ZF:
+                // return SRSRAN_ERROR;
+                if (csi && csi[0]){
+                    return srsran_predecoding_multiplex_4x1_zf_csi(y, h, x, csi[0], codebook_idx, nof_symbols, scaling);
+                } else {
+                    return srsran_predecoding_multiplex_4x1_zf(y, h, x, codebook_idx, nof_symbols, scaling);
+                }
+                break;
+            case SRSRAN_MIMO_DECODER_MMSE:
+                // return SRSRAN_ERROR;
+                if (csi && csi[0]) {
+                  return srsran_predecoding_multiplex_4x1_mmse_csi(
+                      y, h, x, csi[0], codebook_idx, nof_symbols, scaling, noise_estimate);
+                } else {
+                  return srsran_predecoding_multiplex_4x1_mmse(y, h, x, codebook_idx, nof_symbols, scaling, noise_estimate);
+                }
+                break;
+        }
+    }
+    // return SRSRAN_ERROR;
+    if (nof_layers == 2){
+        switch(mimo_decoder){
+            case SRSRAN_MIMO_DECODER_ZF:
+                if (csi && csi[0]){
+                    return srsran_predecoding_multiplex_4x2_zf_csi(y, h, x, csi, codebook_idx, nof_symbols, scaling);
+                } else {
+                    return srsran_predecoding_multiplex_4x2_zf(y, h, x, codebook_idx, nof_symbols, scaling);
+                }
+                break;
+            case SRSRAN_MIMO_DECODER_MMSE:
+                // return SRSRAN_ERROR;
+                if (csi && csi[0]) {
+                  return srsran_predecoding_multiplex_4x2_mmse_csi(
+                      y, h, x, csi, codebook_idx, nof_symbols, scaling, noise_estimate);
+                } else {
+                  return srsran_predecoding_multiplex_4x2_mmse(y, h, x, codebook_idx, nof_symbols, scaling, noise_estimate);
+                }
+                break;
+        }
+    }
+
+    ERROR("Error predecoding multiplex: not implemented for %d Tx ports and %d layers", nof_ports, nof_layers);
+    fprintf(stderr,"Error predecoding multiplex: not implemented for %d Tx ports and %d layers\n", nof_ports, nof_layers);
   } else {
     ERROR("Error predecoding multiplex: Invalid combination of ports %d and rx antennas %d", nof_ports, nof_rxant);
+    fprintf(stderr,"Error predecoding multiplex: Invalid combination of ports %d and rx antennas %d\n", nof_ports, nof_rxant);
   }
   return SRSRAN_ERROR;
 }
@@ -1878,10 +4528,12 @@ int srsran_predecoding_type(cf_t*              y[SRSRAN_MAX_PORTS],
 {
   if (nof_ports > SRSRAN_MAX_PORTS) {
     ERROR("Maximum number of ports is %d (nof_ports=%d)", SRSRAN_MAX_PORTS, nof_ports);
+    fprintf(stderr, "Maximum number of ports is %d (nof_ports=%d)", SRSRAN_MAX_PORTS, nof_ports);
     return SRSRAN_ERROR;
   }
   if (nof_layers > SRSRAN_MAX_LAYERS) {
     ERROR("Maximum number of layers is %d (nof_layers=%d)", SRSRAN_MAX_LAYERS, nof_layers);
+    fprintf(stderr, "Maximum number of layers is %d (nof_layers=%d)", SRSRAN_MAX_LAYERS, nof_layers);
     return SRSRAN_ERROR;
   }
 
@@ -1890,37 +4542,49 @@ int srsran_predecoding_type(cf_t*              y[SRSRAN_MAX_PORTS],
       if (nof_layers == 2) {
         switch (mimo_decoder) {
           case SRSRAN_MIMO_DECODER_ZF:
+              // printf("srsran_mimo_decoder_zf\n");
             return srsran_predecoding_ccd_zf(y, h, x, csi, nof_rxant, nof_ports, nof_layers, nof_symbols, scaling);
           case SRSRAN_MIMO_DECODER_MMSE:
+              // printf("srsran_mimo_decoder_mmse\n");
             return srsran_predecoding_ccd_mmse(
                 y, h, x, csi, nof_rxant, nof_ports, nof_layers, nof_symbols, scaling, noise_estimate);
         }
       } else {
         ERROR("Invalid number of layers %d", nof_layers);
+        fprintf(stderr, "Invalid number of layers %d\n", nof_layers);
         return SRSRAN_ERROR;
       }
+      fprintf(stderr, "This should never be here?\n");
       return SRSRAN_ERROR;
     case SRSRAN_TXSCHEME_PORT0:
       if (nof_ports == 1 && nof_layers == 1) {
+          printf("srsran_txscheme_port0\n");
         return srsran_predecoding_single_multi(y, h[0], x[0], csi, nof_rxant, nof_symbols, scaling, noise_estimate);
       } else {
         ERROR("Number of ports and layers must be 1 for transmission on single antenna ports (%d, %d)",
+              nof_ports,
+              nof_layers);
+        fprintf(stderr, "Number of ports and layers must be 1 for transmission on single antenna ports (%d, %d)",
               nof_ports,
               nof_layers);
         return SRSRAN_ERROR;
       }
     case SRSRAN_TXSCHEME_DIVERSITY:
       if (nof_ports == nof_layers) {
+          // printf("srsran_txscheme_diversity\n");
         return srsran_predecoding_diversity_multi(y, h, x, csi, nof_rxant, nof_ports, nof_symbols, scaling);
       } else {
         ERROR("Error number of layers must equal number of ports in transmit diversity");
+        fprintf(stderr, "Error number of layers must equal number of ports in transmit diversity");
         return SRSRAN_ERROR;
       }
     case SRSRAN_TXSCHEME_SPATIALMUX:
+        // printf("srsran_txscheme_spatialmux\n");
       return srsran_predecoding_multiplex(
           y, h, x, csi, nof_rxant, nof_ports, nof_layers, codebook_idx, nof_symbols, scaling, noise_estimate);
     default:
       ERROR("Invalid Txscheme=%d", type);
+      fprintf(stderr, "Invalid Txscheme=%d\n",type);
       return SRSRAN_ERROR;
   }
 }

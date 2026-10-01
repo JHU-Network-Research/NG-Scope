@@ -17,15 +17,14 @@ void args_default(prog_args_t* args)
   args->disable_plots                      = false;
   args->disable_plots_except_constellation = false;
   args->nof_subframes                      = -1;
-  //args->rnti                               = 0xFFFF; //SRSRAN_SIRNTI;
-  args->rnti                               = 0x1315; //SRSRAN_SIRNTI;
   args->force_N_id_2                       = -1; // Pick the best
   args->tdd_special_sf                     = 2;
   args->sf_config                          = 2;
+  args->mode                               = 0;
+  args->use_replay_hdr                     = true;
   args->input_file_name                    = NULL;
+  args->output_file_name                   = NULL;
   args->disable_cfo                        = false;
-  args->log_dl                             = false;
-  args->log_ul                             = false;
   args->time_offset                        = 0;
   args->file_nof_prb                       = 25;
   args->file_nof_ports                     = 1;
@@ -34,13 +33,15 @@ void args_default(prog_args_t* args)
   args->file_offset_freq                   = 0;
   args->rf_dev                             = (char*)"";
   args->rf_args                            = (char*)"";
-  args->rf_index                           = 0; 
+  args->rf_index                           = 0;
   args->rf_freq                            = 2.355e9;
   args->rf_nof_rx_ant                      = 1;
   args->remote_enable                      = false;
-  args->decode_single_ue                   = false;
   args->decode_SIB                   	   = false;
-
+  args->decode_RAR                   	   = false;
+  args->rar_seed_tracker             	   = false;
+  args->rach_filter_only             	   = false;
+  args->exit_on_desync                     = 0;
   args->enable_cfo_ref                     = false;
   args->estimator_alg                      = (char*)"interpolate";
   args->enable_256qam                      = true;
@@ -56,6 +57,8 @@ void args_default(prog_args_t* args)
   args->mbsfn_area_id                      = -1;
   args->non_mbsfn_region                   = 2;
   args->mbsfn_sf_mask                      = 32;
+  bzero(args->location,LOCATION_MAX_LEN);
+  bzero(args->comment,COMMENT_MAX_LEN);
   bzero(args->sib_logs, SIB_LOGS_PATH_MAX_LEN);
 }
 
@@ -68,7 +71,7 @@ void usage(prog_args_t* args, char* prog)
   printf("\t-a RF args [Default %s]\n", args->rf_args);
   printf("\t-a RF index [Default %d]\n", args->rf_index);
   printf("\t-A Number of RX antennas [Default %d]\n", args->rf_nof_rx_ant);
-  printf("\t-A Number of DCI decoders [Default %d]\n", args->nof_decoder);
+  printf("\t-n Number of DCI decoders [Default %d]\n", args->nof_decoder);
 #ifdef ENABLE_AGC_DEFAULT
   printf("\t-g RF fix RX gain [Default AGC]\n");
 #else
@@ -83,9 +86,8 @@ void usage(prog_args_t* args, char* prog)
   printf("\t-p nof_prb for input file [Default %d]\n", args->file_nof_prb);
   printf("\t-P nof_ports for input file [Default %d]\n", args->file_nof_ports);
   printf("\t-c cell_id for input file [Default %d]\n", args->file_cell_id);
-  printf("\t-r RNTI in Hex [Default 0x%x]\n", args->rnti);
   printf("\t-l Force N_id_2 [Default best]\n");
-  printf("\t-C Disable CFO correction [Default %s]\n", args->disable_cfo ? "Disabled" : "Enabled"); 
+  printf("\t-C Disable CFO correction [Default %s]\n", args->disable_cfo ? "Disabled" : "Enabled");
   printf("\t-F Enable RS-based CFO correction [Default %s]\n", !args->enable_cfo_ref ? "Disabled" : "Enabled");
   printf("\t-R Channel estimates algorithm (average, interpolate, wiener) [Default %s]\n", args->estimator_alg);
   printf("\t-t Add time offset [Default %d]\n", args->time_offset);
@@ -109,5 +111,3 @@ void usage(prog_args_t* args, char* prog)
   printf("\t-Q Use standard LTE sample rates (default %s)\n", args->use_standard_lte_rate ? "enabled" : "disabled");
   printf("\t-v [set srsran_verbose to debug, default none]\n");
 }
-
-

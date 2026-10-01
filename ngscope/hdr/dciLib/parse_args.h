@@ -16,7 +16,10 @@
 
 #include "ngscope_def.h"
 
-#define SIB_LOGS_PATH_MAX_LEN 1024
+#define SIB_LOGS_PATH_MAX_LEN 512
+#define OUT_PATH_MAX_LEN 512
+#define COMMENT_MAX_LEN 1024
+#define LOCATION_MAX_LEN 1024
 
 typedef struct {
   int      nof_subframes;
@@ -24,12 +27,15 @@ typedef struct {
   bool     disable_plots;
   bool     disable_plots_except_constellation;
   bool     disable_cfo;
-  bool     log_dl;
-  bool     log_ul;
   uint32_t time_offset;
   int      force_N_id_2;
-  uint16_t rnti;
+  int      mode;
+  bool     use_replay_hdr;
+  bool     debug;
+  bool     silent;
+  bool     decode_pdcch;
   char*    input_file_name;
+  char*    output_file_name;
   int      file_offset_time;
   float    file_offset_freq;
   uint32_t file_nof_prb;
@@ -47,8 +53,15 @@ typedef struct {
   uint32_t rx_nof_rx_ant_vec[MAX_NOF_RF_DEV];
 
   int      remote_enable;
-  int 	   decode_single_ue;
   int 	   decode_SIB;
+  int 	   decode_RAR;
+  int 	   rar_seed_tracker;
+  int 	   rach_filter_only;
+  int 	   mark_security_phase;
+  int 	   pcap_mac;
+  int 	   probe_blind_dci;
+  int 	   pcap_max_mb;
+  int 	   qam_retry;
 
   float    rf_gain;
   int      net_port;
@@ -67,6 +80,12 @@ typedef struct {
   bool     enable_256qam;
   bool     use_standard_lte_rate;
   char sib_logs[SIB_LOGS_PATH_MAX_LEN];
+  char out_path[OUT_PATH_MAX_LEN];
+
+  char     comment[COMMENT_MAX_LEN];
+  char     location[LOCATION_MAX_LEN];
+
+  int      exit_on_desync;
 } prog_args_t;
 
 void args_default(prog_args_t* args);

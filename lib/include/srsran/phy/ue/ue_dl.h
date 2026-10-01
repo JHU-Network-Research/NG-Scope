@@ -62,7 +62,7 @@
 #define SRSRAN_MAX_CANDIDATES_COM 6 // From 36.213 Table 9.1.1-1
 #define SRSRAN_MAX_CANDIDATES (SRSRAN_MAX_CANDIDATES_UE + SRSRAN_MAX_CANDIDATES_COM)
 
-#define SRSRAN_MAX_FORMATS 4
+#define SRSRAN_MAX_FORMATS 8
 
 #define SRSRAN_MI_NOF_REGS ((q->cell.frame_type == SRSRAN_FDD) ? 1 : 6)
 #define SRSRAN_MI_MAX_REGS 6
@@ -195,6 +195,19 @@ SRSRAN_API int srsran_ue_dl_find_dl_dci(srsran_ue_dl_t*     q,
                                         uint16_t            rnti,
                                         srsran_dci_dl_t     dci_msg[SRSRAN_MAX_DCI_MSG]);
 
+/* Like srsran_ue_dl_find_dl_dci(), but with the UE-specific search-space format set supplied
+ * by the caller instead of derived from dl_cfg->cfg.tm, and with the common-SS Format1A pass
+ * requested explicitly rather than through dl_cfg->cfg.dci_common_ss. See the definition in
+ * ue_dl.c for why a sniffer needs both. */
+SRSRAN_API int srsran_ue_dl_find_dl_dci_formats(srsran_ue_dl_t*            q,
+                                                srsran_dl_sf_cfg_t*        sf,
+                                                srsran_ue_dl_cfg_t*        dl_cfg,
+                                                uint16_t                   rnti,
+                                                const srsran_dci_format_t* ue_formats,
+                                                uint32_t                   nof_ue_formats,
+                                                bool                       search_common_1a,
+                                                srsran_dci_dl_t            dci_dl[SRSRAN_MAX_DCI_MSG]);
+
 SRSRAN_API int srsran_ue_dl_dci_to_pdsch_grant(srsran_ue_dl_t*       q,
                                                srsran_dl_sf_cfg_t*   sf,
                                                srsran_ue_dl_cfg_t*   cfg,
@@ -205,7 +218,9 @@ SRSRAN_API int srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(srsran_ue_dl_t*       
                                                srsran_dl_sf_cfg_t*   sf,
                                                srsran_ue_dl_cfg_t*   cfg,
                                                srsran_dci_dl_t*      dci,
-                                               srsran_pdsch_grant_t* grant);
+                                               srsran_pdsch_grant_t* grant,
+                                               uint32_t*             out_L_crb,
+                                               uint32_t*             out_RB_start);
 
 /* Decodes PDSCH and PHICH in the signal processed in a previous call to decode_fft_estimate() */
 SRSRAN_API int srsran_ue_dl_decode_pdsch(srsran_ue_dl_t*     q,
@@ -273,7 +288,7 @@ SRSRAN_API int srsran_ue_decode_dci_yx(srsran_ue_dl_t*     q,
                                  srsran_dl_sf_cfg_t* sf,
                                  srsran_ue_dl_cfg_t* cfg,
                                  srsran_pdsch_cfg_t* pdsch_cfg,
-                                 ngscope_dci_per_sub_t* dci_res, 
+                                 ngscope_dci_per_sub_t* dci_res,
 								 uint16_t 				targetRNTI);
 
 SRSRAN_API void srsran_ue_dl_save_signal(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_pdsch_cfg_t* pdsch_cfg);

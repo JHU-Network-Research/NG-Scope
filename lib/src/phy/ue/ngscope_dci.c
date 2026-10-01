@@ -1,6 +1,11 @@
+#include <srsran/phy/common/phy_common.h>
 #include <string.h>
 #include "srsran/srsran.h"
 #include "srsran/phy/ue/ngscope_dci.h"
+#include "dciLib/tbs_table_probe.h"
+#include "dciLib/rach_filter.h"
+
+bool __attribute__((weak)) debug = false;
 
 /* Combination of unpack and translate to grant */
 // Downlink first
@@ -13,19 +18,58 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
                                         srsran_pdsch_grant_t* dci_dl_grant)
 {
     if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, &cfg->cfg.dci, dci_msg, dci_dl)) {
-        //ERROR("Unpacking DL DCI");
+        if (dci_msg->format == SRSRAN_DCI_FORMAT2)
+            ERROR("Unpacking DL DCI");
         return SRSRAN_ERROR;
     }
-    if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, dci_dl_grant)) {
-        //ERROR("Translate DL DCI to grant");
+
+    srsran_tm_t tm = infer_tm_from_dci(&q->cell, dci_dl);
+    cfg->cfg.tm = tm;
+    /* A PDCCH order is not a downlink assignment. It is the eNB telling this UE to start a
+     * random access procedure with a named preamble, and it carries no transport block at
+     * all -- srsran_dci_msg_unpack_pdsch() returns as soon as it recognises the pattern,
+     * leaving every resource-allocation field unset.
+     *
+     * Record it and stop. Building a grant from it produced a garbage allocation that was
+     * reported as a DCI and fed to the MCS->TBS probe as if it were a real one; recording it
+     * here means the order is not lost, which matters because it is the only thing that
+     * distinguishes a network-ordered contention-free RACH from a handover into this cell. */
+    if (dci_dl->is_pdcch_order) {
+        ngscope_pdcch_order_note_bound(dci_msg->rnti, sf->tti, dci_dl->preamble_idx,
+                                       dci_dl->prach_mask_idx);
+        if (dci_msg->format == SRSRAN_DCI_FORMAT2)
+            ERROR("order note bound");
         return SRSRAN_ERROR;
     }
+    uint32_t before_crb;
+    memcpy(&before_crb, &(dci_msg->l_crb), sizeof(uint32_t)); //= dci_msg->l_crb;
+    uint32_t before_rb;
+    memcpy(&before_rb, &(dci_msg->rb_start), sizeof(uint32_t));//= dci_msg->rb_start;
+    // if (srsran_ue_dl_dci_to_pdsch_grant_wo_mimo_yx(q, sf, cfg, dci_dl, dci_dl_grant, &(dci_msg->l_crb), &(dci_msg->rb_start))) {
+    //     //ERROR("Translate DL DCI to grant");
+    //     return SRSRAN_ERROR;
+    // }
+
+    if (srsran_ue_dl_dci_to_pdsch_grant(q,sf, cfg, dci_dl, dci_dl_grant)) {
+        return SRSRAN_ERROR;
+    }
+
+    /* Which MCS->TBS table this cell uses is a guess (see enable_256qam), and it sets the tbs
+     * we report. Evaluate every grant under both tables so the guess can be checked against
+     * physics at teardown: an effective code rate above 1 rules a table out. Counting only.
+     *
+     * These are candidates that passed the PDCCH CRC but have not yet been pruned, so a few
+     * are false positives. That is fine for a population statistic and the verdict says so
+     * when both tables look impossible. */
+    ngscope_tbs_probe_add(dci_dl_grant, dci_dl, cfg->cfg.pdsch.use_tbs_index_alt, dci_msg->corr);
+    // fprintf(stderr, "BEFORE: l_crb=%u, rb_start=%u, AFTER: l_crb=%u, rb_start=%u\n", before_crb, before_rb, dci_msg->l_crb, dci_msg->rb_start);
+
     return SRSRAN_SUCCESS;
 }
 //
 //void copy_single_dl_dci(ngscope_dci_msg_t* 		dci_array,
 //						srsran_dci_location_t 	loc,
-//                        float decode_prob, 
+//                        float decode_prob,
 //						float corr,
 //                        srsran_dci_dl_t* 		dci_dl,
 //                        srsran_pdsch_grant_t* 	dci_dl_grant)
@@ -35,12 +79,12 @@ int srsran_ngscope_unpack_dl_dci_2grant(srsran_ue_dl_t*     q,
 //    dci_array->harq    = dci_dl->pid;
 //    dci_array->nof_tb  = dci_dl_grant->nof_tb;
 //    dci_array->dl      = true;
-// 
+//
 //    dci_array->decode_prob  = decode_prob;
 //    dci_array->corr         = corr;
 //
 //    dci_array->loc       	= loc;
-//   
+//
 //    // transport block 1
 //    dci_array->tb[0].mcs      = dci_dl_grant->tb[0].mcs_idx;
 //    dci_array->tb[0].tbs      = dci_dl_grant->tb[0].tbs;
@@ -67,17 +111,38 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
                                         srsran_dci_dl_t* dci_dl,
                                         srsran_pdsch_grant_t* dci_dl_grant)
 {
+
+
     dci_array[i][j].rnti    = dci_dl->rnti;
     dci_array[i][j].prb     = dci_dl_grant->nof_prb;
     dci_array[i][j].harq    = dci_dl->pid;
     dci_array[i][j].nof_tb  = dci_dl_grant->nof_tb;
     dci_array[i][j].dl      = true;
- 
+
+    /* Stamp the format here, at the point the candidate is created.
+     *
+     * srsran_ngscope_tree_copy_dci_fromArray2PerSub() also sets it, but that is not the only
+     * route into dci_per_sub: prune_based_on_topN() and prune_based_on_activeUE() reach it
+     * through ngscope_push_dci_to_per_sub(), which is a plain memcpy of the tree node. Those
+     * DCIs used to arrive with format == 0 == SRSRAN_DCI_FORMAT0, which is why the format
+     * column of dci-decode-debug-<n>.csv read Format0 for a downlink message. i is the tree's
+     * format index, the same one ngscope_index_to_format() decodes. */
+    dci_array[i][j].format  = ngscope_index_to_format(i);
+
     dci_array[i][j].decode_prob      = decode_prob;
     dci_array[i][j].corr             = corr;
 
     dci_array[i][j].loc       	= loc;
-   
+
+    // dci_array[i][j].nof_bits = nof_bits;
+    // dci_array[i][j].agreement = agreement;
+    // dci_array[i][j].repeat_corr = repeat_corr;
+
+    // fprintf(stderr,"Setting l_crb=%u, rb_start=%u\n",l_crb,rb_start);
+    // dci_array[i][j].l_crb       = l_crb;
+    // dci_array[i][j].rb_start    = rb_start;
+    // dci_array[i][j].alloc_type  = dci_dl->alloc_type;
+
     // transport block 1
     dci_array[i][j].tb[0].mcs      = dci_dl_grant->tb[0].mcs_idx;
     dci_array[i][j].tb[0].tbs      = dci_dl_grant->tb[0].tbs;
@@ -93,7 +158,11 @@ void srsran_ngscope_dci_into_array_dl(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
         //dci_array[i][j].tb[1].ndi      = dci_dl_grant->tb[1].ndi;
     	dci_array[i][j].tb[1].ndi      = dci_dl->tb[1].ndi;
     }
-    return;
+
+    // if(dci_dl->rnti == 97){
+    //             printf("CHECK9887: SETTING format to %d: %d, is dl: %d\n", format, ngscope_index_to_format(format), dci_per_sub->dl_msg[dci_per_sub->nof_dl_dci].dl);
+    // }
+    // return;
 }
 
 //Uplink
@@ -141,6 +210,10 @@ void srsran_ngscope_dci_into_array_ul(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
     dci_array[i][j].nof_tb  = 1;
     dci_array[i][j].dl      = false;
 
+    /* See the note in srsran_ngscope_dci_into_array_dl(). An uplink candidate is always
+     * Format0, which is also tree format index 0. */
+    dci_array[i][j].format  = SRSRAN_DCI_FORMAT0;
+
     // transport block 1
     dci_array[i][j].tb[0].mcs      = dci_ul_grant->tb.mcs_idx;
     dci_array[i][j].tb[0].tbs      = dci_ul_grant->tb.tbs;
@@ -148,7 +221,7 @@ void srsran_ngscope_dci_into_array_ul(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
     //dci_array[i][j].tb[0].ndi      = dci_ul_grant->tb.ndi;
 
     dci_array[i][j].loc       	= loc;
-	
+
     dci_array[i][j].phich.n_dmrs   =  dci_ul->n_dmrs;
     dci_array[i][j].phich.n_prb_tilde  = dci_ul_grant->n_prb_tilde[0];
     dci_array[i][j].phich.freq_hopping = dci_ul_grant->freq_hopping+10;
@@ -156,17 +229,21 @@ void srsran_ngscope_dci_into_array_ul(ngscope_dci_msg_t dci_array[][MAX_CANDIDAT
     dci_array[i][j].decode_prob      = decode_prob;
     dci_array[i][j].corr             = corr;
 
+    // dci_array[i][j].nof_bits = nof_bits;
+    // dci_array[i][j].agreement = agreement;
+    // dci_array[i][j].repeat_corr = repeat_corr;
+
     return;
 }
 
-   
+
 int srsran_ngscope_dci_prune_ret(ngscope_dci_per_sub_t* q)
 {
     int nof_dl_msg  = q->nof_dl_dci;
     ngscope_dci_msg_t  dl_msg[MAX_DCI_PER_SUB];
     if(nof_dl_msg > MAX_DCI_PER_SUB){
         printf("\n\n\n\n nof_dl_msg:%d cannot be larger than MAX DCI_PER SUB \n\n\n\n", nof_dl_msg);
-        return 0; 
+        return 0;
     }
     int cnt = 0;
     for(int i=0; i<nof_dl_msg; i++){
@@ -201,10 +278,10 @@ int srsran_ngscope_dci_prune_ret(ngscope_dci_per_sub_t* q)
                 printf("Non-recongized DCI format:%d! i:%d nof_dl_msg:%d\n", q->dl_msg[i].format, i, nof_dl_msg);
                 break;
         }
-    } 
+    }
     memset(q->dl_msg, 0, nof_dl_msg * sizeof(ngscope_dci_msg_t));
     memcpy(q->dl_msg, dl_msg, cnt * sizeof(ngscope_dci_msg_t));
-    
+
     q->nof_dl_dci = cnt;
     return 0;
 }
@@ -212,7 +289,7 @@ int srsran_ngscope_dci_prune_ret(ngscope_dci_per_sub_t* q)
 int srsran_ngscope_dci_prune(ngscope_tree_t* q,
 								uint32_t sf_idx)
 {
-    //printf("nof_location:%d nof_cce:%d sf_idx:%d \n", nof_location, nof_cce, sf_idx);
+    // printf("DEBUG: nof_location:%d nof_cce:%d sf_idx:%d \n", nof_location, nof_cce, sf_idx);
     uint32_t ncce = 0;
     for(int i=0; i<q->nof_location; i++){
         ncce = q->dci_location[i].ncce;
@@ -222,6 +299,8 @@ int srsran_ngscope_dci_prune(ngscope_tree_t* q,
             if(rnti > 0){// not empty
                 // Rule 1: corr based cuting: and decode-prob based pruning
                 if (!isnormal(q->dci_array[j][i].corr) || q->dci_array[j][i].corr < 0.5f || q->dci_array[j][i].decode_prob < 75) {
+                    if (debug)
+                        printf("DEBUG: pruning msg with bad corr/decode prob rnti=%d, corr=%.3f, decode prob=%.3f at L=%d, format idx=%d, loc idx=%d\n", q->dci_array[j][i].rnti,q->dci_array[j][i].corr,q->dci_array[j][i].decode_prob,q->dci_array[j][i].loc.L, i, j);
                     ZERO_OBJECT(q->dci_array[j][i]);
 					continue;
                 }
@@ -230,6 +309,8 @@ int srsran_ngscope_dci_prune(ngscope_tree_t* q,
                 bool loc_match = srsran_ngscope_space_match_yx(rnti,
                                     q->nof_cce, sf_idx, ncce, ngscope_index_to_format(j));
                 if(loc_match == false){
+                    if (debug)
+                        printf("DEBUG: pruning msg with invalid loc match rnti=%d, corr=%.3f, decode prob=%.3f at L=%d, format idx=%d, loc idx=%d\n", q->dci_array[j][i].rnti,q->dci_array[j][i].corr,q->dci_array[j][i].decode_prob,q->dci_array[j][i].loc.L, i, j);
                     ZERO_OBJECT(q->dci_array[j][i]);
 					continue;
                 }
@@ -244,3 +325,52 @@ int srsran_ngscope_dci_prune(ngscope_tree_t* q,
 }
 
 
+srsran_tm_t infer_tm_from_dci(srsran_cell_t* cell, srsran_dci_dl_t* dci)
+{
+  if (cell->nof_ports == 1) {
+    return SRSRAN_TM1;
+  }
+
+  switch (dci->format) {
+    case SRSRAN_DCI_FORMAT1:
+      // Format 1: Single codeword, could be TM1, TM2, or TM7
+      return SRSRAN_TM2;  // Assume transmit diversity
+
+    case SRSRAN_DCI_FORMAT1A:
+      // Format 1A: Compact, single codeword - typically TM2 fallback
+      return SRSRAN_TM2;
+
+    case SRSRAN_DCI_FORMAT1B:
+      // Format 1B: Closed-loop single rank (TM6)
+      return SRSRAN_TM6;
+
+    case SRSRAN_DCI_FORMAT1C:
+      // Format 1C: Very compact, single codeword
+      return SRSRAN_TM2;
+
+    case SRSRAN_DCI_FORMAT2:
+      // Format 2: Closed-loop spatial multiplexing (TM4)
+      return SRSRAN_TM4;
+
+    case SRSRAN_DCI_FORMAT2A:
+      // Format 2A: Open-loop spatial multiplexing (TM3)
+      return SRSRAN_TM3;
+
+    case SRSRAN_DCI_FORMAT2B:
+      // Format 2B: Dual-layer beamforming (TM8)
+      return SRSRAN_TM8;
+
+      // JH TODO: return error for unsupported TMs or formats?
+    case SRSRAN_DCI_FORMAT2C:
+      // Format 2C: Up to 8-layer transmission (TM9)
+      return SRSRAN_TM9;
+
+    case SRSRAN_DCI_FORMAT2D:
+      // Format 2D: Up to 8-layer transmission (TM10)
+      return SRSRAN_TM10;
+
+    default:
+      // Default to transmit diversity for unknown formats
+      return (cell->nof_ports > 1) ? SRSRAN_TM2 : SRSRAN_TM1;
+  }
+}

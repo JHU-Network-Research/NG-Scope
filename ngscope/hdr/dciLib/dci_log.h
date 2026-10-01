@@ -32,7 +32,6 @@ typedef struct{
 
 typedef struct{
     int         nof_cell;
-    uint16_t    targetRNTI;
 
 	FILE* 		fd_dl[MAX_NOF_RF_DEV];
 	FILE* 		fd_ul[MAX_NOF_RF_DEV];
@@ -41,9 +40,9 @@ typedef struct{
 	bool  		log_ul[MAX_NOF_RF_DEV];
 	bool  		log_phich[MAX_NOF_RF_DEV];
 
-	// recording the current header of the dci ring buffer 
+	// recording the current header of the dci ring buffer
 	int 		curr_header[MAX_NOF_RF_DEV];
-	// record whether the cell is ready or notr 
+	// record whether the cell is ready or notr
 	bool 		cell_ready[MAX_NOF_RF_DEV];
 
 	FILE* 		fd_log_cell;
@@ -56,8 +55,8 @@ void fill_file_descriptor(FILE* fd_dl[MAX_NOF_RF_DEV],
 							FILE* 	fd_phich[MAX_NOF_RF_DEV],
 							ngscope_config_t* config);
 //
-//							bool 	log_dl, 
-//							bool 	log_ul, 
+//							bool 	log_dl,
+//							bool 	log_ul,
 //							int  	nof_rf_dev,
 //							long long* rf_freq);
 

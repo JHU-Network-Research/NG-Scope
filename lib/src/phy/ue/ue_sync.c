@@ -149,6 +149,7 @@ int srsran_ue_sync_start_agc(srsran_ue_sync_t* q,
 {
   int n     = srsran_agc_init_uhd(&q->agc, SRSRAN_AGC_MODE_PEAK_AMPLITUDE, 0, set_gain_callback, q->stream);
   q->do_agc = n == 0 ? true : false;
+  printf("[AGC] do_agc=%d\n", q->do_agc);
   if (q->do_agc) {
     srsran_agc_set_gain_range(&q->agc, min_gain_db, max_gain_db);
     srsran_agc_set_gain(&q->agc, init_gain_value_db);
@@ -199,6 +200,20 @@ int srsran_ue_sync_init_multi_decim(
       q, max_prb, search_cell, recv_callback, nof_rx_antennas, stream_handler, 1, SYNC_MODE_PSS);
 }
 
+int srsran_ue_sync_init_multi_decim_agc(
+    srsran_ue_sync_t* q,
+    uint32_t          max_prb,
+    bool              search_cell,
+    int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
+    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*),
+    uint32_t nof_rx_antennas,
+    void*    stream_handler,
+    int      decimate)
+{
+  return srsran_ue_sync_init_multi_decim_mode_agc(
+      q, max_prb, search_cell, recv_callback, recv_callback_agc, nof_rx_antennas, stream_handler, 1, SYNC_MODE_PSS);
+}
+
 int srsran_ue_sync_init_multi_decim_mode(
     srsran_ue_sync_t* q,
     uint32_t          max_prb,
@@ -219,6 +234,116 @@ int srsran_ue_sync_init_multi_decim_mode(
     q->mode                         = mode;
     q->stream                       = stream_handler;
     q->recv_callback                = recv_callback;
+    q->nof_rx_antennas              = nof_rx_antennas;
+    q->fft_size                     = srsran_symbol_sz(max_prb);
+    q->sf_len                       = SRSRAN_SF_LEN(q->fft_size);
+    q->file_mode                    = false;
+    q->agc_period                   = 0;
+    q->sample_offset_correct_period = DEFAULT_SAMPLE_OFFSET_CORRECT_PERIOD;
+    q->sfo_ema                      = DEFAULT_SFO_EMA_COEFF;
+
+    q->max_prb = max_prb;
+
+    q->cfo_ref_max     = DEFAULT_CFO_REF_MAX;
+    q->cfo_ref_min     = DEFAULT_CFO_REF_MIN;
+    q->cfo_pss_min     = DEFAULT_CFO_PSS_MIN;
+    q->cfo_loop_bw_pss = DEFAULT_CFO_BW_PSS;
+    q->cfo_loop_bw_ref = DEFAULT_CFO_BW_REF;
+
+    q->cfo_correct_enable_find  = false;
+    q->cfo_correct_enable_track = true;
+
+    q->pss_stable_cnt     = 0;
+    q->pss_stable_timeout = DEFAULT_PSS_STABLE_TIMEOUT;
+
+    if (search_cell) {
+      /* If the cell is unkown, we search PSS/SSS in 5 ms */
+      q->nof_recv_sf = 5;
+
+    } else {
+      /* If the cell is known, we work on a 1ms basis */
+      q->nof_recv_sf = 1;
+    }
+
+    q->frame_len = q->nof_recv_sf * q->sf_len;
+
+    if (q->fft_size < 700 && q->decimate) {
+      q->decimate = 1;
+    }
+
+    if (q->mode == SYNC_MODE_PSS) {
+      if (srsran_sync_init_decim(&q->sfind, q->frame_len, q->frame_len, q->fft_size, q->decimate)) {
+        ERROR("Error initiating sync find");
+        goto clean_exit;
+      }
+      if (search_cell) {
+        if (srsran_sync_init(&q->strack, q->frame_len, TRACK_FRAME_SIZE, q->fft_size)) {
+          ERROR("Error initiating sync track");
+          goto clean_exit;
+        }
+      } else {
+        if (srsran_sync_init(&q->strack,
+                             q->frame_len,
+                             SRSRAN_MAX(TRACK_FRAME_SIZE, SRSRAN_CP_LEN_NORM(1, q->fft_size)),
+                             q->fft_size)) {
+          ERROR("Error initiating sync track");
+          goto clean_exit;
+        }
+      }
+
+      // Configure FIND and TRACK sync objects behaviour (this configuration is always the same)
+      srsran_sync_set_cfo_i_enable(&q->sfind, false);
+      srsran_sync_set_cfo_pss_enable(&q->sfind, true);
+      srsran_sync_set_pss_filt_enable(&q->sfind, true);
+      srsran_sync_set_sss_eq_enable(&q->sfind, false);
+
+      // During track, we do CFO correction outside the sync object
+      srsran_sync_set_cfo_i_enable(&q->strack, false);
+      srsran_sync_set_cfo_pss_enable(&q->strack, true);
+      srsran_sync_set_pss_filt_enable(&q->strack, true);
+      srsran_sync_set_sss_eq_enable(&q->strack, false);
+
+      // TODO: CP detection not working very well. Not supporting Extended CP right now
+      srsran_sync_cp_en(&q->strack, false);
+      srsran_sync_cp_en(&q->sfind, false);
+
+      // Enable SSS on find and disable in track
+      srsran_sync_sss_en(&q->sfind, true);
+      srsran_sync_sss_en(&q->strack, false);
+    }
+
+    ret = SRSRAN_SUCCESS;
+  }
+
+clean_exit:
+  if (ret == SRSRAN_ERROR) {
+    srsran_ue_sync_free(q);
+  }
+  return ret;
+}
+
+int srsran_ue_sync_init_multi_decim_mode_agc(
+    srsran_ue_sync_t* q,
+    uint32_t          max_prb,
+    bool              search_cell,
+    int(recv_callback)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*),
+    int(recv_callback_agc)(void*, cf_t* [SRSRAN_MAX_CHANNELS], uint32_t, srsran_timestamp_t*, srsran_agc_t*),
+    uint32_t              nof_rx_antennas,
+    void*                 stream_handler,
+    int                   decimate,
+    srsran_ue_sync_mode_t mode)
+{
+  int ret = SRSRAN_ERROR_INVALID_INPUTS;
+
+  if (q != NULL && stream_handler != NULL && nof_rx_antennas <= SRSRAN_MAX_CHANNELS && recv_callback_agc != NULL) {
+    ret = SRSRAN_ERROR;
+    // int decimate = q->decimate;
+    bzero(q, sizeof(srsran_ue_sync_t));
+    q->decimate                     = decimate;
+    q->mode                         = mode;
+    q->stream                       = stream_handler;
+    q->recv_callback                = recv_callback;
+    q->recv_callback_agc            = recv_callback_agc;
     q->nof_rx_antennas              = nof_rx_antennas;
     q->fft_size                     = srsran_symbol_sz(max_prb);
     q->sf_len                       = SRSRAN_SF_LEN(q->fft_size);
@@ -719,9 +844,38 @@ static int receive_samples(srsran_ue_sync_t* q, cf_t* input_buffer[SRSRAN_MAX_CH
   for (int i = 0; i < q->nof_rx_antennas; i++) {
     ptr[i] = &input_buffer[i][q->next_rf_sample_offset];
   }
-  if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
-    return SRSRAN_ERROR;
+  // srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
+
+  bool do_agc = q->recv_callback_agc &&  q->do_agc &&
+    ((q->state == SF_FIND) ||
+      ((q->mode == SYNC_MODE_PSS) &&
+      ((q->sfind.frame_type == SRSRAN_FDD && (q->sf_idx == 0 || q->sf_idx == 5)) || (q->sfind.frame_type == SRSRAN_TDD && (q->sf_idx == 1 || q->sf_idx == 6))) &&
+      (q->do_agc && (q->agc_period == 0 || (q->agc_period && (q->frame_total_cnt % q->agc_period) == 0)))
+    ));
+
+  if (do_agc){
+    // fprintf(stderr, "[AGC] USING AGC CALLBACK\n");
+    if (q->recv_callback_agc(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp, &q->agc) < 0) {
+      return SRSRAN_ERROR;
+    }
+  }else{
+    // fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
+    if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
+      return SRSRAN_ERROR;
+    }
   }
+
+  // if (q->recv_callback){
+  //   fprintf(stderr, "[AGC] USING NON AGC CALLBACK\n");
+  //   if (q->recv_callback(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp) < 0) {
+  //     return SRSRAN_ERROR;
+  //   }
+  // } else {
+  //   fprintf(stderr, "[AGC] USING AGC CALLBACK\n");
+  //   if (q->recv_callback_agc(q->stream, ptr, q->frame_len - q->next_rf_sample_offset, &q->last_timestamp, &q->agc, q->state) < 0) {
+  //     return SRSRAN_ERROR;
+  //   }
+  // }
 
   ///< reset time offset
   q->next_rf_sample_offset = 0;
@@ -735,6 +889,7 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
                             const uint32_t    max_num_samples)
 {
   int ret = SRSRAN_ERROR_INVALID_INPUTS;
+  // printf("DEBUG: retrieving samples in UE SYNC, max_num_samples=%d\n",max_num_samples);
 
   if (q != NULL && input_buffer != NULL) {
     if (q->file_mode) {
@@ -768,8 +923,10 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
       INFO("Reading %d samples. sf_idx = %d", q->sf_len, q->sf_idx);
       ret = 1;
     } else {
+      // fprintf(stdout, "[AGC] Retrieving samples at TTI=%d%d\n", q->frame_number, q->sf_idx);
       if (receive_samples(q, input_buffer, max_num_samples)) {
         ERROR("Error receiving samples");
+        fprintf(stderr, "Error receiving samples at frame number=%d, sf_idx=%d\n", q->frame_number, q->sf_idx);
         return SRSRAN_ERROR;
       }
 
@@ -784,15 +941,29 @@ int srsran_ue_sync_zerocopy(srsran_ue_sync_t* q,
               }
             }
           }
-
+          // fprintf(stderr, "mode=%d\n", q->mode);
           // Run mode-specific find operation
           if (q->mode == SYNC_MODE_PSS) {
             ret = srsran_ue_sync_run_find_pss_mode(q, input_buffer);
+            // switch (ret) {
+            //   case SRSRAN_SYNC_NOFOUND:
+            //     fprintf(stdout, "SYNC NOT FOUND: ret=%d\n", ret);
+            //     break;
+            //   case SRSRAN_SYNC_FOUND_NOSPACE:
+            //     fprintf(stdout, "SYNC FOUND NOSPACE: ret=%d\n", ret);
+            //     break;
+            //   case SRSRAN_SYNC_ERROR:
+            //     fprintf(stdout, "SYNC ERROR: ret=%d\n", ret);
+            //     break;
+            //   case SRSRAN_SYNC_FOUND:
+            //     break;
+            // }
           } else if (q->mode == SYNC_MODE_GNSS) {
             ret = srsran_ue_sync_run_find_gnss_mode(q, input_buffer, max_num_samples);
           }
 
           if (q->do_agc) {
+            // fprintf(stdout, "[AGC 1] Applying agc to samples at frame number=%d, sf_idx=%d, current_gain=%.02f!\n", q->frame_number, q->sf_idx, q->agc.gain_db);
             srsran_agc_process(&q->agc, input_buffer[0], q->sf_len);
           }
 
@@ -877,6 +1048,7 @@ int srsran_ue_sync_run_track_pss_mode(srsran_ue_sync_t* q, cf_t* input_buffer[SR
       (q->sfind.frame_type == SRSRAN_TDD && (q->sf_idx == 1 || q->sf_idx == 6))) {
     // Process AGC every period
     if (q->do_agc && (q->agc_period == 0 || (q->agc_period && (q->frame_total_cnt % q->agc_period) == 0))) {
+      // fprintf(stdout, "[AGC 2] Applying agc to samples at frame number=%d, sf_idx=%d, current_gain=%.02f!\n", q->frame_number, q->sf_idx, q->agc.gain_db);
       srsran_agc_process(&q->agc, input_buffer[0], q->sf_len);
     }
 
@@ -978,7 +1150,6 @@ int srsran_ue_sync_run_find_gnss_mode(srsran_ue_sync_t* q,
   }
 
   DEBUG("Received %d samples during alignment", sample_count);
-
   // do one normal receive, the first time-aligned subframe
   if (receive_samples(q, input_buffer, max_num_samples)) {
     ERROR("Error receiving samples");

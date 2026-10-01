@@ -58,6 +58,19 @@ typedef struct{
 
 void ngscope_ue_tracker_update_per_tti(ngscope_ue_tracker_t* q, uint32_t tti);
 void ngscope_ue_tracker_enqueue_ue_rnti(ngscope_ue_tracker_t* q, uint32_t tti, uint16_t rnti, bool dl);
+
+/* Prime the tracker with an RNTI recovered from a Random Access Response.
+ *
+ * Unlike ngscope_ue_tracker_enqueue_ue_rnti() this never sets active_ue_list and never
+ * touches the top-N table, so a RAR on its own cannot admit anything to the output:
+ *   - prune_based_on_activeUE() pushes tree candidates with no corr / decode_prob /
+ *     search-space check, so "active" must stay gated on an actual PDCCH decode;
+ *   - an entry with active_ue_list set but ue_cnt == 0 is never reclaimed by
+ *     kick_inactive_ue(), which tests ue_cnt in both of its branches.
+ * What it does do is make ue_last_active recent, so the next genuine sighting of this RNTI
+ * promotes it through the normal enqueue path instead of needing two sightings of its own.
+ * ue_cnt is left non-zero so the entry is reclaimed after INACTIVE_UE_THD_T if nothing follows. */
+void ngscope_ue_tracker_seed_rach_rnti(ngscope_ue_tracker_t* q, uint32_t tti, uint16_t rnti);
 void ngscope_ue_tracker_update_per_tti(ngscope_ue_tracker_t* q, uint32_t tti);
 void ngscope_ue_tracker_info(ngscope_ue_tracker_t* q, uint32_t tti);
 

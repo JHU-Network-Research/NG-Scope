@@ -767,6 +767,7 @@ int srsran_wiener_dl_run(srsran_wiener_dl_t* q,
 
     // Get estimator state
     srsran_wiener_dl_state_t* state = q->state[tx][rx];
+    printf("Got state for tx=%d,rx=%d, %d\n", tx, rx, state != NULL);
 
     // Process symbol
     switch (m) {

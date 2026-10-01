@@ -1,0 +1,3 @@
+# The GTK backend imports `gi` from the system, so the venv must be created with
+# --system-site-packages. See README.md.
+pywebview>=5.0

@@ -23,10 +23,19 @@
 #include "ngscope/hdr/dciLib/thread_exit.h"
 #include "ngscope/hdr/dciLib/ue_tracker.h"
 #include "ngscope/hdr/dciLib/decode_sib.h"
+#include "ngscope/hdr/dciLib/decode_rar.h"
+#include "ngscope/hdr/dciLib/rach_filter.h"
+#include "ngscope/hdr/dciLib/tbs_table_probe.h"
+#include "ngscope/hdr/dciLib/mac_pcap.h"
+#include "ngscope/hdr/dciLib/security_ctx.h"
+#include "ngscope/hdr/dciLib/security_rrc.h"
+
+#include "ngscope/hdr/dciLib/ngscope_rx.h"
+#include "ngscope/hdr/dciLib/load_config.h"
 
 extern bool go_exit;
 
-extern pthread_mutex_t     cell_mutex; 
+extern pthread_mutex_t     cell_mutex;
 extern srsran_cell_t       cell_vec[MAX_NOF_RF_DEV];
 
 extern dci_ready_t              dci_ready;
@@ -37,38 +46,51 @@ extern bool task_scheduler_up[MAX_NOF_RF_DEV];
 extern bool task_scheduler_closed[MAX_NOF_RF_DEV];
 extern pthread_mutex_t     scheduler_close_mutex;
 
-/******************* Global buffer for passing subframe IQ  ******************/ 
-ngscope_sf_buffer_t sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER] = 
+extern ngscope_mode_t mode;
+rx_record_header_t record_hdr;
+
+uint64_t nof_times_assigned = 0;
+uint64_t nof_times_read = 0;
+uint64_t nof_decode_pdcch_false = 0;
+uint64_t nof_desync = 0;
+
+bool debug = true;
+bool silent = false;
+
+/******************* Global buffer for passing subframe IQ  ******************/
+ngscope_sf_buffer_t sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER] =
 {
 {
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
 },
 {
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
 },
 {
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
 },
 {
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
-    {false, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
+    {false, 0, 0, 0, {NULL}, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER},
 }
 };
 bool                sf_token[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER];
 
 pthread_mutex_t     token_mutex[MAX_NOF_RF_DEV] = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER,
 					 								PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER};
+pthread_cond_t 	    token_cond[MAX_NOF_RF_DEV] = {PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER,
+													PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER};
 
 pend_ack_list       ack_list;
 pthread_mutex_t     ack_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -78,34 +100,45 @@ pthread_mutex_t      ue_tracker_mutex[MAX_NOF_RF_DEV] = {PTHREAD_MUTEX_INITIALIZ
 					 								PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER};
 
 
-// This is the container for dci that are not allocated 
+// This is the container for dci that are not allocated
 task_skip_tti_t 	skip_tti[MAX_NOF_RF_DEV];
 
 task_tmp_buffer_t   task_tmp_buffer[MAX_NOF_RF_DEV];
 pthread_mutex_t     tmp_buf_mutex[MAX_NOF_RF_DEV] = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER,
 					 								PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER};
 
+
+int scan_decoders(int rf_idx, int nof_decoder){
+    for(int i=0;i<nof_decoder;i++){
+        if(sf_token[rf_idx][i] == false){
+            // Set the token to true to mark that this decoder has been taken
+            // Do remember to free the token
+            sf_token[rf_idx][i] = true;
+            return i;
+        }
+    }
+    return -1;
+}
+
 int find_idle_decoder(int rf_idx, int nof_decoder){
     int idle_idx = -1;
     pthread_mutex_lock(&token_mutex[rf_idx]);
-    for(int i=0;i<nof_decoder;i++){
-        if(sf_token[rf_idx][i] == false){       
-            idle_idx = i;
-            // Set the token to true to mark that this decoder has been taken
-            // Do remember to free the token 
-            sf_token[rf_idx][idle_idx] = true;
-            break;
-        } 
-    } 
+    idle_idx = scan_decoders(rf_idx, nof_decoder);
     pthread_mutex_unlock(&token_mutex[rf_idx]);
     return idle_idx;
 }
+
 /*****************************************************************************/
 
 
-/********************** callback wrapper **********************/ 
+/********************** callback wrapper **********************/
 int srsran_rf_recv_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
+// srsran_ue_sync_t->stream, cf_t* [SRSRAN_MAX_CHANNELS], srsran_ue_sync_t->frame_len - srsran_ue_sync_t->next_rf_sample-offset, srsran_ue_sync_t->last_timestamp
 {
+
+    // THIS IS WHERE SAMPLES ARE READ
+  if (debug)
+    printf("DEBUG: task_scheduler receive %d samples\n", nsamples);
   DEBUG(" ----  Receive %d samples  ----", nsamples);
   void* ptr[SRSRAN_MAX_PORTS];
   for (int i = 0; i < SRSRAN_MAX_PORTS; i++) {
@@ -119,7 +152,7 @@ static SRSRAN_AGC_CALLBACK(srsran_rf_set_rx_gain_th_wrapper_)
 {
   srsran_rf_set_rx_gain_th((srsran_rf_t*)h, gain_db);
 }
-/******************** End of callback wrapper ********************/ 
+/******************** End of callback wrapper ********************/
 
 // Init MIB
 int mib_init_imp(srsran_ue_mib_t*   ue_mib,
@@ -161,7 +194,7 @@ int ue_mib_decode_sfn(srsran_ue_mib_t*   ue_mib,
 
 // Initialize UE sync
 int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
-                        srsran_rf_t*        rf, 
+                        srsran_rf_t*        rf,
                         srsran_cell_t*      cell,
                         cell_search_cfg_t*  cell_detect_config,
                         prog_args_t         prog_args,
@@ -179,7 +212,8 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
     if (srsran_ue_sync_init_multi_decim(ue_sync,
                                         cell->nof_prb,
                                         cell->id == 1000,
-                                        srsran_rf_recv_wrapper,
+                                        ngscope_recv_samples_wrapper,
+                                        // ngscope_recv_samples_wrapper_agc, // Mmodified to record samples
                                         prog_args.rf_nof_rx_ant,
                                         (void*)rf,
                                         decimate)) {
@@ -197,26 +231,29 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
     ue_sync->cfo_is_copied           = true;
     ue_sync->cfo_correct_enable_find = true;
     srsran_sync_set_cfo_cp_enable(&ue_sync->sfind, false, 0);
-    
+
     // set AGC
-    if (prog_args.rf_gain < 0) {
-        srsran_rf_info_t* rf_info = srsran_rf_get_info(rf);
-        srsran_ue_sync_start_agc(ue_sync,
-                             srsran_rf_set_rx_gain_th_wrapper_,
-                             rf_info->min_rx_gain,
-                             rf_info->max_rx_gain,
-                             cell_detect_config->init_agc);
+    if (mode != REPLAY){
+        if (prog_args.rf_gain < 0) {
+            srsran_rf_info_t* rf_info = srsran_rf_get_info(rf);
+            // fprintf(stdout, "[AGC] Starting AGC: min_rx_gain=%.02f, max_rx_gain=%.02f, init_agc=%.02f\n",rf_info->min_rx_gain, rf_info->max_rx_gain, cell_detect_config->init_agc);
+            srsran_ue_sync_start_agc(ue_sync,
+                                srsran_rf_set_rx_gain_th_wrapper_,
+                                rf_info->min_rx_gain,
+                                rf_info->max_rx_gain,
+                                cell_detect_config->init_agc);
+        }
     }
     ue_sync->cfo_correct_enable_track = !prog_args.disable_cfo;
-      
+
     return SRSRAN_SUCCESS;
 }
 
-// Init the task scheduler 
+// Init the task scheduler
 int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
                             prog_args_t prog_args){
-                            //srsran_rf_t* rf, 
-                            //srsran_cell_t* cell, 
+                            //srsran_rf_t* rf,
+                            //srsran_cell_t* cell,
                             //srsran_ue_sync_t* ue_sync){
     float search_cell_cfo = 0;
     task_scheduler->prog_args = prog_args;
@@ -226,27 +263,73 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
                                         .nof_valid_pss_frames = SRSRAN_DEFAULT_NOF_VALID_PSS_FRAMES,
                                         .init_agc             = 0,
                                         .force_tdd            = false};
-   
-    // Copy the prameters 
+
+    /* Set for every mode, before the first receive. Live capture has no init of its own, and
+     * this value bounds every write through the channel array -- see ngscope_rx_set_nof_rx_ant. */
+    ngscope_rx_set_nof_rx_ant((uint32_t)prog_args.rf_nof_rx_ant);
+
+    if (prog_args.mode == 1)
+        init_record(prog_args.output_file_name, 8, prog_args.rf_nof_rx_ant, prog_args.rf_freq);
+    else if (prog_args.mode == 2) {
+        /* Return value checked: init_replay() leaves replay_fh NULL on failure, and the
+            * read loop would then fread() from it. A missing decompressor or an unreadable
+            * recording has to stop the run, not corrupt it. */
+
+        if (prog_args.use_replay_hdr){
+            printf("Using replay header!\n");
+            rx_record_header_t replay_hdr;
+            if (!init_replay(prog_args.input_file_name, &replay_hdr, 0)) {
+                fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
+                        prog_args.input_file_name);
+                exit(EXIT_FAILURE);
+            }
+            /* rf_freq is taken from the recording because downconversion removed it and
+             * nothing else on disk carries it. nof_rx_ant is NOT: the header says how many
+             * channels the file holds, which is a different question from how many the
+             * decoder should combine, and overwriting the configured value made the two
+             * inseparable -- a two-channel recording could then only ever be replayed at two
+             * antennas, so the one measurement that shows what a second antenna buys could
+             * not be run on the same bytes. The read loop reconciles any mismatch: surplus
+             * channels are read and dropped, missing ones zero-filled, both announced. */
+            prog_args.rf_freq = replay_hdr.rf_freq;
+            if (replay_hdr.nof_rx_antenna != prog_args.rf_nof_rx_ant) {
+                printf("REPLAY: recording holds %u channel%s, nof_rx_ant is %d -- using %d\n",
+                       replay_hdr.nof_rx_antenna, replay_hdr.nof_rx_antenna == 1 ? "" : "s",
+                       prog_args.rf_nof_rx_ant, prog_args.rf_nof_rx_ant);
+            }
+        }else{
+            printf("Ignoring replay header!\n");
+            if (!init_replay(prog_args.input_file_name, NULL, prog_args.rf_nof_rx_ant)) {
+                fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
+                        prog_args.input_file_name);
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+
+    // Copy the prameters
     task_scheduler->prog_args = prog_args;
- 
+
     // First of all, start the radio and get the cell information
-    radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args, 
+    radio_init_and_start(&task_scheduler->rf, &task_scheduler->cell, prog_args,
                                                 &cell_detect_config, &search_cell_cfo);
-           
-    // Copy the cell info to the  
-    pthread_mutex_lock(&cell_mutex); 
+
+    // Copy the cell info to the
+    pthread_mutex_lock(&cell_mutex);
     memcpy(&cell_vec[prog_args.rf_index], &(task_scheduler->cell), sizeof(srsran_cell_t));
     printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
-    pthread_mutex_unlock(&cell_mutex); 
+    pthread_mutex_unlock(&cell_mutex);
 
+    if (debug)
+        printf("DEBUG: SETTING UP UE SYNC\n");
     // Next, let's get the ue_sync ready
-    ue_sync_init_imp(&task_scheduler->ue_sync, &task_scheduler->rf, &task_scheduler->cell, 
-                                          &cell_detect_config, prog_args, search_cell_cfo); 
+    ue_sync_init_imp(&task_scheduler->ue_sync, &task_scheduler->rf, &task_scheduler->cell,
+                                        &cell_detect_config, prog_args, search_cell_cfo);
 
-    pthread_mutex_lock(&ack_mutex); 
+
+    pthread_mutex_lock(&ack_mutex);
     init_pending_ack(&ack_list);
-    pthread_mutex_unlock(&ack_mutex); 
+    pthread_mutex_unlock(&ack_mutex);
 
     return SRSRAN_SUCCESS;
 }
@@ -263,11 +346,12 @@ void copy_sf_sync_buffer(cf_t* source[SRSRAN_MAX_PORTS],
 
 /* Assign the decoding task to available idle decoder */
 void assign_task_to_decoder(int 	 rf_idx,
-							int      idle_idx, 
+							int      idle_idx,
                             uint32_t rf_nof_rx_ant,
-                            uint32_t sf_idx, 
+                            uint32_t sf_idx,
                             uint32_t sfn,
                             uint32_t max_num_samples,
+                            uint64_t collection_time,
                             cf_t*    IQ_buffer[SRSRAN_MAX_PORTS])
 {
     //--> Lock sf buffer
@@ -282,6 +366,7 @@ void assign_task_to_decoder(int 	 rf_idx,
     sf_buffer[rf_idx][idle_idx].sf_idx  	= sf_idx;
     sf_buffer[rf_idx][idle_idx].sfn     	= sfn;
     sf_buffer[rf_idx][idle_idx].empty_sf    = false; // not empty subframe
+    sf_buffer[rf_idx][idle_idx].collection_time  = collection_time;
 
     // copy the buffer source:sync_buffer dest: IQ_buffer
     //copy_sf_sync_buffer(sync_buffer, sf_buffer[rf_idx][idle_idx].IQ_buffer, max_num_samples);
@@ -295,14 +380,14 @@ void assign_task_to_decoder(int 	 rf_idx,
 
     //--> Unlock sf buffer
     pthread_mutex_unlock(&sf_buffer[rf_idx][idle_idx].sf_mutex);
-
+    nof_times_assigned++;
     return;
 }
 
 /* Assign the empty task to available idle decoder */
 void assign_empty_task_to_decoder(int 		 rf_idx,
-									int      idle_idx, 
-									uint32_t sf_idx, 
+									int      idle_idx,
+									uint32_t sf_idx,
 									uint32_t sfn)
 {
     //--> Lock sf buffer
@@ -355,16 +440,16 @@ void* handle_tmp_buffer_thread(void* p){
     int         rf_idx     		= (*(tmp_para_t *)p).rf_idx;
 
     while(!go_exit){
-        /* Before fetching we check if we have sf in tmp buffer*/ 
+        /* Before fetching we check if we have sf in tmp buffer*/
         /* we give higher priority to subframes stored inside the tmp buffer */
 
-        //uint64_t t1 = timestamp_us();        
+        //uint64_t t1 = timestamp_us();
         pthread_mutex_lock(&tmp_buf_mutex[rf_idx]);
 		if(!skip_tti_empty(&skip_tti[rf_idx])){
 			while(!go_exit){
 				int idle_idx  =  find_idle_decoder(rf_idx, nof_decoder);
-                if(idle_idx < 0){ 
-                    break;  
+                if(idle_idx < 0){
+                    break;
                 }else{
 					//printf("1-> len:%d sfn:%d sf_idx:%d \n",  skip_tti[rf_idx].nof_tti,\
 								skip_tti[rf_idx].sf[skip_tti[rf_idx].nof_tti-1], \
@@ -376,7 +461,7 @@ void* handle_tmp_buffer_thread(void* p){
 								sfn, sf_idx, tti);
                     assign_empty_task_to_decoder(rf_idx, idle_idx, sf_idx, sfn);
 					//printf("after assignment skip tti:%d\n", skip_tti[rf_idx].nof_tti);
-               	}  
+               	}
 				if(skip_tti_empty(&skip_tti[rf_idx])){
 					break;
 				}
@@ -384,24 +469,26 @@ void* handle_tmp_buffer_thread(void* p){
 		}
 
         if(!task_sf_ring_buffer_empty(&task_tmp_buffer[rf_idx])){
-			//int nof_buf_sf = get_nof_buffered_sf(rf_idx);
-            //printf("We have %d subframes the tmp buffer!\n", nof_buf_sf); 
+			int nof_buf_sf = get_nof_buffered_sf(rf_idx);
+            if (debug)
+                printf("SF_RING_BUFFER: We have %d subframes the tmp buffer!\n", nof_buf_sf);
             while(!go_exit){
                 int idle_idx  =  find_idle_decoder(rf_idx, nof_decoder);
-                if(idle_idx < 0){ 
-                    break;  
+                if(idle_idx < 0){
+                    break;
                 }else{
                     // Assign the Task to the corresponding decoder
                     int tmp_buf_idx = task_tmp_buffer[rf_idx].tail;
                     int tmp_sf_idx  = task_tmp_buffer[rf_idx].sf_buf[tmp_buf_idx].sf_idx;
                     int tmp_sfn     = task_tmp_buffer[rf_idx].sf_buf[tmp_buf_idx].sfn;
+                    uint64_t tmp_ct = task_tmp_buffer[rf_idx].sf_buf[tmp_buf_idx].collection_time;
 
                     //printf("Assigning tti:%d to the %d-th decoder since it is idle!\n\n", \
-                                                    tmp_sfn * 10 + tmp_sf_idx, idle_idx); 
-                    assign_task_to_decoder(rf_idx, idle_idx, rf_nof_rx_ant, tmp_sf_idx, tmp_sfn, max_num_samples,
+                                                    tmp_sfn * 10 + tmp_sf_idx, idle_idx);
+                    assign_task_to_decoder(rf_idx, idle_idx, rf_nof_rx_ant, tmp_sf_idx, tmp_sfn, max_num_samples, tmp_ct,
                              task_tmp_buffer[rf_idx].sf_buf[tmp_buf_idx].IQ_buffer);
 
-					// advance the tail 
+					// advance the tail
                    	task_sf_ring_buffer_get(&task_tmp_buffer[rf_idx]);
 
                     // Exit when the tmp buffer is empty
@@ -413,7 +500,7 @@ void* handle_tmp_buffer_thread(void* p){
             }
         }
         pthread_mutex_unlock(&tmp_buf_mutex[rf_idx]);
-        //uint64_t t2 = timestamp_us();        
+        //uint64_t t2 = timestamp_us();
         //printf("Handle tmp buffer time_spend:%ld (us)\n", t2-t1);
 
         // let's sleep for a while so that we don't fully block
@@ -432,28 +519,43 @@ void* handle_tmp_buffer_thread(void* p){
 ************************************************/
 void* task_scheduler_thread(void* p){
     prog_args_t* prog_args = (prog_args_t*)p;
-    ngscope_task_scheduler_t task_scheduler;
-    task_scheduler_init(&task_scheduler, *prog_args);
+
+    printf("NG-Scope mode: %d\n", prog_args->mode);
+    printf("NG-Scope Record file: %s\n", prog_args->output_file_name);
+    printf("NG-Scope Replay file: %s\n", prog_args->input_file_name);
+    printf("NG-Scope debug mode: %d\n", prog_args->debug);
+    debug = prog_args->debug;
+    printf("NG-Scope silent mode: %d\n", prog_args->silent);
+    silent = prog_args->silent;
+    // setup_rx_signal_handler();
+    // exit(1);
+    if (debug)
+        printf("DEBUG: INITIALIZING TASK_SCHEDULER\n");
+    ngscope_task_scheduler_t *task_scheduler = (ngscope_task_scheduler_t*)malloc(sizeof(ngscope_task_scheduler_t));
+    task_scheduler_init(task_scheduler, *prog_args);
+
+    if (debug)
+        printf("DEBUG: INITIALIZED TASK_SCHEDULER\n");
 
     int ret;
-    int nof_decoder = task_scheduler.prog_args.nof_decoder;
-    int rf_idx      = task_scheduler.prog_args.rf_index;
-    uint32_t rf_nof_rx_ant = task_scheduler.prog_args.rf_nof_rx_ant;
-
-    ngscope_dci_per_sub_t       dci_per_sub; // empty place hoder for skipped frames 
+    int nof_decoder = task_scheduler->prog_args.nof_decoder;
+    int rf_idx      = task_scheduler->prog_args.rf_index;
+    uint32_t rf_nof_rx_ant = task_scheduler->prog_args.rf_nof_rx_ant;
+    printf("TASK SCHEDULER USING %d ANTENNAS\n", rf_nof_rx_ant);
+    ngscope_dci_per_sub_t       dci_per_sub; // empty place hoder for skipped frames
     ngscope_status_buffer_t     dci_ret;
 
     memset(&dci_per_sub, 0, sizeof(ngscope_dci_per_sub_t));
     memset(&dci_ret, 0, sizeof(ngscope_status_buffer_t));
 
-    uint32_t max_num_samples = 3 * SRSRAN_SF_LEN_PRB(task_scheduler.cell.nof_prb); /// Length in complex samples
-    printf("nof_prb:%d max_sample:%d\n", task_scheduler.cell.nof_prb, max_num_samples);
+    uint32_t max_num_samples = 3 * SRSRAN_SF_LEN_PRB(task_scheduler->cell.nof_prb); /// Length in complex samples
+    printf("nof_prb:%d max_sample:%d\n", task_scheduler->cell.nof_prb, max_num_samples);
 
     /************** Setting up the UE sync buffer ******************/
     cf_t* sync_buffer[SRSRAN_MAX_PORTS] = {NULL};
     cf_t* buffers[SRSRAN_MAX_CHANNELS] = {};
 
-    for (int j = 0; j < task_scheduler.prog_args.rf_nof_rx_ant; j++) {
+    for (int j = 0; j < task_scheduler->prog_args.rf_nof_rx_ant; j++) {
         sync_buffer[j] = srsran_vec_cf_malloc(max_num_samples);
     }
 
@@ -464,71 +566,168 @@ void* task_scheduler_thread(void* p){
     /************** END OF setting up the UE sync buffer ******************/
 
     // init the subframe buffer
-    ngscope_dci_decoder_t   dci_decoder[MAX_NOF_DCI_DECODER];
+    // ngscope_dci_decoder_t   dci_decoder[MAX_NOF_DCI_DECODER];
+    ngscope_dci_decoder_t* dci_decoder = (ngscope_dci_decoder_t*)calloc(MAX_NOF_DCI_DECODER, sizeof(ngscope_dci_decoder_t));
     pthread_t               dci_thd[MAX_NOF_DCI_DECODER];
 
     // Init the UE MIB decoder
-    srsran_ue_mib_t         ue_mib;    
-    mib_init_imp(&ue_mib, sync_buffer, &task_scheduler.cell);
-
-    /********************** Set up the tmp buffer **********************/
-	task_sf_ring_buffer_init(&task_tmp_buffer[rf_idx], max_num_samples);
-	skip_tti_init(&skip_tti[rf_idx]);
-    /********** End of setting up the tmp buffer **********************/
-   
-    // Start the tmp buffer handling thd
-    // which allocates the buffered Subframe to corresponding decoder
+    srsran_ue_mib_t*         ue_mib = (srsran_ue_mib_t*)malloc(sizeof(srsran_ue_mib_t));
+    mib_init_imp(ue_mib, sync_buffer, &task_scheduler->cell);
     pthread_t tmp_buf_thd;
-    tmp_para_t tmp_para = {nof_decoder, rf_nof_rx_ant, max_num_samples, rf_idx};
-    pthread_create(&tmp_buf_thd, NULL, handle_tmp_buffer_thread, (void*)&tmp_para);
-		
+
+    if (mode != REPLAY) {
+        /********************** Set up the tmp buffer **********************/
+        task_sf_ring_buffer_init(&task_tmp_buffer[rf_idx], max_num_samples);
+        skip_tti_init(&skip_tti[rf_idx]);
+        /********** End of setting up the tmp buffer **********************/
+
+        // Start the tmp buffer handling thd
+        // which allocates the buffered Subframe to corresponding decoder
+        tmp_para_t tmp_para = {nof_decoder, rf_nof_rx_ant, max_num_samples, rf_idx};
+        pthread_create(&tmp_buf_thd, NULL, handle_tmp_buffer_thread, (void*)&tmp_para);
+    }
+
 	// cell_args_t 		cell_args[MAX_NOF_DCI_DECODER];
 
-  	srsran_softbuffer_rx_t 	rx_softbuffers[SRSRAN_MAX_CODEWORDS];
+  	// srsran_softbuffer_rx_t 	rx_softbuffers[SRSRAN_MAX_CODEWORDS];
+    srsran_softbuffer_rx_t rx_softbuffers[MAX_NOF_DCI_DECODER][SRSRAN_MAX_CODEWORDS];
 
 
     // output cell basic config into a file
     char duplymode[20] = {};
-    if (task_scheduler.cell.frame_type == SRSRAN_FDD) {
+    if (task_scheduler->cell.frame_type == SRSRAN_FDD) {
         strcpy(duplymode, "FDD");
     } else {
         strcpy(duplymode, "TDD");
     }
     int bw = 0;
-    if (task_scheduler.cell.nof_prb == 100) {
+    if (task_scheduler->cell.nof_prb == 100) {
         bw = 20;
-    } else if (task_scheduler.cell.nof_prb == 75) {
+    } else if (task_scheduler->cell.nof_prb == 75) {
         bw = 15;
-    } else if (task_scheduler.cell.nof_prb == 50) {
+    } else if (task_scheduler->cell.nof_prb == 50) {
         bw = 10;
-    } else if (task_scheduler.cell.nof_prb == 25) {
+    } else if (task_scheduler->cell.nof_prb == 25) {
         bw = 5;
-    } else if (task_scheduler.cell.nof_prb == 15) {
+    } else if (task_scheduler->cell.nof_prb == 15) {
         bw = 3;
-    } else if (task_scheduler.cell.nof_prb == 6) {
+    } else if (task_scheduler->cell.nof_prb == 6) {
         bw = 1.4;
     } else {
         perror("Error physical resource block number!\n");
     }
+
+    if (mode == RECORD){
+        record_hdr.prb = task_scheduler->cell.nof_prb;
+        record_hdr.nof_cell_ports = task_scheduler->cell.nof_ports;
+        record_hdr.pci = task_scheduler->cell.id;
+        record_hdr.frame_type = task_scheduler->cell.frame_type;
+        record_hdr.cp = task_scheduler->cell.cp;
+        record_hdr.phich_length = task_scheduler->cell.phich_length;
+        record_hdr.phich_resources = task_scheduler->cell.phich_resources;
+
+
+
+    }
+
+    char cellcfgpath[1024];
+    sprintf(cellcfgpath,"%scell_type.json", task_scheduler->prog_args.out_path);
     FILE* cellcfgfile = NULL;
-    cellcfgfile = fopen("cell_type.json", "w");
+    cellcfgfile = fopen(cellcfgpath, "w");
     fprintf(cellcfgfile,"{\n");
     fprintf(cellcfgfile,"\"frame_type\": \"%s\",\n", duplymode);
-    fprintf(cellcfgfile,"\"bandwidth\": \"%d\"\n", bw);
+    fprintf(cellcfgfile,"\"bandwidth\": \"%d\",\n", bw);
+    /* nof_ports and nof_rx_ant together decide which transmission schemes are decodable:
+     * srsRAN has no spatial-multiplexing or CDD predecoder for 4 Tx ports, and CDD needs two
+     * RX antennas even at 2. Transmit diversity, which carries all pre-security traffic,
+     * works at 4 ports and any antenna count. ngscope_sec_report() counts the actual mix at
+     * teardown; this file records the configuration that bounds it. */
+    fprintf(cellcfgfile,"\"nof_prb\": \"%d\",\n", task_scheduler->cell.nof_prb);
+    fprintf(cellcfgfile,"\"nof_ports\": \"%d\",\n", task_scheduler->cell.nof_ports);
+    fprintf(cellcfgfile,"\"cell_id\": \"%d\",\n", task_scheduler->cell.id);
+    fprintf(cellcfgfile,"\"nof_rx_ant\": \"%d\",\n", task_scheduler->prog_args.rf_nof_rx_ant);
+    /* The one thing a recording cannot describe about itself from its samples: the carrier.
+     * Downconversion removed it and rx_frame_header_t has no field for it. A record run
+     * writes this file beside recorded-samples.bin, so putting rf_freq here is what lets a
+     * later replay recover it instead of asking the user to retype a number they already
+     * have on disk. See ngscope_config_finalize(). */
+    fprintf(cellcfgfile,"\"rf_freq\": \"%lld\"\n", (long long)task_scheduler->prog_args.rf_freq);
     fprintf(cellcfgfile,"}");
     fclose(cellcfgfile);
 
-    FILE* rsrpoutfile = fopen("rsrp.txt", "w");
+    char rsrppath[1024];
+    sprintf(rsrppath, "%srsrp.txt", task_scheduler->prog_args.out_path);
+    FILE* rsrpoutfile = fopen(rsrppath, "w");
 	fclose(rsrpoutfile);
 
+    // JH open log file
+    char decodepath[1024];
+    sprintf(decodepath,"%sdci-decode-debug.csv",task_scheduler->prog_args.out_path);
+	FILE *decodelog;
+  	decodelog=fopen(decodepath,"w");
+  	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2,rach_ok\n");
+	fclose(decodelog);
+
+    // RACH log: one row per decoded Random Access Response
+    if(task_scheduler->prog_args.decode_RAR){
+        ngscope_rar_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
+    }
+
+    // Cell-config files from the SIB decoder land in the run's output directory rather than
+    // the working directory. Set before any decoder thread starts.
+    ngscope_sib_set_out_path(task_scheduler->prog_args.out_path);
+
+    // Downlink MAC PDU capture. Opened here because it runs once per RF device and strictly
+    // before the decoder threads below, so they never see a half-initialised handle.
+    if(task_scheduler->prog_args.pcap_mac){
+        ngscope_mac_pcap_init(task_scheduler->prog_args.out_path,
+                              task_scheduler->prog_args.rf_index,
+                              &task_scheduler->cell,
+                              task_scheduler->prog_args.pcap_max_mb);
+    }
+
+    /* Blind-DCI probe. Same lifetime rule as the pcap above: opened before any decoder
+     * thread exists, so none sees a half-initialised handle. */
+    if(task_scheduler->prog_args.probe_blind_dci){
+        ngscope_sec_probe_blind_init(task_scheduler->prog_args.out_path,
+                                     task_scheduler->prog_args.rf_index);
+    }
+
+    /* Random-access orders. Always on: it is one line per order on a cell that issues any,
+     * it costs nothing on a cell that issues none, and a missing file cannot be told from a
+     * cell with no orders after the fact. */
+    ngscope_pdcch_order_init(task_scheduler->prog_args.out_path,
+                             task_scheduler->prog_args.rf_index);
+
+    /* Tell the blind search whether this device wants RNTIs restricted to the RACH-observed
+     * set. Set before any decoder thread for this device is created, below, so the threads
+     * never observe it half-configured. */
+    ngscope_rach_filter_set_active(rf_idx, task_scheduler->prog_args.rach_filter_only);
+
+    /* With the probe on, let the search report RNTIs the filter has not admitted, so the
+     * probe can adjudicate them against the DL-SCH CRC and promote the ones that pass. The
+     * output filter still runs, so nothing unproven is reported either way. */
+    ngscope_rach_filter_set_search_bypass(rf_idx, task_scheduler->prog_args.probe_blind_dci);
+
+    /* The scheduler thread itself drives the SIB and RAR searches, which go through the same
+     * PDCCH candidate loop. Bind it too. */
+    ngscope_rach_filter_bind_thread(rf_idx);
+
+    /* Let the CRC decide which MCS->TBS table each grant uses, rather than trusting
+     * enable_256qam. Replay only: it costs a second PDSCH decode per failure, affordable
+     * exactly where the scheduler blocks instead of dropping subframes. Set before any
+     * decoder thread for this device. */
+    ngscope_sec_rrc_set_qam_retry(rf_idx, (task_scheduler->prog_args.mode == REPLAY) &&
+                                              task_scheduler->prog_args.qam_retry);
+
     for(int i = 0; i < nof_decoder; i++){
-        // init the subframe buffer 
+        // init the subframe buffer
         for (int j = 0; j < SRSRAN_MAX_PORTS; j++) {
             sf_buffer[rf_idx][i].IQ_buffer[j] = srsran_vec_cf_malloc(max_num_samples);
         }
 
-		dci_decoder_init(&dci_decoder[i], task_scheduler.prog_args, &task_scheduler.cell, \
-                           sf_buffer[rf_idx][i].IQ_buffer, rx_softbuffers, i);
+		dci_decoder_init(&dci_decoder[i], task_scheduler->prog_args, &task_scheduler->cell, \
+                           sf_buffer[rf_idx][i].IQ_buffer, rx_softbuffers[i], i);
 
         //mib_init_imp(&ue_mib[i], sf_buffer[rf_idx][i].IQ_buffer, &task_scheduler->cell);
         pthread_create(&dci_thd[i], NULL, dci_decoder_thread, (void*)&dci_decoder[i]);
@@ -536,55 +735,90 @@ void* task_scheduler_thread(void* p){
 		// fill the dci decoder status
 		dci_decoder_up[rf_idx][i] = true;
     }
-    
+
     // Let's sleep for 1 second and wait for the decoder to be ready!
     sleep(1);
-    //srsran_ue_mib_t ue_mib;    
+    //srsran_ue_mib_t ue_mib;
     //mib_init_imp(&ue_mib, sf_buffer[rf_idx][i].sf_buffer, cell);
 
-    int         sf_cnt = 0; 
+    int         sf_cnt = 0;
     uint32_t    sfn = 0;
     uint32_t    last_tti = 0;
     uint32_t    tti = 0;
     bool        decode_pdcch = false;
 	uint32_t 	sf_idx = 0;
-
-	FILE* 		fd = fopen("task_scheduler.txt","w+");
+    char tspath[1024];
+    sprintf(tspath,"%stask_scheduler.txt",task_scheduler->prog_args.out_path);
+	FILE* 		fd = fopen(tspath,"w+");
 	//FILE* 		fd_1 = fopen("sf_sfn.txt","w+");
     uint8_t* data[SRSRAN_MAX_CODEWORDS];
-	
+
     for (int i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
         data[i] = srsran_vec_u8_malloc(2000 * 8);
     }
 
+    char timepath[1024];
+    sprintf(timepath, "%scollection_times.csv",task_scheduler->prog_args.out_path);
+    FILE*       timelog = fopen(timepath,"w+");
+    fprintf(timelog, "collection_time,clock_time\n");
+
+
+    char readspath[1024];
+    sprintf(readspath, "%sfile_reads.txt", task_scheduler->prog_args.out_path);
+    FILE*       nreadslog = fopen(readspath,"w+");
+    int readctr = 0;
+
+    bool found_sync = false;
+    int desync_count = 0;
 	//uint64_t t1=0, t2=0, t3=0;
 	//uint64_t t1_sf_idx =0, t2_sf_idx=0;
-    while(!go_exit && (sf_cnt < task_scheduler.prog_args.nof_subframes || task_scheduler.prog_args.nof_subframes == -1)) {
+    while(!go_exit && (sf_cnt < task_scheduler->prog_args.nof_subframes || task_scheduler->prog_args.nof_subframes == -1)) {
     	//fprintf(fd, "%d\t%d\t%d\t%ld\t%ld\t\n", sfn*10+sf_idx, sfn, sf_idx, t2-t1, t3-t1);
 
     	/*  Get the subframe data and put it into the buffer */
-        //t1 = timestamp_us();        
-        ret = srsran_ue_sync_zerocopy(&(task_scheduler.ue_sync), buffers, max_num_samples);
-        //t2 = timestamp_us();        
+        //t1 = timestamp_us();
+        ret = srsran_ue_sync_zerocopy(&(task_scheduler->ue_sync), buffers, max_num_samples);
+        readctr++;
+        fprintf(nreadslog, "TTI=%d, total # sample reads=%d, result=%d\n", tti, readctr, ret);
+        if (ret == 1) {
+            nof_desync++;
+        }
+        //t2 = timestamp_us();
         //printf("time_spend:%ld (us)\n", t2-t1);
-        //printf("RET is:%d\n", ret); 
+        //printf("RET is:%d\n", ret);
         if (ret < 0) {
-            ERROR("Error calling srsran_ue_sync_work()");
+            ERROR("Error calling srsran_ue_sync_zerocopy()");
         }else if(ret == 1){
-        	//t1_sf_idx = timestamp_us();        
-            sf_idx = srsran_ue_sync_get_sfidx(&task_scheduler.ue_sync);
-        	//t2_sf_idx = timestamp_us();        
+            if (!found_sync && mode == RECORD){
+                record_hdr.first_sync_frame = get_rx_read_ctr();
+            }
+            found_sync = true;
+        	//t1_sf_idx = timestamp_us();
+            sf_idx = srsran_ue_sync_get_sfidx(&task_scheduler->ue_sync);
+            // get actual collection time
+            srsran_timestamp_t ts;
+            srsran_ue_sync_get_last_timestamp(&task_scheduler->ue_sync, &ts);
+            uint64_t collection_time = (uint64_t)((ts.frac_secs + ts.full_secs)*1e6);
+            uint64_t clock_time = timestamp_us();
+            fprintf(timelog,"%ld,%ld\n",collection_time,clock_time);
+            if (debug)
+                printf("DEBUG: retrieved collection time: %ld\n", collection_time);
+
+        	//t2_sf_idx = timestamp_us();
             //printf("Get %d-th subframe TTI:%d \n", sf_idx, sf_idx+ sfn*10);
 			//printf("task -> finish get index!\n");
-            sf_cnt ++; 
+            sf_cnt ++;
 			//fprintf(fd_1, "%d\t%d\t%d\t", sf_idx + sfn*10, sf_idx, sfn);
             /********************* SFN handling *********************/
+            if (decode_pdcch == false) {
+                nof_decode_pdcch_false++;
+            }
             if ( (sf_idx == 0) || (decode_pdcch == false) ) {
-                // update SFN when sf_idx is 0 
+                // update SFN when sf_idx is 0
                 uint32_t sfn_tmp = 0;
-                ue_mib_decode_sfn(&ue_mib, &task_scheduler.cell, &sfn_tmp, decode_pdcch);
+                ue_mib_decode_sfn(ue_mib, &task_scheduler->cell, &sfn_tmp, decode_pdcch);
 
-                if(sfn != sfn_tmp){
+                if(sfn != sfn_tmp && !silent){
                     printf("current sfn:%d decoded sfn:%d\n",sfn, sfn_tmp);
                 }
                 if(sfn_tmp > 0){
@@ -600,10 +834,10 @@ void* task_scheduler_thread(void* p){
 			//fprintf(fd_1, "%d\t", sfn);
             /******************* END OF SFN handling *******************/
 
-          	//decode_pdcch = false; 
-            /***************** Tell the decoder to decode the PDCCH *********/          
-            if(decode_pdcch){  // We only decode when we got the SFN
-				if((last_tti != 10239) && (last_tti+1 != tti) ){
+          	// decode_pdcch = false;
+            /***************** Tell the decoder to decode the PDCCH *********/
+            if(decode_pdcch && prog_args->decode_pdcch){  // We only decode when we got the SFN
+				if((last_tti != 10239) && (last_tti+1 != tti) && !silent){
 					printf("Last tti:%d current tti:%d\n", last_tti, tti);
 				}
 				last_tti = tti;
@@ -611,61 +845,99 @@ void* task_scheduler_thread(void* p){
                 int idle_idx  = -1;
 
                 idle_idx  =  find_idle_decoder(rf_idx, nof_decoder);
-                
-                // If we cannot find any idle decoder (all of them are busy!)
-                // store them inside a temporal buffer
-                if(idle_idx < 0){
-                    printf("Skiping %d subframe since Decoder Blocked! \
-                            We suggest increasing the number deocder per cell.\n", sfn*10 + sf_idx);
 
-                    pthread_mutex_lock(&tmp_buf_mutex[rf_idx]);
-                    /* Store the data into a tmp buffer. Later, when we have idle decoder, we will decode it*/ 
-					//printf("put %d subframe into the buffer\n", sfn*10+sf_idx);
-					if(task_sf_ring_buffer_put(&task_tmp_buffer[rf_idx], buffers, sfn, sf_idx, 
-								task_scheduler.prog_args.rf_nof_rx_ant, max_num_samples) == 0){
-						int nof_buf_sf = task_sf_ring_buffer_len(&task_tmp_buffer[rf_idx]);
-						printf("Skip %d subframe ring buf len:%d \n", sfn*10+sf_idx, nof_buf_sf);
-						skip_tti_put(&skip_tti[rf_idx], sfn, sf_idx);			
-					}
-					//int nof_buf_sf = get_nof_buffered_sf(rf_idx);
-					int nof_buf_sf = task_sf_ring_buffer_len(&task_tmp_buffer[rf_idx]);
-					fprintf(fd,"%d\t%d\t%d\n",task_tmp_buffer[rf_idx].header, task_tmp_buffer[rf_idx].tail, nof_buf_sf);
-                    pthread_mutex_unlock(&tmp_buf_mutex[rf_idx]);
-                    
-                    if((sf_idx == 9)) {
-                        sfn++;  // we increase the sfn incase MIB decoding failed
-                        if(sfn == 1024){ sfn = 0; }
+                if (mode != REPLAY) {
+                    // If we cannot find any idle decoder (all of them are busy!)
+                    // store them inside a temporal buffer
+                    if(idle_idx < 0){
+                        printf("Skiping %d subframe since Decoder Blocked! \
+                                We suggest increasing the number deocder per cell.\n", sfn*10 + sf_idx);
+
+                        pthread_mutex_lock(&tmp_buf_mutex[rf_idx]);
+                        /* Store the data into a tmp buffer. Later, when we have idle decoder, we will decode it*/
+                        //printf("put %d subframe into the buffer\n", sfn*10+sf_idx);
+                        if(task_sf_ring_buffer_put(&task_tmp_buffer[rf_idx], buffers, sfn, sf_idx, collection_time,
+                                    task_scheduler->prog_args.rf_nof_rx_ant, max_num_samples) == 0){
+                            int nof_buf_sf = task_sf_ring_buffer_len(&task_tmp_buffer[rf_idx]);
+                            printf("Skip %d subframe ring buf len:%d \n", sfn*10+sf_idx, nof_buf_sf);
+                            skip_tti_put(&skip_tti[rf_idx], sfn, sf_idx);
+                        }
+                        //int nof_buf_sf = get_nof_buffered_sf(rf_idx);
+                        int nof_buf_sf = task_sf_ring_buffer_len(&task_tmp_buffer[rf_idx]);
+                        fprintf(fd,"%d\t%d\t%d\n",task_tmp_buffer[rf_idx].header, task_tmp_buffer[rf_idx].tail, nof_buf_sf);
+                        pthread_mutex_unlock(&tmp_buf_mutex[rf_idx]);
+
+                        if((sf_idx == 9)) {
+                            sfn++;  // we increase the sfn incase MIB decoding failed
+                            if(sfn == 1024){ sfn = 0; }
+                        }
+                        //printf("task -> finish move signal to tmp buf!\n");
+                        //t3 = timestamp_us();
+                        continue;
+                    }else{
+                        //printf("Directly Assign TTI: %d \n", sf_idx + sfn*10);
+                        // Assign the task to the corresponding idle decoder
+                        assign_task_to_decoder(rf_idx, idle_idx, rf_nof_rx_ant, \
+                                        sf_idx, sfn, max_num_samples, collection_time, sync_buffer);
                     }
-					//printf("task -> finish move signal to tmp buf!\n");
-  					//t3 = timestamp_us();        
-                    continue;
-                }else{
-					//printf("Directly Assign TTI: %d \n", sf_idx + sfn*10);
-                    // Assign the task to the corresponding idle decoder 
+                    pthread_mutex_lock(&tmp_buf_mutex[rf_idx]);
+                    int nof_buf_sf = get_nof_buffered_sf(rf_idx);
+                    fprintf(fd,"%d\t%d\t%d\n",task_tmp_buffer[rf_idx].header, task_tmp_buffer[rf_idx].tail, nof_buf_sf);
+                    pthread_mutex_unlock(&tmp_buf_mutex[rf_idx]);
+                } else {
+                    // block and wait for decoder if in replay mode
+                    if (idle_idx < 0) {
+                        pthread_mutex_lock(&token_mutex[rf_idx]);
+                        while ((idle_idx = scan_decoders(rf_idx, nof_decoder)) < 0) {
+                            pthread_cond_wait(&token_cond[rf_idx],&token_mutex[rf_idx]);
+                        }
+                        pthread_mutex_unlock(&token_mutex[rf_idx]);
+                    }
                     assign_task_to_decoder(rf_idx, idle_idx, rf_nof_rx_ant, \
-									sf_idx, sfn, max_num_samples, sync_buffer);
+                                        sf_idx, sfn, max_num_samples, collection_time, sync_buffer);
                 }
             }
-           	pthread_mutex_lock(&tmp_buf_mutex[rf_idx]);
-			int nof_buf_sf = get_nof_buffered_sf(rf_idx);
-			fprintf(fd,"%d\t%d\t%d\n",task_tmp_buffer[rf_idx].header, task_tmp_buffer[rf_idx].tail, nof_buf_sf);
-           	pthread_mutex_unlock(&tmp_buf_mutex[rf_idx]);
+
 
 			//printf("task -> end of while!\n");
             if((sf_idx == 9)) {
                 sfn++;  // we increase the sfn incase MIB decoding failed
                 if(sfn == 1024){ sfn = 0; }
             }// endof if(decode_pdcch)
+        }else if (ret == 0 && found_sync && task_scheduler->prog_args.exit_on_desync > 0){
+            desync_count++;
+            if (desync_count >= task_scheduler->prog_args.exit_on_desync) {
+                fprintf(stderr, "Lost sync with cell, exiting...\n");
+                go_exit = 1;
+            }
         }// end of i(ret)
-  		//t3 = timestamp_us();        
+  		//t3 = timestamp_us();
         //printf("time_spend:%ld (us)\n", t2-t1);
 
 	}// end of while
-		
+
 	fclose(fd);
+    if (prog_args->mode == 1){
+        stop_record();
+    }else if (prog_args->mode == 2){
+        stop_replay();
+    }
 	//fclose(fd_1);
 
-//--> Deal with the exit and free memory 
+//--> Deal with the exit and free memory
+
+	if(prog_args->decode_RAR){
+		ngscope_rach_filter_report(rf_idx);
+	}
+	ngscope_pdcch_order_report(rf_idx);
+	ngscope_pdcch_order_close(rf_idx);
+	if(prog_args->mark_security_phase){
+		ngscope_sec_report(rf_idx);
+	}
+
+	/* Whether the enable_256qam guess matches what the cell is actually doing. Costs nothing
+	 * during the run and is the only way to check without decoding transport blocks. */
+	ngscope_tbs_probe_report();
 
 	// wait until its our turn to close
 	printf("wait for scheduler to be ready!\n");
@@ -676,7 +948,7 @@ void* task_scheduler_thread(void* p){
 
     /* Wait for the decoder thread to finish*/
     for(int i=0;i<nof_decoder;i++){
-        // Tell the decoder thread to exit in case 
+        // Tell the decoder thread to exit in case
         // they are still waiting for the signal
 		printf("Signling %d-th decoder!\n",i);
         pthread_cond_signal(&sf_buffer[rf_idx][i].sf_cond);
@@ -686,43 +958,68 @@ void* task_scheduler_thread(void* p){
         pthread_join(dci_thd[i], NULL);
     }
 
+    // Only now that every decoder thread has exited: closing earlier would leave them writing
+    // into a closed FILE*.
+    if(task_scheduler->prog_args.pcap_mac){
+        ngscope_mac_pcap_close(rf_idx);
+    }
+    if(task_scheduler->prog_args.probe_blind_dci){
+        ngscope_sec_probe_blind_report(rf_idx);
+        ngscope_sec_probe_blind_close(rf_idx);
+    }
+
 	// free the ue dl and the related buffer
     for(int i=0;i<nof_decoder;i++){
         srsran_ue_dl_free(&dci_decoder[i].ue_dl);
         //free the buffer
-        for(int j=0;  j < task_scheduler.prog_args.rf_nof_rx_ant; j++){
+        for(int j=0;  j < task_scheduler->prog_args.rf_nof_rx_ant; j++){
             free(sf_buffer[rf_idx][i].IQ_buffer[j]);
         }
-    } 
-        
-    srsran_ue_mib_free(&ue_mib);
+    }
+
+    free(dci_decoder);
+
+    srsran_ue_mib_free(ue_mib);
+    free(ue_mib);
 
     // free the ue_sync
-    srsran_ue_sync_free(&task_scheduler.ue_sync);
+    srsran_ue_sync_free(&task_scheduler->ue_sync);
 
-    for(int j=0; j<task_scheduler.prog_args.rf_nof_rx_ant; j++){
+    for(int j=0; j<task_scheduler->prog_args.rf_nof_rx_ant; j++){
         free(sync_buffer[j]);
     }
 
-    radio_stop(&task_scheduler.rf);
+    radio_stop(&task_scheduler->rf);
 
-	// close the tmp buffer handling thread
-    pthread_join(tmp_buf_thd, NULL);
-
-	task_sf_ring_buffer_free(&task_tmp_buffer[rf_idx]);
+	if (mode != REPLAY) {
+        // close the tmp buffer handling thread
+        pthread_join(tmp_buf_thd, NULL);
+        task_sf_ring_buffer_free(&task_tmp_buffer[rf_idx]);
+    }
 //
 //    for(int i=0; i<MAX_TMP_BUFFER; i++){
 //        for (int j = 0; j < SRSRAN_MAX_PORTS; j++) {
 //            free(task_tmp_buffer.sf_buf[i].IQ_buffer[j]);
 //        }
 //    }
-// 
+//
+
+    if (mode == RECORD){
+        record_hdr.desynced_frames = nof_desync;
+        record_hdr.skipped_frames = nof_decode_pdcch_false;
+        record_hdr.decoded_frames = nof_times_assigned;
+        strcpy(record_hdr.comment, task_scheduler->prog_args.comment);
+        strcpy(record_hdr.location, task_scheduler->prog_args.location);
+        update_record_header(&record_hdr);
+    }
+
     pthread_mutex_lock(&scheduler_close_mutex);
 	task_scheduler_closed[rf_idx] = true;
     pthread_mutex_unlock(&scheduler_close_mutex);
+    free(task_scheduler);
 
+    printf("DEBUG: assigned to decoder %ld times, skipped %ld times when decode_pdcch is false and %ld when ret != 1\n", nof_times_assigned, nof_decode_pdcch_false, nof_desync);
+    fflush(stdout);
     printf("TASK-Scheduler of %d-th RF devices CLOSED!\n", rf_idx);
-
     return NULL;
 }
-

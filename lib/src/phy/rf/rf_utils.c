@@ -34,6 +34,11 @@
 #include "srsran/phy/rf/rf.h"
 #include "srsran/phy/rf/rf_utils.h"
 #include "srsran/phy/ue/ue_cell_search_nbiot.h"
+#include "dciLib/ngscope_rx.h"
+#include "dciLib/load_config.h"
+
+extern ngscope_mode_t mode;
+static bool celldebug = false;
 
 int rf_rssi_scan(srsran_rf_t* rf, float* freqs, float* rssi, int nof_bands, double fs, int nsamp)
 {
@@ -82,6 +87,7 @@ free_and_exit:
 int srsran_rf_recv_wrapper_cs(void* h, cf_t* data[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
 {
   DEBUG(" ----  Receive %d samples  ----", nsamples);
+  printf("DEBUG: rf_utils receive %d samples\n",nsamples);
   void* ptr[SRSRAN_MAX_CHANNELS] = {};
   for (int i = 0; i < SRSRAN_MAX_PORTS; i++) {
     ptr[i] = data[i];
@@ -107,7 +113,7 @@ int rf_mib_decoder(srsran_rf_t*       rf,
   srsran_ue_mib_sync_t ue_mib;
   uint8_t              bch_payload[SRSRAN_BCH_PAYLOAD_LEN] = {};
 
-  if (srsran_ue_mib_sync_init_multi(&ue_mib, srsran_rf_recv_wrapper_cs, nof_rx_channels, (void*)rf)) {
+  if (srsran_ue_mib_sync_init_multi(&ue_mib, ngscope_recv_samples_wrapper, nof_rx_channels, (void*)rf)) { // original cb: srsran_rf_recv_wrapper_cs // used for decoding MIB
     fprintf(stderr, "Error initiating srsran_ue_mib_sync\n");
     goto clean_exit;
   }
@@ -118,11 +124,17 @@ int rf_mib_decoder(srsran_rf_t*       rf,
   }
 
   int srate = srsran_sampling_freq_hz(SRSRAN_UE_MIB_NOF_PRB);
-  INFO("Setting sampling frequency %.2f MHz for PSS search", (float)srate / 1000000);
-  srsran_rf_set_rx_srate(rf, (float)srate);
 
-  INFO("Starting receiver...");
-  srsran_rf_start_rx_stream(rf, false);
+  if (mode != REPLAY){
+    INFO("Setting sampling frequency %.2f MHz for PSS search", (float)srate / 1000000);
+    printf("Setting sampling frequency %.2f MHz for PSS search\n", (float)srate / 1000000);
+    double res = srsran_rf_set_rx_srate(rf, (float)srate);
+    printf("Set samping frequency to %.2f MHz with result %.2f MHz\n", (float)srate / 1000000, (float)res / 1000000);
+
+    INFO("Starting receiver...");
+    printf("DEBUG: Starting receiver\n");
+    srsran_rf_start_rx_stream(rf, false);
+  }
 
   // Copy CFO estimate if provided and disable CP estimation during find
   if (cfo) {
@@ -140,16 +152,21 @@ int rf_mib_decoder(srsran_rf_t*       rf,
   }
   if (ret == 1) {
     srsran_pbch_mib_unpack(bch_payload, cell, NULL);
+    if (celldebug)
+      printf("CELL: decoded MIB nof_prb=%d, nof_ports=%d, id=%d, cp=%d, phich_length=%d, phich_resources=%d, frame_type=%d\n", cell->nof_prb, cell->nof_ports, cell->id, cell->cp, cell->phich_length, cell->phich_resources, cell->frame_type);
   }
 
   // Save CFO
   if (cfo) {
     *cfo = srsran_ue_sync_get_cfo(&ue_mib.ue_sync);
+    if (celldebug)
+      printf("CELL: Found CFO=%f\n", *cfo);
   }
 
 clean_exit:
 
-  srsran_rf_stop_rx_stream(rf);
+  if (mode != REPLAY)
+    srsran_rf_stop_rx_stream(rf);
   srsran_ue_mib_sync_free(&ue_mib);
 
   return ret;
@@ -171,7 +188,7 @@ int rf_cell_search(srsran_rf_t*       rf,
   bzero(found_cells, 3 * sizeof(srsran_ue_cellsearch_result_t));
 
   if (srsran_ue_cellsearch_init_multi(
-          &cs, config->max_frames_pss, srsran_rf_recv_wrapper_cs, nof_rx_channels, (void*)rf)) {
+          &cs, config->max_frames_pss, ngscope_recv_samples_wrapper, nof_rx_channels, (void*)rf)) { // replaced srsran_rf_recv_wrapper_cs // used for finding cells
     fprintf(stderr, "Error initiating UE cell detect\n");
     return SRSRAN_ERROR;
   }
@@ -179,11 +196,15 @@ int rf_cell_search(srsran_rf_t*       rf,
     srsran_ue_cellsearch_set_nof_valid_frames(&cs, config->nof_valid_pss_frames);
   }
 
-  INFO("Setting sampling frequency %.2f MHz for PSS search", SRSRAN_CS_SAMP_FREQ / 1000000);
-  srsran_rf_set_rx_srate(rf, SRSRAN_CS_SAMP_FREQ);
+  if (mode != REPLAY){
+    INFO("Setting sampling frequency %.2f MHz for PSS search", SRSRAN_CS_SAMP_FREQ / 1000000);
+    srsran_rf_set_rx_srate(rf, SRSRAN_CS_SAMP_FREQ);
+
 
   INFO("Starting receiver...");
   srsran_rf_start_rx_stream(rf, false);
+
+  }
 
   if (config->force_tdd) {
     srsran_ue_sync_set_frame_type(&cs.ue_sync, SRSRAN_TDD);
@@ -198,7 +219,8 @@ int rf_cell_search(srsran_rf_t*       rf,
     ret = srsran_ue_cellsearch_scan(&cs, found_cells, &max_peak_cell);
   }
 
-  srsran_rf_stop_rx_stream(rf);
+  if (mode != REPLAY)
+    srsran_rf_stop_rx_stream(rf);
 
   if (ret < 0) {
     ERROR("Error searching cell");

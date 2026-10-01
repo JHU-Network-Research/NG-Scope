@@ -20,7 +20,7 @@ extern "C" {
 
 #include "srsran/srsran.h"
 
-#define MAX_NOF_DCI_DECODER 6
+#define MAX_NOF_DCI_DECODER 8
 #define MAX_NOF_RF_DEV 4
 #define NOF_LOG_SF 32
 

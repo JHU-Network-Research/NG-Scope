@@ -41,7 +41,7 @@ dci_ready_t          	log_stat_ready = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_
 //CA_status_t   						ca_status;
 //pthread_mutex_t     cell_status_mutex = PTHREAD_MUTEX_INITIALIZER;
 //
-//// DCI status container for DCI-Logger 
+//// DCI status container for DCI-Logger
 //ngscope_cell_dci_ring_buffer_t 		log_cell_status[MAX_NOF_RF_DEV];
 //CA_status_t   						log_ca_status;
 //
@@ -77,7 +77,7 @@ int ngscope_main(ngscope_config_t* config)
     }
 
     nof_rf_dev = config->nof_rf_dev;
-	
+
 	for(int i=0; i<MAX_NOF_RF_DEV; i++){
 		printf("RF-DEV:%d\n", task_scheduler_closed[i]);
 	}
@@ -91,25 +91,50 @@ int ngscope_main(ngscope_config_t* config)
 		task_scheduler_closed[i] 	= false;
 
 		prog_args[i].nof_rf_dev       = nof_rf_dev;
-		prog_args[i].log_dl           = config->dci_log_config.log_dl;
-		prog_args[i].log_ul           = config->dci_log_config.log_ul;
-		prog_args[i].rnti             = (uint16_t)config->rnti;
 		prog_args[i].remote_enable    = config->remote_enable;
-		prog_args[i].decode_single_ue = config->decode_single_ue;
 		prog_args[i].decode_SIB 	  = config->decode_SIB;
+		prog_args[i].decode_RAR 	  = config->decode_RAR;
+		prog_args[i].rar_seed_tracker = config->rar_seed_tracker;
+		prog_args[i].rach_filter_only = config->rach_filter_only;
+		prog_args[i].mark_security_phase = config->mark_security_phase;
+		prog_args[i].enable_256qam    = config->enable_256qam;
+		prog_args[i].pcap_mac         = config->pcap_mac;
+		prog_args[i].probe_blind_dci  = config->probe_blind_dci;
+		prog_args[i].pcap_max_mb      = config->pcap_max_mb;
+		prog_args[i].qam_retry        = config->qam_retry;
+		prog_args[i].exit_on_desync   = config->exit_on_desync;
 
         prog_args[i].rf_index      = i;
         prog_args[i].rf_freq       = config->rf_config[i].rf_freq;
+        prog_args[i].rf_nof_rx_ant = config->rf_config[i].nof_rx_ant;
         prog_args[i].rf_freq_vec[i]= config->rf_config[i].rf_freq;
 
         prog_args[i].force_N_id_2  = config->rf_config[i].N_id_2;
         prog_args[i].nof_decoder   = config->rf_config[i].nof_thread;
         prog_args[i].disable_plots = config->rf_config[i].disable_plot;
-        
+
+        prog_args[i].mode          = config->rf_config[i].mode;
+        prog_args[i].use_replay_hdr= config->rf_config[i].use_replay_hdr;
+        if (config->rf_config[i].mode == 1){
+            prog_args[i].output_file_name      = (char*) malloc(1024);
+            sprintf(prog_args[i].output_file_name,"%s/recorded-samples.bin",config->out_path);
+            // strcpy(prog_args[i].output_file_name, );
+        }else if (config->rf_config[i].mode == 2){
+            prog_args[i].input_file_name      = (char*) malloc(1024);
+            strcpy(prog_args[i].input_file_name, config->rf_config[i].replay_fname);
+        }
+        prog_args[i].debug         = config->rf_config[i].debug;
+        prog_args[i].silent        = config->rf_config[i].silent;
+        prog_args[i].decode_pdcch  = config->rf_config[i].decode_pdcch;
         prog_args[i].rf_args    = (char*) malloc(100 * sizeof(char));
         strcpy(prog_args[i].rf_args, config->rf_config[i].rf_args);
         strcpy(prog_args[i].sib_logs, config->sib_logs_path);
+        strcpy(prog_args[i].out_path, config->out_path);
+        strcpy(prog_args[i].comment, config->comment);
+        strcpy(prog_args[i].location, config->location);
+        printf("Starting scheduler thread %d!\n", i);
         pthread_create(&task_thd[i], NULL, task_scheduler_thread, (void*)( &prog_args[i] ));
+        printf("Scheduler thread %d started!\n", i);
     }
 
     pthread_t status_thd;

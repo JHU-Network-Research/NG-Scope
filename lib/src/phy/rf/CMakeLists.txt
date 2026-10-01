@@ -21,7 +21,8 @@
 if(RF_FOUND)
   # This library is only used by the examples 
   add_library(srsran_rf_utils STATIC rf_utils.c)
-  target_link_libraries(srsran_rf_utils srsran_phy)
+  target_link_libraries(srsran_rf_utils srsran_phy ngscope_rx)
+  target_include_directories(srsran_rf_utils PRIVATE ${CMAKE_SOURCE_DIR}/ngscope/hdr)
 
   # Top-level RF library sources
   set(SOURCES_RF "")
@@ -166,8 +167,7 @@ if(RF_FOUND)
   # Tests
   if (UHD_FOUND AND UHD_ENABLE_CUSTOM_RFNOC)
     add_executable(rfnoc_test rfnoc_test.cc)
-    target_link_libraries(rfnoc_test srsran_rf ${UHD_LIBRARIES} ${Boost_LIBRARIES} /usr/lib/x86_64-linux-gnu/libboost_system.so)
-    message(info ${Boost_LIBRARIES})
+    target_link_libraries(rfnoc_test srsran_rf ${UHD_LIBRARIES} ${Boost_LIBRARIES})
   endif (UHD_FOUND AND UHD_ENABLE_CUSTOM_RFNOC)
 
   if (ZEROMQ_FOUND)

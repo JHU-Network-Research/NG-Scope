@@ -11,19 +11,32 @@
 #include <unistd.h>
 #include <stdint.h>
 
+#include "srsran/srsran.h"
+
 #include "ngscope/hdr/dciLib/dci_log.h"
 #include "ngscope/hdr/dciLib/cell_status.h"
 #include "ngscope/hdr/dciLib/socket.h"
 #include "ngscope/hdr/dciLib/parse_args.h"
 #include "ngscope/hdr/dciLib/thread_exit.h"
 #include "ngscope/hdr/dciLib/time_stamp.h"
+#include "ngscope/hdr/dciLib/rach_filter.h"
+
+/* Names for ngscope_rach_anchor_t. Empty string where there is no RNTI to anchor. */
+static const char* dci_anchor_string(uint8_t a)
+{
+	switch (a) {
+		case NGSCOPE_RACH_ANCHOR_RAR: return "rar";
+		case NGSCOPE_RACH_ANCHOR_CRC: return "crc";
+		default:                      return "";
+	}
+}
 
 extern bool go_exit;
 //extern ngscope_cell_dci_ring_buffer_t 	cell_status[MAX_NOF_RF_DEV];
 //extern CA_status_t   	ca_status;
 //extern pthread_mutex_t 	cell_status_mutex;
 
-// DCI status container for DCI-Logger 
+// DCI status container for DCI-Logger
 //extern ngscope_cell_dci_ring_buffer_t 		log_cell_status[MAX_NOF_RF_DEV];
 //extern CA_status_t   						log_ca_status;
 
@@ -60,10 +73,20 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 			}else{
 				fprintf(fd_dl,"{\n");
 			}
-			
+
 			// TTI RNTI
 			fprintf(fd_dl,"\"tti\": \"%d\",\n", q->tti);
 			fprintf(fd_dl,"\"rnti\": \"%d\",\n", q->dl_msg[i].rnti);
+			/* Always "unknown" now: nothing in this process reads a payload, so no DCI can be
+			 * placed relative to a security context here. tools/security_phase_join.py
+			 * fills the field in from the offline scan of the MAC pcap. */
+			fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
+			fprintf(fd_dl,"\"format\": \"%s\",\n",srsran_dci_format_string(q->dl_msg[i].format));
+			/* How this RNTI earned its place in the output. "rar" means it RACHed on this
+			 * cell; "crc" means it never did, and was confirmed only by a transport block
+			 * that passed its DL-SCH CRC -- which is what a UE that handed in to this cell,
+			 * or was already connected before the capture, looks like from here. */
+			fprintf(fd_dl,"\"anchor\": \"%s\",\n", dci_anchor_string(q->dl_msg[i].anchor));
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", q->cell_dl_prb);
@@ -73,8 +96,9 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 
 			fprintf(fd_dl,"\"harq\": \"%d\",\n", q->dl_msg[i].harq);
 			fprintf(fd_dl,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+			fprintf(fd_dl,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-			
+			fprintf(fd_dl,"\"nof_tb\": \"%d\",\n",q->dl_msg[i].nof_tb);
 
 			// TB1 related information
 			fprintf(fd_dl,"\"TB1_mcs\": \"%d\",\n", q->dl_msg[i].tb[0].mcs);
@@ -82,7 +106,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 			fprintf(fd_dl,"\"TB1_tbs\": \"%d\",\n",q->dl_msg[i].tb[0].tbs);
 			fprintf(fd_dl,"\"TB1_ndi\": \"%d\",\n", q->dl_msg[i].tb[0].ndi);
 
-			
+
 			// TB2 related information
 			if(q->dl_msg[i].nof_tb > 1){
 				fprintf(fd_dl,"\"TB2_mcs\": \"%d\",\n", q->dl_msg[i].tb[1].mcs);
@@ -107,10 +131,14 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 		}else{
 			fprintf(fd_dl,"{\n");
 		}
-			
+
 		// TTI RNTI
 		fprintf(fd_dl,"\"tti\": \"%d\",\n", q->tti);
 		fprintf(fd_dl,"\"rnti\": \"%d\",\n", 0);
+		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
+		fprintf(fd_dl,"\"security_phase\": \"unknown\",\n");
+		fprintf(fd_dl,"\"format\": \"\",\n");
+		fprintf(fd_dl,"\"anchor\": \"\",\n");
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_dl,"\"cell_dl_prb\": \"%d\",\n", 0);
@@ -120,8 +148,9 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 
 		fprintf(fd_dl,"\"harq\": \"%d\",\n", 0);
 		fprintf(fd_dl,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+		fprintf(fd_dl,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-		
+		fprintf(fd_dl,"\"nof_tb\": \"%d\",\n",0);
 
 		// TB1 related information
 		fprintf(fd_dl,"\"TB1_mcs\": \"%d\",\n", 0);
@@ -129,7 +158,7 @@ void log_dl_subframe(sf_status_t* q,FILE* fd_dl){
 		fprintf(fd_dl,"\"TB1_tbs\": \"%d\",\n",0);
 		fprintf(fd_dl,"\"TB1_ndi\": \"%d\",\n", 0);
 
-		
+
 		// TB2 related information
 		fprintf(fd_dl,"\"TB2_mcs\": \"%d\",\n", 0);
 		fprintf(fd_dl,"\"TB2_rv\": \"%d\",\n", 0);
@@ -200,7 +229,7 @@ void log_dl_subframe(sf_status_t* q,
 #ifdef USE_JSON
 void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 	static bool isFirstCall = true;
-	
+
 	long position = ftell(fd_ul);
 
 	if (position == 0){
@@ -221,10 +250,12 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 			}else{
 				fprintf(fd_ul,"{\n");
 			}
-			
+
 			// TTI RNTI
 			fprintf(fd_ul,"\"tti\": \"%d\",\n", q->tti);
 			fprintf(fd_ul,"\"rnti\": \"%d\",\n", q->ul_msg[i].rnti);
+			fprintf(fd_ul,"\"security_phase\": \"unknown\",\n");
+			fprintf(fd_ul,"\"format\": \"%s\",\n",srsran_dci_format_string(q->ul_msg[i].format));
 
 			// CELL_PRB UE_PRB
 			fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", q->cell_ul_prb);
@@ -233,8 +264,9 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 
 
 			fprintf(fd_ul,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+			fprintf(fd_ul,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-			
+			fprintf(fd_ul,"\"nof_tb\": \"%d\",\n",q->ul_msg[i].nof_tb);
 
 			// TB1 related information
 			fprintf(fd_ul,"\"TB1_mcs\": \"%d\",\n", q->ul_msg[i].tb[0].mcs);
@@ -242,7 +274,7 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 			fprintf(fd_ul,"\"TB1_tbs\": \"%d\",\n",q->ul_msg[i].tb[0].tbs);
 			fprintf(fd_ul,"\"TB1_ndi\": \"%d\",\n", q->ul_msg[i].tb[0].ndi);
 
-			
+
 			// TB2 related information --> UPlink has no second TB yet
 			if(q->ul_msg[i].nof_tb > 1){
 				fprintf(fd_ul,"\"TB2_mcs\": \"%d\",\n", q->ul_msg[i].tb[1].mcs);
@@ -267,10 +299,13 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 		}else{
 			fprintf(fd_ul,"{\n");
 		}
-		
+
 		// TTI RNTI
 		fprintf(fd_ul,"\"tti\": \"%d\",\n", q->tti);
 		fprintf(fd_ul,"\"rnti\": \"%d\",\n", 0);
+		// Placeholder row for a subframe with no DCIs: no RNTI, so nothing to place.
+		fprintf(fd_ul,"\"security_phase\": \"unknown\",\n");
+		fprintf(fd_ul,"\"format\": \"\",\n");
 
 		// CELL_PRB UE_PRB
 		fprintf(fd_ul,"\"cell_ul_prb\": \"%d\",\n", 0);
@@ -279,8 +314,9 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 
 
 		fprintf(fd_ul,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+		fprintf(fd_ul,"\"collection_time\": \"%ld\",\n",q->collection_time);
 
-		
+		fprintf(fd_ul,"\"nof_tb\": \"%d\",\n",0);
 
 		// TB1 related information
 		fprintf(fd_ul,"\"TB1_mcs\": \"%d\",\n", 0);
@@ -288,14 +324,14 @@ void log_ul_subframe(sf_status_t* q,FILE* fd_ul){
 		fprintf(fd_ul,"\"TB1_tbs\": \"%d\",\n",0);
 		fprintf(fd_ul,"\"TB1_ndi\": \"%d\",\n", 0);
 
-		
+
 		// TB2 related information --> UPlink has no second TB yet
 
 		fprintf(fd_ul,"\"TB2_mcs\": \"%d\",\n", 0);
 		fprintf(fd_ul,"\"TB2_rv\": \"%d\",\n", 0);
 		fprintf(fd_ul,"\"TB2_tbs\": \"%d\",\n", 0);
 		fprintf(fd_ul,"\"TB2_ndi\": \"%d\"\n", 0);
-		
+
 		fprintf(fd_ul,"}");
 		if (isFirstCall == true){
 			isFirstCall = false;
@@ -374,13 +410,14 @@ void log_phich_subframe(sf_status_t* q, FILE* fd_phich){
 					fprintf(fd_phich,"{\n");
 				}
 
-				// TTI RNTI		
+				// TTI RNTI
 				fprintf(fd_phich,"\"tti\": \"%d\",\n", q->tti);
 				fprintf(fd_phich,"\"rnti\": \"%d\",\n", q->ul_msg[i].rnti);
 
 				// PHICH
 				fprintf(fd_phich,"\"rv\": \"%d\",\n", q->ul_msg[i].tb[0].rv);
-				fprintf(fd_phich,"\"timestamp_us\": \"%ld\"\n", q->timestamp_us);
+				fprintf(fd_phich,"\"timestamp_us\": \"%ld\",\n", q->timestamp_us);
+				fprintf(fd_phich,"\"collection_time\": \"%ld\"\n",q->collection_time);
 				fprintf(fd_phich,"}");
 				if (isFirstCall == true){
 					isFirstCall = false;
@@ -396,13 +433,14 @@ void log_phich_subframe(sf_status_t* q, FILE* fd_phich){
 		}else{
 			fprintf(fd_phich,"{\n");
 		}
-		// TTI RNTI		
+		// TTI RNTI
 		fprintf(fd_phich,"\"tti\": \"%d\",\n", q->tti);
 		fprintf(fd_phich,"\"rnti\": \"%d\",\n", 0);
 
 		// PHICH
 		fprintf(fd_phich,"\"rv\": \"%d\",\n", 0);
 		fprintf(fd_phich,"\"timestamp_us\": \"%ld\"\n", q->timestamp_us);
+		fprintf(fd_phich,"\"collection_time\": \"%ld\",\n",q->collection_time);
 		fprintf(fd_phich,"}");
 		if (isFirstCall == true){
 			isFirstCall = false;
@@ -425,11 +463,10 @@ void log_phich_subframe(sf_status_t* q,
 			if(q->ul_msg[i].tb[0].rv == 4){
 				nof_phich++;
 				// TTI RNTI
-				fprintf(fd_phich, "%d\t%d\t", q->tti, q->ul_msg[i].rnti);	
+				fprintf(fd_phich, "%d\t%d\t", q->tti, q->ul_msg[i].rnti);
 				// PHICH
-				fprintf(fd_phich, "%d\t", q->ul_msg[i].tb[0].rv);	
-				fprintf(fd_phich, "%ld\n", q->timestamp_us);							
-			}
+				fprintf(fd_phich, "%d\t", q->ul_msg[i].tb[0].rv);
+				fprintf(fd_phich, "%ld\n", q->timestamp_us);			}
 
 		}
 	}
@@ -461,7 +498,7 @@ void log_per_subframe(sf_status_t* q, ngscope_dci_log_config_t* config, int cell
 
     if(config->log_phich[cell_idx]){
 		log_phich_subframe(q, config->fd_phich[cell_idx]);
-    }	
+    }
 
     return;
 }
@@ -476,7 +513,7 @@ void log_per_cell(ngscope_cell_dci_ring_buffer_t* q, ngscope_dci_log_config_t* c
 #endif
 
 	if(q->cell_ready){
-		// we are not logging single dci 
+		// we are not logging single dci
 		if(start_idx == end_idx){
 			return;
 		}else if(start_idx > end_idx){
@@ -494,7 +531,7 @@ void log_per_cell(ngscope_cell_dci_ring_buffer_t* q, ngscope_dci_log_config_t* c
     return;
 }
 
-void log_multi_cell(ngscope_cell_dci_ring_buffer_t* 	q, 
+void log_multi_cell(ngscope_cell_dci_ring_buffer_t* 	q,
 					ngscope_dci_log_config_t* 			config,
 					ngscope_cell_dci_ring_buffer_t 		cell_status[MAX_NOF_RF_DEV],
 					CA_status_t*   						ca_status)
@@ -515,10 +552,10 @@ void log_multi_cell(ngscope_cell_dci_ring_buffer_t* 	q,
 					if(config->curr_header[i] !=  cell_status[i].cell_header){
 						config->curr_header[i] =  cell_status[i].cell_header;
 					}
-					//fprintf(fd, "%d\t%d\t%d\t%d\t\n", cur_head, cell_header, curr_header[i], 
+					//fprintf(fd, "%d\t%d\t%d\t%d\t\n", cur_head, cell_header, curr_header[i],
 								//cell_status[i].cell_header);
 				}
-			}		
+			}
 		}
 	}
 	return;
@@ -536,13 +573,13 @@ void fill_file_descriptor(FILE* fd_dl[MAX_NOF_RF_DEV],
     // create the folder
 	sprintf(str, "mkdir -p %s", config->dci_logs_path);
     system(str);
-	
+
     char local_time_str[128];
 
 	t1	= time(NULL);
 	newtime = localtime(&t1);
 	strftime(local_time_str, 128, "%Y_%m_%d_%H_%M_%S",newtime);
-	
+
     for(int i=0; i<nof_rf_dev; i++){
         if(config->rf_config[i].log_dl){
 			if(fd_dl[i] != NULL){
@@ -578,14 +615,13 @@ void fill_file_descriptor(FILE* fd_dl[MAX_NOF_RF_DEV],
                 printf("ERROR: fail to open phich log file!\n");
                 exit(0);
             }
-        }		
+        }
     }
 	return;
 }
 
 void fill_dci_log_config(ngscope_dci_log_config_t* q, ngscope_config_t* config){
-	q->nof_cell 	= config->nof_rf_dev; 
-	q->targetRNTI 	= config->rnti; 
+	q->nof_cell 	= config->nof_rf_dev;
 	for(int i=0; i<q->nof_cell; i++){
 		//q->cell_prb[i] 	= config.rf_config[i].
 		q->log_dl[i] 	= config->rf_config[i].log_dl;
@@ -599,7 +635,9 @@ void fill_dci_log_config(ngscope_dci_log_config_t* q, ngscope_config_t* config){
 	fill_file_descriptor(q->fd_dl, q->fd_ul, q->fd_phich, config);
 
 #ifdef LOG_DCI_LOGGER
-	q->fd_log_cell = fopen("dci_log_cell.txt", "w+");
+	char logcellpath[1024];
+	sprintf(logcellpath,"%sdci_log_cell.txt", config->out_path);
+	q->fd_log_cell = fopen(logcellpath, "w+");
 #endif
 
 	return;
@@ -644,17 +682,19 @@ void* dci_log_thread(void* p){
 
 	/* We now init two status buffer CA status and cell status */
 	// --> init the CA status
-	CA_status_init(&ca_status, buf_size, dci_log_config.targetRNTI, dci_log_config.nof_cell, log_config->cell_prb);
+	CA_status_init(&ca_status, buf_size, dci_log_config.nof_cell, log_config->cell_prb);
 
-	FILE* fd = fopen("dci_log.txt", "w+");
+	char dcilogpath[1024];
+	sprintf(dcilogpath, "%sdci_log.txt",log_config->config.out_path);
+	FILE* fd = fopen(dcilogpath, "w+");
 
-	printf("\n\n\n nof_cell:%d targetRNTI:%d \n\n\n", dci_log_config.nof_cell, dci_log_config.targetRNTI);
+	printf("\n\n\n nof_cell:%d \n\n\n", dci_log_config.nof_cell);
 
 	// --> init the cell status
 	for(int i=0; i<dci_log_config.nof_cell; i++){
-		dci_ring_buffer_init(&cell_status[i], dci_log_config.targetRNTI, log_config->cell_prb[i], i, buf_size);
+		dci_ring_buffer_init(&cell_status[i], log_config->cell_prb[i], i, buf_size, log_config->config.out_path);
 	}
-	
+
 	uint64_t last_time = timestamp_ms();
 	uint64_t curr_time = last_time;
 
@@ -670,7 +710,7 @@ void* dci_log_thread(void* p){
 		//fprintf(fd, "%d\t%d\n", cell_stat_buffer[0].tti, nof_dci);
 		memcpy(dci_buf, log_stat_buffer, nof_dci * sizeof(ngscope_status_buffer_t));
 
-        // clean the dci buffer 
+        // clean the dci buffer
         memset(log_stat_buffer, 0, nof_dci * sizeof(ngscope_status_buffer_t));
 
      	// reset the dci buffer
@@ -680,7 +720,7 @@ void* dci_log_thread(void* p){
 
 		//printf("Logger get %d dci messages! buf_size:%d %d\n", nof_dci, cell_status[0].buf_size, buf_size);
 		for(int i=0; i<nof_dci; i++){
-			int cell_idx = dci_buf[i].cell_idx;	
+			int cell_idx = dci_buf[i].cell_idx;
 			//enqueue the dci to the according cell status buffer
 			//printf("LOGGER put dci!cell_idx:%d header:%d tti:%d\n", cell_idx, cell_status[cell_idx].cell_header, dci_buf[i].tti);
 			dci_ring_buffer_put_dci(&cell_status[cell_idx], &dci_buf[i], 0);
@@ -698,18 +738,18 @@ void* dci_log_thread(void* p){
 			}
 		}
 		fprintf(fd, "%d\t%d\t\n", cell_status[0].cell_header, dci_log_config.curr_header[0]);
-	} 
+	}
 	fclose(fd);
 
 	clear_dci_log_config(&dci_log_config);
 
- 	wait_for_ALL_RF_DEV_close();        
+ 	wait_for_ALL_RF_DEV_close();
 
 	for(int i=0; i<dci_log_config.nof_cell; i++){
 		// delete the ring buffer
 		dci_ring_buffer_delete(&(cell_status[i]));
 	}
-	
+
 	printf("DCI-LOGGER IS CLOSED!\n");
 	return NULL;
 }
@@ -717,7 +757,7 @@ void* dci_log_thread(void* p){
 //void auto_dci_logging(ngscope_cell_dci_ring_buffer_t* q,
 //						//prog_args_t* prog_args,
 //						ngscope_config_t* config,
-//						FILE* fd_dl, 
+//						FILE* fd_dl,
 //						FILE* fd_ul,
 //						int   last_header,
 //						int   cell_idx,
@@ -729,7 +769,7 @@ void* dci_log_thread(void* p){
 //	//FILE* fd = fopen("./auto_dci_log.txt","a+");
 //
 //	if(q->cell_ready){
-//		// we are not logging single dci 
+//		// we are not logging single dci
 //		if(start_idx == end_idx){
 //			return;
 //		}else if(start_idx > end_idx){
@@ -751,7 +791,7 @@ void* dci_log_thread(void* p){
 
 
 //void* dci_log_thread(void* p){
-//  	//prog_args_t* prog_args = (prog_args_t*)p; 
+//  	//prog_args_t* prog_args = (prog_args_t*)p;
 //	ngscope_config_t* config = (ngscope_config_t*)p;
 //    FILE* fd_dl[MAX_NOF_RF_DEV];
 //    FILE* fd_ul[MAX_NOF_RF_DEV];
@@ -781,10 +821,10 @@ void* dci_log_thread(void* p){
 //					if(curr_header[i] !=  cell_status[i].cell_header){
 //						curr_header[i] =  cell_status[i].cell_header;
 //					}
-//					//fprintf(fd, "%d\t%d\t%d\t%d\t\n", cur_head, cell_header, curr_header[i], 
+//					//fprintf(fd, "%d\t%d\t%d\t%d\t\n", cur_head, cell_header, curr_header[i],
 //								//cell_status[i].cell_header);
 //				}
-//			}		
+//			}
 //		}
 //        pthread_mutex_unlock(&cell_status_mutex);
 //		// we may not want to always hold the lock

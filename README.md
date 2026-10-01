@@ -32,6 +32,56 @@ NG-Scope incorporates a powerful real-time processing library that operates on t
  
 In conclusion, NG-Scope offers a comprehensive and efficient workflow for decoding control channels from multiple base stations. Its parallel processing capabilities, intelligent data ordering, and user-friendly features make it an invaluable tool for analyzing and interpreting cellular communication data in real-time.
 
+## Usage
+
+```
+ngscope -c <config file> [-o <output folder>]
+```
+
+NG-Scope is driven entirely by a config file passed with `-c`, in either **TOML** or
+**libconfig** format — the backend is chosen by file extension, and both accept exactly the
+same settings. See **[docs/configuration.md](docs/configuration.md)** for a full reference:
+every top-level, per-device and logging parameter, the layout of the output directory, the
+record/replay modes, the RACH decoding and RNTI filtering options, and a list of known
+quirks in the current configuration handling.
+
+Further documentation:
+
+| document | covers |
+|---|---|
+| [docs/configuration.md](docs/configuration.md) | every setting, the output layout, record/replay |
+| [docs/pcap.md](docs/pcap.md) | the MAC pcap output and the Wireshark setup it needs |
+| [docs/security-measurement.md](docs/security-measurement.md) | measuring AS security establishment, and how to read the numbers |
+| [docs/security-implementation.md](docs/security-implementation.md) | how that is implemented, and what is deliberately not done |
+
+Example configurations are provided at [`ngscope/config.toml`](ngscope/config.toml) (TOML)
+and [`ngscope/config.cfg`](ngscope/config.cfg) (libconfig).
+
+### Desktop GUI
+
+Rather than editing a config file by hand, you can drive NG-Scope from a desktop app that
+writes the config for you, launches ngscope, and shows its output and plots live:
+
+```
+./gui/ngscope-gui
+```
+
+The first run creates a virtualenv under `gui/.venv` and installs its one dependency; after
+that it starts straight away. It needs the system PyGObject and WebKitGTK bindings, which on
+Debian/Ubuntu are:
+
+```
+sudo apt install python3-gi gir1.2-webkit2-4.1
+```
+
+Build ngscope first (see above) — the GUI finds the binary in `build/ngscope/src/ngscope`,
+on `PATH`, or wherever you point it under **Advanced**.
+
+It covers every setting in the config schema, remembers them between sessions, converts
+EARFCN to a downlink frequency, and renders the PDCCH constellation and channel response
+in-window instead of in separate srsGUI windows. See
+**[gui/README.md](gui/README.md)** for details.
+
 ## NG-Scope Version 2.1 Release Notes
 
 We are excited to announce the release of NG-Scope 2.1, featuring significant updates and new functionalities. Let's explore what's new:

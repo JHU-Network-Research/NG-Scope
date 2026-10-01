@@ -2,7 +2,7 @@
 #define SRSRAN_NGSCOPE_ST_H
 
 #define MAX_CANDIDATES_ALL 180
-#define MAX_NOF_FORMAT 4
+#define MAX_NOF_FORMAT 8
 #define MAX_DCI_PER_SUB 10
 #define LLR_RATIO 0.3f
 
@@ -32,15 +32,47 @@ typedef struct{
     int      nof_tb;
     bool     dl;
     float    decode_prob;
-    float    corr; 
+    float    corr;
 
     srsran_dci_format_t format;
+
+    /* Where this DCI sits relative to the UE establishing an AS security context:
+     * 0 unknown, 1 pre, 2 post -- the values of ngscope_sec_phase_t. Kept as a plain
+     * integer so this header, which lives under lib/, needs no ngscope/hdr include.
+     * Always 0 unless mark_security_phase is on. */
+    uint8_t             sec_phase;
+
+    /* How the RNTI that carries this DCI earned its place in the output: 0 unknown, 1 a RAR
+     * on this cell, 2 a passing DL-SCH CRC (ngscope_rach_anchor_t). Same plain-integer
+     * treatment as sec_phase above, and for the same reason.
+     *
+     * The distinction matters because the two anchors answer different questions. A RAR says
+     * the UE started here. A CRC confirmation says only that the (RNTI, grant) pair is real
+     * -- which is what a UE that handed in to this cell, or was already connected when the
+     * capture began, looks like, since neither has a RAR here. */
+    uint8_t             anchor;
+
     // information of the transport block
     ngscope_dci_tb_t    tb[2];
 
     // parameters stored for decoding phich
     ngscope_dci_phich_t phich;
 	srsran_dci_location_t loc;
+
+    // JH debug information
+    // int nof_bits;
+    // float agreement;
+    // float repeat_corr;
+    // uint32_t l_crb;
+    // uint32_t rb_start;
+
+    // srsran_ra_type_t alloc_type;
+    // union {
+    //     srsran_ra_type0_t type0_alloc;
+    //     srsran_ra_type1_t type1_alloc;
+    //     srsran_ra_type2_t type2_alloc;
+    // };
+
 }ngscope_dci_msg_t;
 
 
@@ -52,6 +84,7 @@ typedef struct SRSRAN_API {
     uint32_t           nof_ul_dci;
 
 	uint64_t 			timestamp;
+    uint64_t            collection_time;
 } ngscope_dci_per_sub_t;
 
 int ngscope_push_dci_to_per_sub(ngscope_dci_per_sub_t* q, ngscope_dci_msg_t* msg);
