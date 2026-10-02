@@ -22,6 +22,9 @@ typedef struct{
     int         debug;
     int         silent;
     int         decode_pdcch;
+
+    char                location[1024];
+    char                comment[1024];
 }rf_dev_config_t;
 
 typedef struct{
@@ -65,9 +68,6 @@ typedef struct{
 
     int                 exit_on_desync;
 
-    char                location[1024];
-    char                comment[1024];
-
     dci_log_config_t    dci_log_config;
     rf_dev_config_t     rf_config[MAX_NOF_RF_DEV];
 }ngscope_config_t;
@@ -109,8 +109,6 @@ typedef struct{
     X(BOOL,   "qam_retry",         qam_retry,          true,   false)                      \
     X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)                      \
     X(INT,    "exit_on_desync",    exit_on_desync,     0,      false)                      \
-    X(STRBUF, "comment",           comment,            "",     false)                      \
-    X(STRBUF, "location",          location,           "",     false)                      \
 
 /* Per-device keys, written to ngscope_config_t.rf_config[i], read from "rf_config<i>.<key>" */
 #define NGSCOPE_RF_DEV_KEYS(X)                                                             \
@@ -130,7 +128,9 @@ typedef struct{
     X(BOOL,   "debug",             debug,              false,  false)                      \
     X(BOOL,   "silent",            silent,             false,  false)                      \
     X(BOOL,   "decode_pdcch",      decode_pdcch,       true,   false)                      \
-    X(BOOL,   "use_replay_hdr",    use_replay_hdr,     true,   false)
+    X(BOOL,   "use_replay_hdr",    use_replay_hdr,     true,   false)                      \
+    X(STRBUF, "comment",           comment,            "",     false)                      \
+    X(STRBUF, "location",          location,           "",     false)                      \
 
 
 /* Logging keys, written to ngscope_config_t.dci_log_config, read from "dci_log_config.<key>" */

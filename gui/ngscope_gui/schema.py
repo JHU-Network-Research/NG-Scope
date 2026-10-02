@@ -83,6 +83,7 @@ TOP_LEVEL = [
         "this path can segfault on a weak cell, seemingly on a false-positive SI-RNTI grant. "
         "If a run dies inside srsran_ue_dl_find_and_decode_sib1, turn it off -- that opt-out "
         "is the only way to replay such a capture.",
+        no_record=True
     ),
     _f(
         "decode_RAR",
@@ -92,6 +93,7 @@ TOP_LEVEL = [
         "Decode Random Access Responses (Msg2), one row per RAR in rar_log-<rf_idx>.csv. "
         "Gives the TTI at which each RNTI was assigned. Roughly +25% decode time per "
         "subframe; does not change the DCI output.",
+        no_record=True
     ),
     _f(
         "rar_seed_tracker",
@@ -101,6 +103,7 @@ TOP_LEVEL = [
         "Prime the UE tracker with each RACH-assigned RNTI so its next genuine PDCCH "
         "sighting promotes it to active instead of needing two. Measured effect on DCI "
         "yield: none.",
+        no_record=True
     ),
     _f(
         "mark_security_phase",
@@ -119,6 +122,7 @@ TOP_LEVEL = [
         "RLC and reads NAS, neither of which ngscope ever did -- and writes security_events "
         "/ security_sessions / security_summary beside the run.",
         replay_only=True,
+        no_record=True,
     ),
     _f(
         "rach_filter_only",
@@ -128,6 +132,7 @@ TOP_LEVEL = [
         "Record only DCIs whose RNTI was observed being assigned to a UE that successfully "
         "completed RACH, plus SI-RNTI/P-RNTI/RA-RNTI which never RACH. Implies decode_RAR, "
         "since the RNTI set is built from decoded RARs.",
+        no_record=True
     ),
     _f(
         "pcap_mac",
@@ -136,6 +141,7 @@ TOP_LEVEL = [
         "MAC pcap",
         "Write every decoded downlink MAC PDU to mac-<rf_idx>.pcapng, readable in Wireshark "
         "once DLT_USER0 (147) is mapped to mac-lte-framed. See docs/pcap.md.",
+        no_record=True
     ),
     _f(
         "pcap_max_mb",
@@ -159,6 +165,7 @@ TOP_LEVEL = [
         "instead of dropping subframes. On one capture it recovered 37 SecurityModeCommands "
         "(33.8% to 39.2%) for 1 second in 65.",
         replay_only=True,
+        no_record=True,
     ),
     _f(
         "probe_blind_dci",
@@ -177,6 +184,7 @@ TOP_LEVEL = [
         "contains, not just what is measured about it. Writes blind_probe-<rf>.csv; costs a "
         "PDSCH decode per RNTI per subframe.",
         replay_only=True,
+        no_record=True
     ),
     _f(
         "enable_256qam",
@@ -199,20 +207,6 @@ TOP_LEVEL = [
         0,
         "Dropped frames before exit",
         "The number of frames lost to desynchronization allowed before NG-Scope exits. A value of 0 or lower does not exit on any desynchronization.",
-    ),
-    _f(
-        "location",
-        "str",
-        "",
-        "Location",
-        "The location where the recording was taken."
-    ),
-    _f(
-        "comment",
-        "str",
-        "",
-        "Comment",
-        "A comment to be stored with the recording metadata."
     )
 ]
 
@@ -246,6 +240,20 @@ RF_DEV = [
         maxlen=RF_ARGS_MAX_LEN,
     ),
     _f(
+        "location",
+        "str",
+        "",
+        "Location",
+        "The location where the recording was taken."
+    ),
+    _f(
+        "comment",
+        "str",
+        "",
+        "Comment",
+        "A comment to be stored with the recording metadata."
+    ),
+    _f(
         "nof_thread",
         "int",
         4,
@@ -260,16 +268,17 @@ RF_DEV = [
         "int",
         1,
         "RX antennas",
-        "Receive channels to open on this SDR. Needs an SDR with two coherent RX channels "
-        "(B210, or an X310 with two daughterboards). Two are required for TM3's two-layer "
-        "CDD, which errors outright at one antenna. Spatial multiplexing is NOT in that "
-        "category despite appearances -- it decodes fine at one antenna (measured: 2,238 of "
-        "2,580 Format2 grants on a 2-port cell). On a 4-port cell a second antenna is still "
-        "worth having: srsRAN has no 4-port spatial-multiplexing predecoder, but it does have "
-        "a 4-port transmit-diversity one, and transmit diversity carries every message a UE "
-        "receives before AS security is established. Measured on a 4-port cell, same bytes at "
-        "1 vs 2 antennas: Format1A CRC 42.5% -> 49.2%, transport blocks decoded +25%, RARs "
-        "found +17%.",
+        "Number of receive channels to open on this SDR. SDR must support # of desired receive channels",
+        # "Receive channels to open on this SDR. Needs an SDR with two coherent RX channels "
+        # "(B210, or an X310 with two daughterboards). Two are required for TM3's two-layer "
+        # "CDD, which errors outright at one antenna. Spatial multiplexing is NOT in that "
+        # "category despite appearances -- it decodes fine at one antenna (measured: 2,238 of "
+        # "2,580 Format2 grants on a 2-port cell). On a 4-port cell a second antenna is still "
+        # "worth having: srsRAN has no 4-port spatial-multiplexing predecoder, but it does have "
+        # "a 4-port transmit-diversity one, and transmit diversity carries every message a UE "
+        # "receives before AS security is established. Measured on a 4-port cell, same bytes at "
+        # "1 vs 2 antennas: Format1A CRC 42.5% -> 49.2%, transport blocks decoded +25%, RARs "
+        # "found +17%.",
         min=1,
         max=4,
         # Recording writes every channel and the file header carries the count, so there is

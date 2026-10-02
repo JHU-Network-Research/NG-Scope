@@ -130,8 +130,8 @@ int ngscope_main(ngscope_config_t* config)
         strcpy(prog_args[i].rf_args, config->rf_config[i].rf_args);
         strcpy(prog_args[i].sib_logs, config->sib_logs_path);
         strcpy(prog_args[i].out_path, config->out_path);
-        strcpy(prog_args[i].comment, config->comment);
-        strcpy(prog_args[i].location, config->location);
+        strcpy(prog_args[i].comment, config->rf_config[i].comment);
+        strcpy(prog_args[i].location, config->rf_config[i].location);
         printf("Starting scheduler thread %d!\n", i);
         pthread_create(&task_thd[i], NULL, task_scheduler_thread, (void*)( &prog_args[i] ));
         printf("Scheduler thread %d started!\n", i);

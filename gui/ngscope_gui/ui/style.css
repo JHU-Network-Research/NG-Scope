@@ -344,6 +344,7 @@ code {
 .path-row input { flex: 1; font-family: var(--mono); font-size: 12px; }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3) var(--s-4); }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3) var(--s-4); }
 
 /* ------------------------------------------------------------------ toggles */
 

@@ -11,11 +11,17 @@ outside the GUI round-trips as far as the schema covers it.
 import tomllib
 from datetime import datetime
 from pathlib import Path
+from enum import Enum
 
 from . import earfcn, schema
 
 
 # --------------------------------------------------------------------------- emitting
+
+class OPERATION_MODE(Enum):
+    NORMAL=0
+    RECORD=1
+    REPLAY=2
 
 
 def _scalar(value, type_):
@@ -27,7 +33,7 @@ def _scalar(value, type_):
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _emit_fields(lines, fields, values, replaying=True):
+def _emit_fields(lines, fields, values, mode):
     for field in fields:
         key = field["key"]
         value = values.get(key, field["default"])
@@ -40,7 +46,10 @@ def _emit_fields(lines, fields, values, replaying=True):
         # config: ngscope refuses mark_security_phase outside mode 2, so a value left over
         # from an earlier replay session would abort the run over a setting the form does
         # not even show in that mode.
-        if field.get("replay_only") and not replaying:
+        if field.get("replay_only") and mode != OPERATION_MODE.REPLAY:
+            value = field["default"]
+
+        if field.get("no_record") and mode == OPERATION_MODE.RECORD:
             value = field["default"]
         # An unsupported setting can no longer do anything; ngscope_config_finalize() forces
         # it back to its default anyway, so emit that rather than a value the startup echo
@@ -64,16 +73,23 @@ def dumps(model):
     ]
 
     replaying = any(c.get("mode") == schema.MODE_REPLAY for c in model.get("cells", []))
-    _emit_fields(lines, schema.TOP_LEVEL, model.get("top", {}), replaying)
+    recording = any(c.get("mode") == schema.MODE_RECORD for c in model.get("cells", []))
+    if replaying:
+        mode = OPERATION_MODE.REPLAY
+    elif recording:
+        mode = OPERATION_MODE.RECORD
+    else:
+        mode = OPERATION_MODE.NORMAL
+    _emit_fields(lines, schema.TOP_LEVEL, model.get("top", {}), mode)
 
     # nof_rf_dev is intentionally not emitted: the TOML backend derives it from the
     # number of [[rf_config]] tables (load_config_toml.c:174-183).
     for cell in model.get("cells", []):
         lines += ["", "[[rf_config]]"]
-        _emit_fields(lines, schema.RF_DEV, cell, replaying)
+        _emit_fields(lines, schema.RF_DEV, cell, mode)
 
     lines += ["", "[dci_log_config]"]
-    _emit_fields(lines, schema.LOG, model.get("log", {}), replaying)
+    _emit_fields(lines, schema.LOG, model.get("log", {}), mode)
 
     lines.append("")
     return "\n".join(lines)

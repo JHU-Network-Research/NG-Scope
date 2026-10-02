@@ -15,8 +15,8 @@ const MODE_NORMAL = 0, MODE_RECORD = 1, MODE_REPLAY = 2;
 
 /* Placement only. Keys absent from these lists are appended automatically. */
 const FIELD_GROUPS = {
-  cellPrimary: ['mode', 'rf_freq', 'rf_args', 'N_id_2', 'nof_thread'],
-  cellToggles: ['decode_pdcch', 'log_dl', 'log_ul', 'log_phich', 'disable_plot', 'debug', 'silent'],
+  cellPrimary: ['mode', 'rf_freq', 'rf_args', 'N_id_2', 'nof_thread', 'comment', 'location','nof_rx_ant'],
+  cellToggles: ['decode_pdcch', 'log_dl', 'log_ul', 'log_phich', 'disable_plot', 'debug', 'silent', 'use_replay_hdr'],
   topNumbers: [],
   /* Promoted out of the Decoding list into their own card: these two decide what reaches
      the logs at all, and rach_filter_only silently forces decode_RAR on. */
@@ -29,7 +29,6 @@ const FIELD_GROUPS = {
      shown only when a cell is actually replaying. */
   securityReplay: ['qam_retry'],
   topToggles: ['decode_SIB', 'remote_enable'],
-  metadata: ['location','comment'],
 };
 
 /* Chips carry the one fact about a setting that is not obvious from its name -- a cost, or
@@ -452,7 +451,7 @@ function renderCells() {
   };
 
   const { known, rest } = orderedFields(SCHEMA.rf_dev, [
-    ...FIELD_GROUPS.cellPrimary, ...FIELD_GROUPS.cellToggles, 'replay_fname',
+    ...FIELD_GROUPS.cellPrimary, '', ...FIELD_GROUPS.cellToggles, 'replay_fname',
   ]);
 
   const modeField = fieldByKey(SCHEMA.rf_dev, 'mode');
@@ -472,7 +471,8 @@ function renderCells() {
   if (cell.mode === MODE_RECORD) {
     const note = el('div', 'callout info');
     note.innerHTML = 'IQ is written to <code>&lt;output directory&gt;/&lt;timestamp&gt;/'
-      + 'recorded-samples.bin</code> — set the directory under <b>Run</b>.';
+      + 'recorded-samples.bin</code> — set the directory under <b>Run</b>. '
+      + 'Please consult <code>docs/record.md</code> for recording instructions.';
     body.appendChild(note);
   }
   if (cell.mode === MODE_REPLAY) {
@@ -496,8 +496,8 @@ function renderCells() {
     body.appendChild(tuningField(cell, index));
   }
 
-  const grid = el('div', 'grid-2');
-  ['nof_thread', 'N_id_2'].forEach((key) => {
+  const grid = el('div', 'grid-3');
+  ['nof_thread', 'N_id_2', 'nof_rx_ant'].forEach((key) => {
     const field = fieldByKey(SCHEMA.rf_dev, key);
     if (field) grid.appendChild(renderField(field, cell[key], set(key), `cells.${index}.${key}`));
   });
@@ -505,6 +505,14 @@ function renderCells() {
 
   const rfArgs = fieldByKey(SCHEMA.rf_dev, 'rf_args');
   body.appendChild(renderField(rfArgs, cell.rf_args, set('rf_args'), `cells.${index}.rf_args`));
+
+  if (recording()) {
+
+    const location = fieldByKey(SCHEMA.rf_dev, 'location');
+    body.appendChild(renderField(location, cell.location, set('location'), `cells.${index}.location`));
+    const comment = fieldByKey(SCHEMA.rf_dev, 'comment');
+    body.appendChild(renderField(comment, cell.comment, set('comment'), `cells.${index}.comment`));
+  }
 
   const toggles = el('div', 'toggles');
   FIELD_GROUPS.cellToggles.forEach((key) => {
@@ -553,6 +561,17 @@ function renderRach() {
     renderRach();       // the coupling below depends on both values
     renderTopLevel();
   };
+
+  if (recording()) {
+    /* When recording, we don't want to decode rach because it will add cpu load */
+    const note = el('div', 'callout info');
+    note.innerHTML = 'Normal or Replay only. Turn off <b>Record</b> to configure this &mdash; '
+      + 'ngscope can decode each observed RACH message and saves the corresponding C-RNTI, '
+      + 'which it will use to filter decided DCIs for known UEs. This process adds roughly 25% '
+      + 'CPU usage.';
+    body.appendChild(note);
+    return;
+  }
 
   const primary = el('div', 'toggles');
   FIELD_GROUPS.rachPrimary.forEach((key) => {
@@ -701,13 +720,6 @@ function renderTopLevel() {
     if (field) body.appendChild(renderField(field, top[key], set(key), `top.${key}`));
   });
 
-  if (recording()) {
-    FIELD_GROUPS.metadata.forEach((key) => {
-      const field = fieldByKey(SCHEMA.top_level, key);
-      if (field) body.appendChild(renderField(field, top[key], set(key), `top.${key}`));
-    })
-  }
-
   const toggles = el('div', 'toggles');
   FIELD_GROUPS.topToggles.forEach((key) => {
     const field = fieldByKey(SCHEMA.top_level, key);
@@ -721,7 +733,6 @@ function renderTopLevel() {
     ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topToggles,
     ...FIELD_GROUPS.rachPrimary, ...FIELD_GROUPS.rachDependent,
     ...FIELD_GROUPS.securityPrimary, ...FIELD_GROUPS.securityReplay,
-    ...FIELD_GROUPS.metadata,
   ]);
   appendLeftovers(body, rest, top, set, 'top');
 }
