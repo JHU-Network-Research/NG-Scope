@@ -268,9 +268,9 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
      * this value bounds every write through the channel array -- see ngscope_rx_set_nof_rx_ant. */
     ngscope_rx_set_nof_rx_ant((uint32_t)prog_args.rf_nof_rx_ant);
 
-    if (prog_args.mode == 1)
+    if (prog_args.mode == RECORD)
         init_record(prog_args.output_file_name, 8, prog_args.rf_nof_rx_ant, prog_args.rf_freq);
-    else if (prog_args.mode == 2) {
+    else if (prog_args.mode == REPLAY) {
         /* Return value checked: init_replay() leaves replay_fh NULL on failure, and the
             * read loop would then fread() from it. A missing decompressor or an unreadable
             * recording has to stop the run, not corrupt it. */
@@ -660,66 +660,71 @@ void* task_scheduler_thread(void* p){
     FILE* rsrpoutfile = fopen(rsrppath, "w");
 	fclose(rsrpoutfile);
 
-    // JH open log file
-    char decodepath[1024];
-    sprintf(decodepath,"%sdci-decode-debug.csv",task_scheduler->prog_args.out_path);
-	FILE *decodelog;
-  	decodelog=fopen(decodepath,"w");
-  	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2,rach_ok\n");
-	fclose(decodelog);
 
-    // RACH log: one row per decoded Random Access Response
-    if(task_scheduler->prog_args.decode_RAR){
-        ngscope_rar_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
-    }
+	// If we're recording, we don't want to enable any of these options
+	if (task_scheduler->prog_args.mode != RECORD) {
+        // JH open log file
+        char decodepath[1024];
+        sprintf(decodepath,"%sdci-decode-debug.csv",task_scheduler->prog_args.out_path);
+    	FILE *decodelog;
+       	decodelog=fopen(decodepath,"w");
+       	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2,rach_ok\n");
+    	fclose(decodelog);
 
-    // Cell-config files from the SIB decoder land in the run's output directory rather than
-    // the working directory. Set before any decoder thread starts.
-    ngscope_sib_set_out_path(task_scheduler->prog_args.out_path);
 
-    // Downlink MAC PDU capture. Opened here because it runs once per RF device and strictly
-    // before the decoder threads below, so they never see a half-initialised handle.
-    if(task_scheduler->prog_args.pcap_mac){
-        ngscope_mac_pcap_init(task_scheduler->prog_args.out_path,
-                              task_scheduler->prog_args.rf_index,
-                              &task_scheduler->cell,
-                              task_scheduler->prog_args.pcap_max_mb);
-    }
+        // RACH log: one row per decoded Random Access Response
+        if(task_scheduler->prog_args.decode_RAR){
+            ngscope_rar_log_init(task_scheduler->prog_args.out_path, task_scheduler->prog_args.rf_index);
+        }
 
-    /* Blind-DCI probe. Same lifetime rule as the pcap above: opened before any decoder
-     * thread exists, so none sees a half-initialised handle. */
-    if(task_scheduler->prog_args.probe_blind_dci){
-        ngscope_sec_probe_blind_init(task_scheduler->prog_args.out_path,
-                                     task_scheduler->prog_args.rf_index);
-    }
+        // Cell-config files from the SIB decoder land in the run's output directory rather than
+        // the working directory. Set before any decoder thread starts.
+        ngscope_sib_set_out_path(task_scheduler->prog_args.out_path);
 
-    /* Random-access orders. Always on: it is one line per order on a cell that issues any,
-     * it costs nothing on a cell that issues none, and a missing file cannot be told from a
-     * cell with no orders after the fact. */
-    ngscope_pdcch_order_init(task_scheduler->prog_args.out_path,
-                             task_scheduler->prog_args.rf_index);
+        // Downlink MAC PDU capture. Opened here because it runs once per RF device and strictly
+        // before the decoder threads below, so they never see a half-initialised handle.
+        if(task_scheduler->prog_args.pcap_mac){
+            ngscope_mac_pcap_init(task_scheduler->prog_args.out_path,
+                                task_scheduler->prog_args.rf_index,
+                                &task_scheduler->cell,
+                                task_scheduler->prog_args.pcap_max_mb);
+        }
 
-    /* Tell the blind search whether this device wants RNTIs restricted to the RACH-observed
-     * set. Set before any decoder thread for this device is created, below, so the threads
-     * never observe it half-configured. */
-    ngscope_rach_filter_set_active(rf_idx, task_scheduler->prog_args.rach_filter_only);
+        /* Blind-DCI probe. Same lifetime rule as the pcap above: opened before any decoder
+        * thread exists, so none sees a half-initialised handle. */
+        if(task_scheduler->prog_args.probe_blind_dci){
+            ngscope_sec_probe_blind_init(task_scheduler->prog_args.out_path,
+                                        task_scheduler->prog_args.rf_index);
+        }
 
-    /* With the probe on, let the search report RNTIs the filter has not admitted, so the
-     * probe can adjudicate them against the DL-SCH CRC and promote the ones that pass. The
-     * output filter still runs, so nothing unproven is reported either way. */
-    ngscope_rach_filter_set_search_bypass(rf_idx, task_scheduler->prog_args.probe_blind_dci);
+        /* Random-access orders. Always on: it is one line per order on a cell that issues any,
+        * it costs nothing on a cell that issues none, and a missing file cannot be told from a
+        * cell with no orders after the fact. */
+        ngscope_pdcch_order_init(task_scheduler->prog_args.out_path,
+                                task_scheduler->prog_args.rf_index);
 
-    /* The scheduler thread itself drives the SIB and RAR searches, which go through the same
-     * PDCCH candidate loop. Bind it too. */
-    ngscope_rach_filter_bind_thread(rf_idx);
+        /* Tell the blind search whether this device wants RNTIs restricted to the RACH-observed
+        * set. Set before any decoder thread for this device is created, below, so the threads
+        * never observe it half-configured. */
+        ngscope_rach_filter_set_active(rf_idx, task_scheduler->prog_args.rach_filter_only);
 
-    /* Let the CRC decide which MCS->TBS table each grant uses, rather than trusting
-     * enable_256qam. Replay only: it costs a second PDSCH decode per failure, affordable
-     * exactly where the scheduler blocks instead of dropping subframes. Set before any
-     * decoder thread for this device. */
-    ngscope_sec_rrc_set_qam_retry(rf_idx, (task_scheduler->prog_args.mode == REPLAY) &&
-                                              task_scheduler->prog_args.qam_retry);
+        /* With the probe on, let the search report RNTIs the filter has not admitted, so the
+        * probe can adjudicate them against the DL-SCH CRC and promote the ones that pass. The
+        * output filter still runs, so nothing unproven is reported either way. */
+        ngscope_rach_filter_set_search_bypass(rf_idx, task_scheduler->prog_args.probe_blind_dci);
 
+        /* The scheduler thread itself drives the SIB and RAR searches, which go through the same
+        * PDCCH candidate loop. Bind it too. */
+        ngscope_rach_filter_bind_thread(rf_idx);
+
+        /* Let the CRC decide which MCS->TBS table each grant uses, rather than trusting
+        * enable_256qam. Replay only: it costs a second PDSCH decode per failure, affordable
+        * exactly where the scheduler blocks instead of dropping subframes. Set before any
+        * decoder thread for this device. */
+        ngscope_sec_rrc_set_qam_retry(rf_idx, (task_scheduler->prog_args.mode == REPLAY) &&
+                                                task_scheduler->prog_args.qam_retry);
+
+	}
     for(int i = 0; i < nof_decoder; i++){
         // init the subframe buffer
         for (int j = 0; j < SRSRAN_MAX_PORTS; j++) {
@@ -757,15 +762,15 @@ void* task_scheduler_thread(void* p){
         data[i] = srsran_vec_u8_malloc(2000 * 8);
     }
 
-    char timepath[1024];
-    sprintf(timepath, "%scollection_times.csv",task_scheduler->prog_args.out_path);
-    FILE*       timelog = fopen(timepath,"w+");
-    fprintf(timelog, "collection_time,clock_time\n");
+    // char timepath[1024];
+    // sprintf(timepath, "%scollection_times.csv",task_scheduler->prog_args.out_path);
+    // FILE*       timelog = fopen(timepath,"w+");
+    // fprintf(timelog, "collection_time,clock_time\n");
 
 
-    char readspath[1024];
-    sprintf(readspath, "%sfile_reads.txt", task_scheduler->prog_args.out_path);
-    FILE*       nreadslog = fopen(readspath,"w+");
+    // char readspath[1024];
+    // sprintf(readspath, "%sfile_reads.txt", task_scheduler->prog_args.out_path);
+    // FILE*       nreadslog = fopen(readspath,"w+");
     int readctr = 0;
 
     bool found_sync = false;
@@ -799,8 +804,8 @@ void* task_scheduler_thread(void* p){
             srsran_timestamp_t ts;
             srsran_ue_sync_get_last_timestamp(&task_scheduler->ue_sync, &ts);
             uint64_t collection_time = (uint64_t)((ts.frac_secs + ts.full_secs)*1e6);
-            uint64_t clock_time = timestamp_us();
-            fprintf(timelog,"%ld,%ld\n",collection_time,clock_time);
+            // uint64_t clock_time = timestamp_us();
+            // fprintf(timelog,"%ld,%ld\n",collection_time,clock_time);
             if (debug)
                 printf("DEBUG: retrieved collection time: %ld\n", collection_time);
 
@@ -917,9 +922,9 @@ void* task_scheduler_thread(void* p){
 	}// end of while
 
 	fclose(fd);
-    if (prog_args->mode == 1){
+    if (prog_args->mode == RECORD){
         stop_record();
-    }else if (prog_args->mode == 2){
+    }else if (prog_args->mode == REPLAY){
         stop_replay();
     }
 	//fclose(fd_1);
