@@ -650,10 +650,22 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       }
       cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
 
-      tbs     = (uint32_t)(pdsch_cfg->grant.tb[0].tbs > 0 ? pdsch_cfg->grant.tb[0].tbs : 0);
-      mcs     = pdsch_cfg->grant.tb[0].mcs_idx;
+      /* Report the codeword that passed. decode_grant_with_table() succeeds on any codeword,
+       * and a two-codeword grant can pass on TB1 alone: reading TB0 then walked (and wrote to
+       * the pcap) a payload that had failed its CRC, or -- with TB0's size 0 -- silently wrote
+       * nothing, so the promoted UE never reached the scan. */
+      int tb_sel = 0;
+      for (int tb = 0; r == 1 && tb < SRSRAN_MAX_CODEWORDS; tb++) {
+        if (pdsch_cfg->grant.tb[tb].enabled && pdsch_res[tb].crc && pdsch_cfg->grant.tb[tb].tbs > 0) {
+          tb_sel = tb;
+          break;
+        }
+      }
+
+      tbs     = (uint32_t)(pdsch_cfg->grant.tb[tb_sel].tbs > 0 ? pdsch_cfg->grant.tb[tb_sel].tbs : 0);
+      mcs     = pdsch_cfg->grant.tb[tb_sel].mcs_idx;
       prb     = pdsch_cfg->grant.nof_prb;
-      rv      = pdsch_cfg->grant.tb[0].rv;
+      rv      = pdsch_cfg->grant.tb[tb_sel].rv;
       fmt     = (int)dci_dl[0].format;
       outcome = (r == 1) ? "crc_pass" : "crc_fail";
       nof_tb  = pdsch_cfg->grant.nof_tb;
@@ -662,7 +674,7 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       if (r == 1) {
         q->bytes[ok] += tbs / 8;
         bool drb = false, srb = false, ccch = false;
-        probe_walk_lcids(pdsch_res[0].payload, tbs / 8, lcids, sizeof(lcids), &drb, &srb,
+        probe_walk_lcids(pdsch_res[tb_sel].payload, tbs / 8, lcids, sizeof(lcids), &drb, &srb,
                          &ccch);
         ch = drb ? "drb" : (srb ? "srb" : (ccch ? "ccch" : "other"));
         if (drb) {
@@ -697,16 +709,16 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
           cap.collection_time = collection_time;
           cap.rnti            = rnti;
           cap.src             = NGSCOPE_MAC_SRC_PROBE;
-          cap.rv              = pdsch_cfg->grant.tb[0].rv;
-          cap.mcs             = pdsch_cfg->grant.tb[0].mcs_idx;
+          cap.rv              = pdsch_cfg->grant.tb[tb_sel].rv;
+          cap.mcs             = pdsch_cfg->grant.tb[tb_sel].mcs_idx;
           cap.tbs             = (int)tbs;
           cap.prb             = pdsch_cfg->grant.nof_prb;
           cap.harq_pid        = dci_dl[0].pid;
           cap.format          = dci_dl[0].format;
           cap.tx_scheme       = pdsch_cfg->grant.tx_scheme;
           cap.rach_ok         = false; /* no RAR here -- that is the finding, not a defect */
-          cap.evm             = pdsch_res[0].evm;
-          cap.payload         = pdsch_res[0].payload;
+          cap.evm             = pdsch_res[tb_sel].evm;
+          cap.payload         = pdsch_res[tb_sel].payload;
           cap.len             = tbs / 8;
           ngscope_mac_pcap_write(&cap);
         }
