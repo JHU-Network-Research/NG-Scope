@@ -58,8 +58,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               uint8_t*            data[SRSRAN_MAX_CODEWORDS],
                               int                 rf_idx,
                               uint32_t            tti,
-                              uint64_t            ts_us,
-                              uint64_t            collection_time,
+                              ngscope_dci_per_sub_t * dci_per_sub,
                               int                 scan_cap);
 
 /* ---------------------------------------------------------------- blind-DCI probe

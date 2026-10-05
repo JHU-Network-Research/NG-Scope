@@ -183,7 +183,7 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
     case SRSRAN_RA_ALLOC_TYPE0:
       bitmask = dci->type0_alloc.rbg_bitmask;
       if (bitmask == 0){
-          ERROR("Error translating grant to prb alloction for type 0: bitmask cannot be 0");
+          // ERROR("Error translating grant to prb alloction for type 0: bitmask cannot be 0");
           return SRSRAN_ERROR;
       }
       int nb  = (int)ceilf((float)nof_prb / P);
@@ -205,7 +205,7 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
             }
       // Make sure the rbg_subset is valid
       if (dci->type1_alloc.rbg_subset >= P) {
-        ERROR("Invalid RBG subset=%d for nof_prb=%d where P=%d", dci->type1_alloc.rbg_subset, nof_prb, P);
+        // ERROR("Invalid RBG subset=%d for nof_prb=%d where P=%d", dci->type1_alloc.rbg_subset, nof_prb, P);
         return SRSRAN_ERROR;
       }
       n_rb_type1    = srsran_ra_type1_N_rb(nof_prb);
@@ -220,7 +220,7 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
       int shift = dci->type1_alloc.shift ? (n_rb_rbg_subset - n_rb_type1) : 0;
       bitmask   = dci->type1_alloc.vrb_bitmask;
       if (bitmask == 0) {
-          ERROR("Error translating grant to prb alloction for type 0: bitmask cannot be 0");
+          // ERROR("Error translating grant to prb alloction for type 0: bitmask cannot be 0");
           return SRSRAN_ERROR;  // No VRBs allocated
         }
       for (i = 0; i < n_rb_type1; i++) {
@@ -527,7 +527,7 @@ config_mimo_type(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_
       } else if (nof_tb == 2) {
         grant->tx_scheme = SRSRAN_TXSCHEME_SPATIALMUX;
       } else {
-        ERROR("Invalid number of transport blocks (%d) for TM4", nof_tb);
+        // ERROR("Invalid number of transport blocks (%d) for TM4", nof_tb);
         valid_config = false;
       }
       break;
@@ -672,20 +672,20 @@ static int
 config_mimo(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_t* dci, srsran_pdsch_grant_t* grant)
 {
   if (config_mimo_type(cell, tm, dci, grant)) {
-      if (dci->format == SRSRAN_DCI_FORMAT2)
-          ERROR("Configuring MIMO type");
+      // if (dci->format == SRSRAN_DCI_FORMAT2)
+      //     ERROR("Configuring MIMO type");
     return -1;
   }
 
   if (config_mimo_pmi(cell, dci, grant)) {
-      if (dci->format == SRSRAN_DCI_FORMAT2)
-          ERROR("Configuring MIMO PMI");
+      // if (dci->format == SRSRAN_DCI_FORMAT2)
+      //     ERROR("Configuring MIMO PMI");
     return -1;
   }
 
   if (config_mimo_layers(cell, dci, grant)) {
-      if (dci->format == SRSRAN_DCI_FORMAT2)
-          ERROR("Configuring MIMO layers");
+      // if (dci->format == SRSRAN_DCI_FORMAT2)
+      //     ERROR("Configuring MIMO layers");
     return -1;
   }
 

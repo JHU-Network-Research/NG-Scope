@@ -1576,9 +1576,12 @@ int srsran_predecoding_ccd_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
       return -1;
     }
   } else if (nof_ports == 4 && nof_rxant == 2) {
-      if (csi && csi[0])
+      if (csi && csi[0] && csi[1])
         return srsran_predecoding_ccd_4x2_mmse_csi(y, h, x, csi, nof_symbols, scaling, noise_estimate);
       else {
+          if (csi[0] && !csi[1]){
+              ERROR("MISSING CSI[1]");
+          }
         return srsran_predecoding_ccd_4x2_mmse(y, h, x, nof_symbols, scaling, noise_estimate);
       }
   } else {
@@ -4488,10 +4491,13 @@ static int srsran_predecoding_multiplex(cf_t*  y[SRSRAN_MAX_PORTS],
                 break;
             case SRSRAN_MIMO_DECODER_MMSE:
                 // return SRSRAN_ERROR;
-                if (csi && csi[0]) {
+                if (csi && csi[0] && csi[1]) {
                   return srsran_predecoding_multiplex_4x2_mmse_csi(
                       y, h, x, csi, codebook_idx, nof_symbols, scaling, noise_estimate);
                 } else {
+                    if (csi[0] && !csi[1]){
+                        ERROR("MISSING CSI[1]");
+                    }
                   return srsran_predecoding_multiplex_4x2_mmse(y, h, x, codebook_idx, nof_symbols, scaling, noise_estimate);
                 }
                 break;

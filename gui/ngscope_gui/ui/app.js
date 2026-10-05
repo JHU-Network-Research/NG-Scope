@@ -1050,8 +1050,8 @@ function drawFrame(ctx, w, h, pad) {
   ctx.strokeRect(pad.l + 0.5, pad.t + 0.5, w - pad.l - pad.r - 1, h - pad.t - pad.b - 1);
 }
 
-function drawConstellation(points) {
-  const canvas = $('plot-const');
+function drawConstellation(points, id) {
+  const canvas = $(id);
   const { ctx, w, h } = prepCanvas(canvas);
   const pad = { l: 28, r: 8, t: 8, b: 18 };
 
@@ -1134,7 +1134,9 @@ function drawChannelResponse(csi) {
 function renderPlots() {
   plotPending = false;
   if ($('plots').classList.contains('collapsed')) return;
-  drawConstellation(lastFrame && lastFrame.iq);
+  drawConstellation(lastFrame && lastFrame.iq_pdcch, 'plot-pdcch-const');
+  drawConstellation(lastFrame && lastFrame.iq_pdsch_cw1,'plot-pdsch-1-const');
+  drawConstellation(lastFrame && lastFrame.iq_pdsch_cw2,'plot-pdsch-2-const');
   drawChannelResponse(lastFrame && lastFrame.csi);
 }
 
@@ -1143,7 +1145,7 @@ window.onPlotFrame = function onPlotFrame(frame) {
   lastFrame = frame;
   framesSeen++;
   $('plots-note').textContent =
-    `${frame.nof_const} symbols · ${frame.nof_csi} subcarriers · frame ${framesSeen}`;
+    `${frame.nof_const_pdcch} PDCCH symbols · ${frame.nof_const_pdsch} PDSCH symbols · ${frame.nof_csi} subcarriers · frame ${framesSeen}`;
   if (!plotPending) {
     plotPending = true;
     requestAnimationFrame(renderPlots);

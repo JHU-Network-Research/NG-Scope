@@ -39,6 +39,10 @@ typedef struct {
     uint32_t prb;
     uint32_t nof_cell_ports;
 
+    float   max_gain_db;
+    float   min_gain_db;
+    float   init_gain_db;
+
     srsran_cp_t           cp;
     srsran_phich_length_t phich_length;
     srsran_phich_r_t      phich_resources;

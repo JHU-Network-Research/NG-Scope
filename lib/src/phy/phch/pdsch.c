@@ -975,6 +975,7 @@ int srsran_pdsch_decode(srsran_pdsch_t*        q,
           /* Check if there has been any execution error */
           if (ret) {
             /* Do Nothing */
+            ERROR("DECODING PDSCH %d\n", ret);
           }
         }
       }

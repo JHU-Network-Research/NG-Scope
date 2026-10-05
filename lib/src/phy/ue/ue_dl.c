@@ -24,6 +24,7 @@
 #include "srsran/srsran.h"
 // #include "dciLib/ngscope_rx.h"
 #include <srsran/phy/common/phy_common.h>
+#include <srsran/phy/phch/dci.h>
 #include <string.h>
 #include "dciLib/rach_filter.h"
 // #include "srsran/phy/ue/ngscope_consistency.h"
@@ -623,7 +624,8 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
                             srsran_dl_sf_cfg_t* sf,
                             dci_blind_search_t* search_space,
                             srsran_dci_cfg_t*   dci_cfg,
-                            srsran_dci_msg_t    dci_msg[MAX_NOF_FORMAT])
+                            srsran_dci_msg_t    dci_msg[MAX_NOF_FORMAT],
+                            srsran_dci_dl_t     dci_dl[MAX_NOF_FORMAT])
 {
   uint32_t nof_dci = 0;
   int nof_cce = srsran_pdcch_get_nof_cce_yx(&q->pdcch, sf->cfi);
@@ -691,6 +693,12 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         // if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
         //     continue;
         // }
+        //
+        if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
+            if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, dci_cfg, &dci_msg[nof_dci], &dci_dl[nof_dci])) {
+                continue;
+            }
+        }
 
 
       	dci_msg[nof_dci].decode_prob = decode_prob;

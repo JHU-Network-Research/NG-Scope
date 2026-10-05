@@ -242,6 +242,19 @@ int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
                                 rf_info->min_rx_gain,
                                 rf_info->max_rx_gain,
                                 cell_detect_config->init_agc);
+            if (mode == RECORD){
+                record_hdr.min_gain_db = rf_info->min_rx_gain;
+                record_hdr.max_gain_db = rf_info->max_rx_gain;
+                record_hdr.init_gain_db = cell_detect_config->init_agc;
+            }
+        }
+    } else {
+        if (record_hdr.max_gain_db != 0){
+            srsran_ue_sync_start_agc(ue_sync,
+                                srsran_rf_set_rx_gain_th_wrapper_,
+                                record_hdr.min_gain_db,
+                                record_hdr.max_gain_db,
+                                record_hdr.init_gain_db);
         }
     }
     ue_sync->cfo_correct_enable_track = !prog_args.disable_cfo;
@@ -277,8 +290,8 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
 
         if (prog_args.use_replay_hdr){
             printf("Using replay header!\n");
-            rx_record_header_t replay_hdr;
-            if (!init_replay(prog_args.input_file_name, &replay_hdr, 0)) {
+            // rx_record_header_t replay_hdr;
+            if (!init_replay(prog_args.input_file_name, &record_hdr, 0)) {
                 fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
                         prog_args.input_file_name);
                 exit(EXIT_FAILURE);
@@ -291,10 +304,10 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
              * antennas, so the one measurement that shows what a second antenna buys could
              * not be run on the same bytes. The read loop reconciles any mismatch: surplus
              * channels are read and dropped, missing ones zero-filled, both announced. */
-            prog_args.rf_freq = replay_hdr.rf_freq;
-            if (replay_hdr.nof_rx_antenna != prog_args.rf_nof_rx_ant) {
+            prog_args.rf_freq = record_hdr.rf_freq;
+            if (record_hdr.nof_rx_antenna != prog_args.rf_nof_rx_ant) {
                 printf("REPLAY: recording holds %u channel%s, nof_rx_ant is %d -- using %d\n",
-                       replay_hdr.nof_rx_antenna, replay_hdr.nof_rx_antenna == 1 ? "" : "s",
+                       record_hdr.nof_rx_antenna, record_hdr.nof_rx_antenna == 1 ? "" : "s",
                        prog_args.rf_nof_rx_ant, prog_args.rf_nof_rx_ant);
             }
         }else{
@@ -483,8 +496,8 @@ void* handle_tmp_buffer_thread(void* p){
                     int tmp_sfn     = task_tmp_buffer[rf_idx].sf_buf[tmp_buf_idx].sfn;
                     uint64_t tmp_ct = task_tmp_buffer[rf_idx].sf_buf[tmp_buf_idx].collection_time;
 
-                    //printf("Assigning tti:%d to the %d-th decoder since it is idle!\n\n", \
-                                                    tmp_sfn * 10 + tmp_sf_idx, idle_idx);
+                    // printf("Assigning tti:%d to the %d-th decoder since it is idle!\n\n",
+                    //                                 tmp_sfn * 10 + tmp_sf_idx, idle_idx);
                     assign_task_to_decoder(rf_idx, idle_idx, rf_nof_rx_ant, tmp_sf_idx, tmp_sfn, max_num_samples, tmp_ct,
                              task_tmp_buffer[rf_idx].sf_buf[tmp_buf_idx].IQ_buffer);
 
@@ -784,8 +797,8 @@ void* task_scheduler_thread(void* p){
         //t1 = timestamp_us();
         ret = srsran_ue_sync_zerocopy(&(task_scheduler->ue_sync), buffers, max_num_samples);
         readctr++;
-        fprintf(nreadslog, "TTI=%d, total # sample reads=%d, result=%d\n", tti, readctr, ret);
-        if (ret == 1) {
+        // fprintf(nreadslog, "TTI=%d, total # sample reads=%d, result=%d\n", tti, readctr, ret);
+        if (ret == 0 && found_sync) {
             nof_desync++;
         }
         //t2 = timestamp_us();
@@ -855,6 +868,9 @@ void* task_scheduler_thread(void* p){
                     // If we cannot find any idle decoder (all of them are busy!)
                     // store them inside a temporal buffer
                     if(idle_idx < 0){
+                        if (mode == RECORD){
+                            continue;
+                        }
                         printf("Skiping %d subframe since Decoder Blocked! \
                                 We suggest increasing the number deocder per cell.\n", sfn*10 + sf_idx);
 

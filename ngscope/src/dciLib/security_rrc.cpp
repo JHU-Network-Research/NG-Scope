@@ -252,16 +252,29 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
                               uint8_t*            data[SRSRAN_MAX_CODEWORDS],
                               int                 rf_idx,
                               uint32_t            tti,
-                              uint64_t            ts_us,
-                              uint64_t            collection_time,
+                              ngscope_dci_per_sub_t *dci_per_sub,
                               int                 scan_cap)
 {
   uint16_t  rntis[SEC_MAX_SCAN_RNTI];
   const int cap = (scan_cap > 0 && scan_cap < SEC_MAX_SCAN_RNTI) ? scan_cap : SEC_MAX_SCAN_RNTI;
-  int       nof_rnti = ngscope_sec_tracked(rf_idx, ts_us, rntis, cap);
+  int       nof_rnti = ngscope_sec_tracked(rf_idx, dci_per_sub->timestamp, rntis, cap);
   if (nof_rnti <= 0) {
     return 0;
   }
+
+//   int nof_dci = dci_per_sub->nof_dl_dci;
+//   srsran_dci_dl_t dci_dl[nof_dci];
+//   for (int i = 0; i < nof_dci; i++){
+//       // ngscope_dci_msg_t dci = dci_per_sub.dl_msg[i];
+//       if (srsran_dci_msg_unpack_pdsch(&ue_dl->cell, sf, &cfg->cfg.dci, &dci_per_sub->dl_msg[i], &dci_dl[i])) {
+//         ERROR("Unpacking DL DCI");
+//         return SRSRAN_ERROR;
+//       }
+//
+//   }
+
+
+
 
   /* Attempting a UE's PDSCH on a 4-port cell makes srsRAN's PHY complain loudly: grants
    * whose MIMO parameters it cannot build, and multiplex predecoding it has not
@@ -403,8 +416,8 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
           memset(&cap, 0, sizeof(cap));
           cap.rf_idx    = rf_idx;
           cap.tti       = tti;
-          cap.ts_us     = ts_us;
-          cap.collection_time = collection_time;
+          cap.ts_us     = dci_per_sub->timestamp;
+          cap.collection_time = dci_per_sub->collection_time;
           cap.rnti      = rnti;
           cap.src       = NGSCOPE_MAC_SRC_TARGETED;
           cap.rv        = pdsch_cfg->grant.tb[0].rv;

@@ -1,5 +1,6 @@
 #include "srsran/srsran.h"
 #include <srsran/phy/common/phy_common.h>
+#include <srsran/phy/phch/dci.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
@@ -59,10 +60,6 @@ void unpack_dci_message_vec(srsran_ue_dl_t*        q,
 					int format_idx = ngscope_format_to_index(dci_msg[j].format);
 					srsran_ngscope_dci_into_array_dl(tree->dci_array, format_idx, loc_idx, tree->dci_location[loc_idx],
 							dci_msg[j].decode_prob, dci_msg[j].corr, &dci_dl, &dci_dl_grant);
-				}else{
-				    if (dci_msg[j].format == SRSRAN_DCI_FORMAT2){
-								ERROR("Unpacking grant for format 2 DCI");
-					}
 				}
 			}
 		}
@@ -178,6 +175,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
   	dci_cfg.cif_enabled, dci_cfg.srs_request_enabled, dci_cfg.is_not_ue_ss);
 
   srsran_dci_msg_t      dci_msg[MAX_NOF_FORMAT];
+  srsran_dci_dl_t       dci_dl[MAX_NOF_FORMAT];
 
   dci_blind_search_t search_space;
   ZERO_OBJECT(search_space);
@@ -270,7 +268,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
                 printf("DEBUG: PAGING SEARCH TTI:%d NOF_CCE:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
             sf->tti, nof_cce, sf->cfi, tree->nof_location, loc_idx,
             tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
-			int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
+			int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg, dci_dl);
 
 			// Unpack the dci messages
 			unpack_dci_message_vec(q, sf, cfg, pdsch_cfg, dci_msg, nof_dci, loc_idx, tree);
@@ -306,7 +304,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
                 sf->tti, nof_cce, sf->cfi, search_space.nof_locations, loc_idx,
                 tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 		// Search all the formats in this location
-		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
+		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg, dci_dl);
         if (debug){
             printf("DEBUG: found %d DCIs at TTI=%d:\n",nof_dci,sf->tti);
             for(int idx = 0; idx < nof_dci; idx++){
@@ -512,7 +510,7 @@ int srsran_ngscope_search_all_space_array_signleUE_yx(srsran_ue_dl_t*        q,
         search_space.loc[0] = tree.dci_location[loc_idx];
 
         // Search all the formats in this location
-        int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg);
+        int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg, dci_dl);
 		/*****************************************************************
 		* 	dci_msg -> dci
 		*****************************************************************/

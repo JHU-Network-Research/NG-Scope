@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <srsran/phy/common/phy_common.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,20 +92,35 @@ static int plot_sink_write(int fd, const void* buf, size_t len)
     return 0;
 }
 
-static int plot_sink_send(int fd, uint32_t seq, const cf_t* iq, int nof_const, const float* csi, int nof_csi)
+static int plot_sink_send(int fd, uint32_t seq, const cf_t* iq_pdcch, int nof_const_pdcch, cf_t *iq_pdsch_cw1, cf_t *iq_pdsch_cw2, int nof_const_pdsch, const float* csi, int nof_csi)
 {
     uint32_t header[2] = {NGSCOPE_PLOT_MAGIC, seq};
-    uint16_t counts[2] = {(uint16_t)nof_const, (uint16_t)nof_csi};
+    uint16_t counts[3] = {(uint16_t)nof_const_pdcch, (uint16_t) nof_const_pdsch, (uint16_t)nof_csi};
 
-    if (plot_sink_write(fd, header, sizeof(header)) < 0 ||
-        plot_sink_write(fd, counts, sizeof(counts)) < 0) {
+    if (plot_sink_write(fd, header, sizeof(header)) < 0){
+        ERROR("Writing plot sink header");
+        return -1;
+    }
+
+    if(plot_sink_write(fd, counts, sizeof(counts)) < 0) {
+        ERROR("Writing plot sink counts");
         return -1;
     }
     /* cf_t is a complex float: contiguous (I,Q) pairs, so it goes out as-is. */
-    if (nof_const > 0 && plot_sink_write(fd, iq, (size_t)nof_const * 2 * sizeof(float)) < 0) {
+    if (nof_const_pdcch > 0 && plot_sink_write(fd, iq_pdcch, (size_t)nof_const_pdcch * 2 * sizeof(float)) < 0) {
+        ERROR("Writing pdcch");
+        return -1;
+    }
+    if (nof_const_pdsch > 0 && plot_sink_write(fd, iq_pdsch_cw1, (size_t)nof_const_pdsch * 2 * sizeof(float)) < 0){
+        ERROR("Writing pdsch 1");
+        return -1;
+    }
+    if (nof_const_pdsch > 0 && plot_sink_write(fd, iq_pdsch_cw2, (size_t)nof_const_pdsch * 2 * sizeof(float)) < 0){
+        ERROR("Writing pdsch 2");
         return -1;
     }
     if (nof_csi > 0 && plot_sink_write(fd, csi, (size_t)nof_csi * sizeof(float)) < 0) {
+        ERROR("Writing CSI");
         return -1;
     }
     return 0;
@@ -116,9 +132,11 @@ extern pthread_cond_t      plot_cond;
 
 extern pthread_mutex_t dci_plot_mutex;
 extern cf_t* pdcch_buf;
+extern cf_t* pdsch_cw1_buf;
+extern cf_t* pdsch_cw2_buf;
 extern float csi_amp[110 * 15 * 2048];
 extern pthread_cond_t 	dci_plot_cond;
-//	
+//
 //void init_plot_data(ngscope_CA_status_t* q, int nof_dev){
 //    pthread_mutex_lock(&plot_mutex);
 //    plot_data.nof_cell = nof_dev;
@@ -135,7 +153,7 @@ int sum_per_sf_prb_dl(ngscope_dci_per_sub_t* q){
     int nof_dl_prb = 0;
     if(q->nof_dl_dci > 0){
         for(int i=0; i< q->nof_dl_dci; i++){
-            nof_dl_prb += q->dl_msg[i].prb; 
+            nof_dl_prb += q->dl_msg[i].prb;
         }
     }
     return nof_dl_prb;
@@ -145,7 +163,7 @@ int sum_per_sf_prb_ul(ngscope_dci_per_sub_t* q){
     int nof_ul_prb = 0;
     if(q->nof_ul_dci > 0){
         for(int i=0; i< q->nof_ul_dci; i++){
-            nof_ul_prb += q->ul_msg[i].prb; 
+            nof_ul_prb += q->ul_msg[i].prb;
         }
     }
     return nof_ul_prb;
@@ -159,7 +177,7 @@ int status_tracker_handle_plot(ngscope_status_buffer_t* dci_buffer){
     idx = tti % PLOT_SF;
     pthread_mutex_lock(&plot_mutex);
     max_prb = plot_data.cell_prb[cell_idx];
-        
+
     /* Enqueue CSI */
     for(int i=0; i< max_prb * 12; i++){
         //plot_data.plot_data_cell[cell_idx].plot_data_sf[idx].csi_amp[i] = \
@@ -170,14 +188,14 @@ int status_tracker_handle_plot(ngscope_status_buffer_t* dci_buffer){
     plot_data.plot_data_cell[cell_idx].plot_data_sf[idx].tti = tti;
 
     /* Enqueue Cell downlink PRB */
-    plot_data.plot_data_cell[cell_idx].plot_data_sf[idx].cell_dl_prb = 
+    plot_data.plot_data_cell[cell_idx].plot_data_sf[idx].cell_dl_prb =
         sum_per_sf_prb_dl(&dci_buffer->dci_per_sub);
 
     /* Enqueue Cell uplink PRB */
-    plot_data.plot_data_cell[cell_idx].plot_data_sf[idx].cell_ul_prb = 
+    plot_data.plot_data_cell[cell_idx].plot_data_sf[idx].cell_ul_prb =
         sum_per_sf_prb_ul(&dci_buffer->dci_per_sub);
 
-    /* touch the buffer and set the token */ 
+    /* touch the buffer and set the token */
     plot_data.plot_data_cell[cell_idx].dci_touched = idx;
     plot_data.plot_data_cell[cell_idx].token[idx]  = 1;
 
@@ -245,7 +263,7 @@ void* plot_thread_run(void* arg)
 
     nof_prb = plot_data.cell_prb[0];
     nof_sub = 12 * nof_prb;
- 
+
     sdrgui_init();
     //plot_real_t csi;
     plot_real_t p_prb_ul, p_prb_dl;
@@ -254,17 +272,17 @@ void* plot_thread_run(void* arg)
 
     plot_waterfall_init(&csi_water, nof_sub, 100);
     plot_waterfall_setTitle(&csi_water, "Channel Response - Magnitude");
-    plot_complex_setPlotXLabel(&csi_water, "Subcarrier Index"); 
-    plot_complex_setPlotYLabel(&csi_water, "dB"); 
-    plot_waterfall_setSpectrogramXLabel(&csi_water, "Subcarrier Index"); 
-    plot_waterfall_setSpectrogramYLabel(&csi_water, "Time"); 
+    plot_complex_setPlotXLabel(&csi_water, "Subcarrier Index");
+    plot_complex_setPlotYLabel(&csi_water, "dB");
+    plot_waterfall_setSpectrogramXLabel(&csi_water, "Subcarrier Index");
+    plot_waterfall_setSpectrogramYLabel(&csi_water, "Time");
 
 //    plot_scatter_init(&pdsch);
 //    plot_scatter_setTitle(&pdsch, "PDSCH - Equalized Symbols");
 //    plot_scatter_setXAxisScale(&pdsch, -4, 4);
 //    plot_scatter_setYAxisScale(&pdsch, -4, 4);
 //    plot_scatter_addToWindowGrid(&pdsch, (char*)"pdsch_ue", 0, 0);
-//        
+//
 //    plot_scatter_init(&pdcch);
 //    plot_scatter_setTitle(&pdcch, "PDCCH - Equalized Symbols");
 //    plot_scatter_setXAxisScale(&pdcch, -4, 4);
@@ -294,7 +312,7 @@ void* plot_thread_run(void* arg)
     float cell_ul_prb[NOF_PLOT_SF] = {0};
     float cell_dl_prb_ave[NOF_PLOT_SF] = {0};
     float cell_ul_prb_ave[NOF_PLOT_SF] = {0};
- 
+
     int mv_ave_buf_dl[MOV_AVE_LEN] = {0};
     int mv_ave_buf_ul[MOV_AVE_LEN] = {0};
 
@@ -302,8 +320,8 @@ void* plot_thread_run(void* arg)
     int sum_ul = 0;
 
     while(!go_exit){
-        pthread_mutex_lock(&plot_mutex);    
-        pthread_cond_wait(&plot_cond, &plot_mutex); 
+        pthread_mutex_lock(&plot_mutex);
+        pthread_cond_wait(&plot_cond, &plot_mutex);
 
         int ave_idx = 0;
         /* Plot the data */
@@ -316,8 +334,8 @@ void* plot_thread_run(void* arg)
             for(int i = last_header+1; i<= new_header; i++){
                 uint16_t index = i % PLOT_SF;
                 float* csi_amp = plot_data.plot_data_cell[0].plot_data_sf[index].csi_amp;
-                //plot_real_setNewData(&csi, csi_amp, nof_sub); 
-                plot_waterfall_appendNewData(&csi_water, csi_amp, nof_sub); 
+                //plot_real_setNewData(&csi, csi_amp, nof_sub);
+                plot_waterfall_appendNewData(&csi_water, csi_amp, nof_sub);
                 plot_data.plot_data_cell[0].token[index] = 0;
                 uint32_t tti =  plot_data.plot_data_cell[0].plot_data_sf[index].tti;
                 printf("plot_thread -> tti:%d\n", tti);
@@ -325,11 +343,11 @@ void* plot_thread_run(void* arg)
                 int ul_prb = plot_data.plot_data_cell[0].plot_data_sf[index].cell_ul_prb;
                 // plot PRB usage
                 if(prb_idx < NOF_PLOT_SF){
-                    cell_dl_prb[prb_idx] = (float)dl_prb; 
-                    cell_ul_prb[prb_idx] = (float)ul_prb; 
-                    
-                    cell_dl_prb_ave[prb_idx] = (float)movingAvg(mv_ave_buf_dl, &sum_dl, ave_idx, MOV_AVE_LEN, dl_prb); 
-                    cell_ul_prb_ave[prb_idx] = (float)movingAvg(mv_ave_buf_ul, &sum_ul, ave_idx, MOV_AVE_LEN, ul_prb); 
+                    cell_dl_prb[prb_idx] = (float)dl_prb;
+                    cell_ul_prb[prb_idx] = (float)ul_prb;
+
+                    cell_dl_prb_ave[prb_idx] = (float)movingAvg(mv_ave_buf_dl, &sum_dl, ave_idx, MOV_AVE_LEN, dl_prb);
+                    cell_ul_prb_ave[prb_idx] = (float)movingAvg(mv_ave_buf_ul, &sum_ul, ave_idx, MOV_AVE_LEN, ul_prb);
                     ave_idx++;
                     if(ave_idx >= MOV_AVE_LEN){ ave_idx = 0;}
 
@@ -342,24 +360,24 @@ void* plot_thread_run(void* arg)
                     left_shift_vec(cell_ul_prb_ave);
 
 
-                    cell_dl_prb[NOF_PLOT_SF-1] = (float)dl_prb; 
-                    cell_ul_prb[NOF_PLOT_SF-1] = (float)ul_prb; 
+                    cell_dl_prb[NOF_PLOT_SF-1] = (float)dl_prb;
+                    cell_ul_prb[NOF_PLOT_SF-1] = (float)ul_prb;
 
-                    cell_dl_prb_ave[NOF_PLOT_SF-1] = (float)movingAvg(mv_ave_buf_dl, &sum_dl, ave_idx, MOV_AVE_LEN, dl_prb); 
-                    cell_ul_prb_ave[NOF_PLOT_SF-1] = (float)movingAvg(mv_ave_buf_ul, &sum_ul, ave_idx, MOV_AVE_LEN, ul_prb); 
+                    cell_dl_prb_ave[NOF_PLOT_SF-1] = (float)movingAvg(mv_ave_buf_dl, &sum_dl, ave_idx, MOV_AVE_LEN, dl_prb);
+                    cell_ul_prb_ave[NOF_PLOT_SF-1] = (float)movingAvg(mv_ave_buf_ul, &sum_ul, ave_idx, MOV_AVE_LEN, ul_prb);
 
                     ave_idx++;
                     if(ave_idx >= MOV_AVE_LEN){ ave_idx = 0;}
                 }
-                
-                //plot_real_setNewData(&p_prb_dl, cell_dl_prb, NOF_PLOT_SF); 
-                //plot_real_setNewData(&p_prb_ul, cell_ul_prb, NOF_PLOT_SF); 
- 
-                plot_real_setNewData(&p_prb_dl, cell_dl_prb_ave, NOF_PLOT_SF); 
-                plot_real_setNewData(&p_prb_ul, cell_ul_prb_ave, NOF_PLOT_SF); 
+
+                //plot_real_setNewData(&p_prb_dl, cell_dl_prb, NOF_PLOT_SF);
+                //plot_real_setNewData(&p_prb_ul, cell_ul_prb, NOF_PLOT_SF);
+
+                plot_real_setNewData(&p_prb_dl, cell_dl_prb_ave, NOF_PLOT_SF);
+                plot_real_setNewData(&p_prb_ul, cell_ul_prb_ave, NOF_PLOT_SF);
             }
-        } 
-        pthread_mutex_unlock(&plot_mutex);    
+        }
+        pthread_mutex_unlock(&plot_mutex);
     }
 #endif
     return NULL;
@@ -383,11 +401,14 @@ void* plot_pdcch_run(void* arg)
 #ifdef ENABLE_GUI
 	printf("init 0!\n");
 	decoder_plot_t* q = (decoder_plot_t*)arg;
-	//int decoder_idx 		= q->decoder_idx; 
+	//int decoder_idx 		= q->decoder_idx;
 	int nof_pdcch_sample 	= q->nof_pdcch_sample;
+	int nof_pdsch_sample    = q->nof_pdsch_sample;
 	int size 				= q->size;
 
     plot_scatter_t pdcch;
+    plot_scatter_t pdsch_cw1;
+    plot_scatter_t pdsch_cw2;
     plot_real_t csi;
 
     /* NGSCOPE_PLOT_SOCK routes the same two series to a front end instead of opening
@@ -404,21 +425,37 @@ void* plot_pdcch_run(void* arg)
 
         plot_real_addToWindowGrid(&pdcch, (char*)"pdsch_ue", 0, 0);
 
+        plot_scatter_init(&pdsch_cw1);
+        plot_scatter_setTitle(&pdsch_cw1, "PDSCH Layer 1 - Equalized Symbols");
+        plot_scatter_setXAxisScale(&pdsch_cw1, -3, 3);
+        plot_scatter_setYAxisScale(&pdsch_cw1, -3, 3);
+        plot_real_addToWindowGrid(&pdsch_cw1, (char*) "pdsch_ue_cw1", 0, 1);
+
+        plot_scatter_init(&pdsch_cw2);
+        plot_scatter_setTitle(&pdsch_cw2, "PDSCH Layer 2 - Equalized Symbols");
+        plot_scatter_setXAxisScale(&pdsch_cw2, -3, 3);
+        plot_scatter_setYAxisScale(&pdsch_cw2, -3, 3);
+        plot_real_addToWindowGrid(&pdsch_cw2, (char*) "pdsch_ue_cw2", 0, 2);
+
         plot_real_init(&csi);
         plot_real_setTitle(&csi, "Channel Response - Magnitude");
         plot_real_setLabels(&csi, "Subcarrier Index", "dB");
         plot_real_setYAxisScale(&csi, -40, 40);
-        plot_real_addToWindowGrid(&csi, (char*)"pdsch_ue", 0, 1);
+        plot_real_addToWindowGrid(&csi, (char*)"pdsch_ue", 0, 3);
     }
 
     /* Snapshot buffers: the socket write must not happen under dci_plot_mutex, or a slow
      * reader would stall the decoder thread that signals us. */
-    cf_t*  iq_snapshot  = NULL;
+    cf_t*  iq_snapshot_pdcch  = NULL;
+    cf_t*  iq_snapshot_pdsch_cw1 = NULL;
+    cf_t*  iq_snapshot_pdsch_cw2 = NULL;
     float* csi_snapshot = NULL;
     if (sink >= 0) {
-        iq_snapshot  = srsran_vec_cf_malloc(nof_pdcch_sample > 0 ? nof_pdcch_sample : 1);
+        iq_snapshot_pdcch  = srsran_vec_cf_malloc(nof_pdcch_sample > 0 ? nof_pdcch_sample : 1);
+        iq_snapshot_pdsch_cw1  = srsran_vec_cf_malloc(nof_pdsch_sample > 0 ? nof_pdsch_sample : 1);
+        iq_snapshot_pdsch_cw2  = srsran_vec_cf_malloc(nof_pdsch_sample > 0 ? nof_pdsch_sample : 1);
         csi_snapshot = srsran_vec_f_malloc(size > 0 ? size : 1);
-        if (iq_snapshot == NULL || csi_snapshot == NULL) {
+        if (iq_snapshot_pdcch == NULL || iq_snapshot_pdsch_cw1 == NULL || iq_snapshot_pdsch_cw2 == NULL || csi_snapshot == NULL) {
             printf("plot: out of memory for snapshot buffers\n");
             close(sink);
             sink = -1;
@@ -443,11 +480,13 @@ void* plot_pdcch_run(void* arg)
             }
             next_frame_us = now + 1000000 / NGSCOPE_PLOT_MAX_FPS;
 
-            memcpy(iq_snapshot, pdcch_buf, (size_t)nof_pdcch_sample * sizeof(cf_t));
+            memcpy(iq_snapshot_pdcch, pdcch_buf, (size_t)nof_pdcch_sample * sizeof(cf_t));
+            memcpy(iq_snapshot_pdsch_cw1, pdsch_cw1_buf, (size_t)nof_pdsch_sample * sizeof(cf_t));
+            memcpy(iq_snapshot_pdsch_cw2, pdsch_cw2_buf, (size_t)nof_pdsch_sample * sizeof(cf_t));
             memcpy(csi_snapshot, csi_amp, (size_t)size * sizeof(float));
             pthread_mutex_unlock(&dci_plot_mutex);
 
-            if (plot_sink_send(sink, seq++, iq_snapshot, nof_pdcch_sample, csi_snapshot, size) < 0) {
+            if (plot_sink_send(sink, seq++, iq_snapshot_pdcch, nof_pdcch_sample,iq_snapshot_pdsch_cw1, iq_snapshot_pdsch_cw2, nof_pdsch_sample, csi_snapshot, size) < 0) {
                 printf("plot: listener closed the connection, stopping plot stream\n");
                 close(sink);
                 sink = -1;
@@ -456,6 +495,11 @@ void* plot_pdcch_run(void* arg)
         }
 
       	plot_scatter_setNewData(&pdcch, pdcch_buf, nof_pdcch_sample);
+        printf("Copying data over to pdsch_cw1\n");
+        plot_scatter_setNewData(&pdsch_cw1, pdsch_cw1_buf, nof_pdsch_sample);
+        printf("Copying data over to pdsch_cw2\n");
+        // if (pdsch_cw2_buf != NULL)
+        plot_scatter_setNewData(&pdsch_cw2, pdsch_cw2_buf, nof_pdsch_sample);
       	plot_real_setNewData(&csi, csi_amp, size);
         pthread_mutex_unlock(&dci_plot_mutex);
 	}
@@ -463,7 +507,9 @@ void* plot_pdcch_run(void* arg)
     if (sink >= 0) {
         close(sink);
     }
-    free(iq_snapshot);
+    free(iq_snapshot_pdcch);
+    free(iq_snapshot_pdsch_cw1);
+    free(iq_snapshot_pdsch_cw2);
     free(csi_snapshot);
 #endif
 

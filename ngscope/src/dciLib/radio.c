@@ -26,10 +26,10 @@ extern bool go_exit;
 extern ngscope_mode_t mode;
 extern bool debug;
 
-int radio_init_and_start(srsran_rf_t* rf, 
-                    srsran_cell_t* cell, 
-                    prog_args_t prog_args, 
-                    cell_search_cfg_t* cell_detect_config, 
+int radio_init_and_start(srsran_rf_t* rf,
+                    srsran_cell_t* cell,
+                    prog_args_t prog_args,
+                    cell_search_cfg_t* cell_detect_config,
                     float* search_cell_cfo){
     int ret;
 
@@ -54,7 +54,7 @@ int radio_init_and_start(srsran_rf_t* rf,
         srsran_rf_set_rx_gain(rf, srsran_rf_get_rx_gain(rf));
         cell_detect_config->init_agc = srsran_rf_get_rx_gain(rf);
       }
-    
+
 
     /* set receiver frequency */
       if (debug)

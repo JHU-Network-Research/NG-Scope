@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <srsran/config.h>
 #include <srsran/phy/common/phy_common.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,8 @@
 #include "srsran/phy/ue/ngscope_consistency.h"
 
 
+#define MAX_PDSCH_RE(cp) (2 * SRSRAN_CP_NSYMB(cp) * 12)
+
 extern bool                 go_exit;
 extern bool                 have_sib1;
 extern bool                 have_sib2;
@@ -70,6 +73,8 @@ pthread_cond_t 	dci_plot_cond[MAX_NOF_RF_DEV] = {PTHREAD_COND_INITIALIZER, PTHRE
 													PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER};
 
 cf_t* pdcch_buf[MAX_NOF_RF_DEV];
+cf_t* pdsch_cw1_buf[MAX_NOF_RF_DEV];
+cf_t* pdsch_cw2_buf[MAX_NOF_RF_DEV];
 float csi_amp[MAX_NOF_RF_DEV][110 * 15 * 2048];
 
 int dci_decoder_init
@@ -595,8 +600,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			                             : NGSCOPE_SEC_SCAN_CAP_LIVE;
 			ngscope_sec_scan_subframe(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
-									rf_idx, tti, dci_per_sub->timestamp,
-									dci_per_sub->collection_time,
+									rf_idx, tti, dci_per_sub,
 									sec_scan_cap);
 		}
 
@@ -638,6 +642,58 @@ int get_target_dci(ngscope_dci_msg_t* msg, int nof_msg, uint16_t targetRNTI){
         }
     }
     return -1;
+}
+
+int decode_channel_for_plot(ngscope_dci_decoder_t*       dci_decoder,
+                                        uint32_t                sf_idx,
+                                        uint32_t                sfn,
+                                        ngscope_dci_per_sub_t*  dci_per_sub,
+                                        uint16_t				decoder_idx){
+
+ //    uint32_t tti = sfn * 10 + sf_idx;
+ //    srsran_chest_dl_cfg_t chest_pdsch_cfg = {};
+ //    chest_pdsch_cfg.cfo_estimate_enable   = dci_decoder->prog_args.enable_cfo_ref;
+ //    chest_pdsch_cfg.cfo_estimate_sf_mask  = 1023;
+ //    chest_pdsch_cfg.estimator_alg         = srsran_chest_dl_str2estimator_alg(dci_decoder->prog_args.estimator_alg);
+ //    chest_pdsch_cfg.sync_error_enable     = true;
+
+	// dci_decoder->dl_sf.tti = tti;
+ //    dci_decoder->dl_sf.sf_type = SRSRAN_SF_NORM;
+	// dci_decoder->ue_dl_cfg.cfg.tm = (srsran_tm_t)1;
+
+	// dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = false;
+	// dci_decoder->ue_dl_cfg.cfg.dci.multiple_csi_request_enabled = false;
+	// dci_decoder->ue_dl_cfg.chest_cfg = chest_pdsch_cfg;
+
+	// int ret = 0;
+	// uint32_t mi_set_len;
+ //    if (dci_decoder->ue_dl.cell.frame_type == SRSRAN_TDD && !dci_decoder->dl_sf.tdd_config.configured) {
+ //        mi_set_len = 3;
+ //    } else {
+ //        mi_set_len = 1;
+ //    }
+
+ //    // Blind search PHICH mi value
+ //    // Remeber that sf->cfi is set only after calling srsran_ue_dl_decode_fft_estimate
+
+ //    for (uint32_t i = 0; i < mi_set_len && !ret; i++) {
+ //        if (mi_set_len == 1) {
+ //            srsran_ue_dl_set_mi_auto(&dci_decoder->ue_dl);
+ //        } else {
+ //            srsran_ue_dl_set_mi_manual(&dci_decoder->ue_dl, i);
+ //        }
+ //        ret = srsran_ue_dl_decode_fft_estimate(&dci_decoder->ue_dl, &dci_decoder->dl_sf, &dci_decoder->ue_dl_cfg);
+ //    }
+    // srsran_tm_t tm = (dci_decoder->cell.nof_ports == 1) ? SRSRAN_TM1 : SRSRAN_TM4;
+
+    // dci_decoder->dl_sf.tti                             = tti;
+    // dci_decoder->dl_sf.sf_type                         = SRSRAN_SF_NORM; //Ingore the MBSFN
+    // dci_decoder->ue_dl_cfg.cfg.tm                      = tm;
+
+    ngscope_tree_t tree;
+    srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL);
+    return SRSRAN_SUCCESS;
 }
 
 
@@ -767,6 +823,8 @@ void* dci_decoder_thread(void* p){
 #ifdef ENABLE_GUI
 	int nof_pdcch_sample = 36 * dci_decoder->ue_dl.pdcch.nof_cce[0];
 	int nof_prb = dci_decoder->cell.nof_prb;
+	int nof_pdsch_sample = nof_prb * MAX_PDSCH_RE(dci_decoder->cell.cp);
+	printf("NOF_PDSCH_SAMPLE: %d\n",nof_pdsch_sample);
 	int sz = srsran_symbol_sz(nof_prb);
 	bool enable_plot = !dci_decoder->prog_args.disable_plots;
     pthread_t plot_thread;
@@ -775,9 +833,16 @@ void* dci_decoder_thread(void* p){
 			pdcch_buf[rf_idx] = srsran_vec_cf_malloc(36*80);
 			srsran_vec_cf_zero(pdcch_buf[rf_idx], nof_pdcch_sample);
 
+			pdsch_cw1_buf[rf_idx] = srsran_vec_cf_malloc(nof_pdsch_sample);
+			srsran_vec_cf_zero(pdsch_cw1_buf[rf_idx], nof_pdsch_sample);
+
+			pdsch_cw2_buf[rf_idx] = srsran_vec_cf_malloc(nof_pdsch_sample);
+			srsran_vec_cf_zero(pdsch_cw2_buf[rf_idx], nof_pdsch_sample);
+
 			decoder_plot_t decoder_plot;
 			decoder_plot.decoder_idx 		= decoder_idx;
 			decoder_plot.nof_pdcch_sample 	= nof_pdcch_sample;
+			decoder_plot.nof_pdsch_sample   = nof_pdsch_sample;
 			decoder_plot.nof_prb 			= nof_prb;
 			decoder_plot.size 				= sz;
 			plot_init_pdcch_thread(&plot_thread, &decoder_plot);
@@ -839,14 +904,16 @@ void* dci_decoder_thread(void* p){
 			fprintf(fd,"%d\t%d\t\n", tti, 0);
 		}else{
 			//usleep(1000);
-    		dci_per_sub.timestamp 	= timestamp_us();
-			dci_per_sub.collection_time = collection_time;
-
-			uint64_t t1 = timestamp_us();
-
-			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub, decoder_idx);
-			uint64_t t2 = timestamp_us();
-			fprintf(fd,"%d\t%ld\t\n", tti, t2-t1);
+			dci_per_sub.timestamp 	= timestamp_us();
+            dci_per_sub.collection_time = collection_time;
+			// if (dci_decoder->prog_args.mode != RECORD){
+ 			uint64_t t1 = timestamp_us();
+ 			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub, decoder_idx);
+ 			uint64_t t2 = timestamp_us();
+ 			fprintf(fd,"%d\t%ld\t\n", tti, t2-t1);
+			// } else {
+			//     decode_channel_for_plot(dci_decoder, sf_idx, sfn, &dci_per_sub, decoder_idx);
+			// }
 	//--->  Unlock the buffer
 			pthread_mutex_unlock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);
 #ifdef ENABLE_GUI
@@ -854,6 +921,8 @@ void* dci_decoder_thread(void* p){
 				if(decoder_idx == 0){
 					pthread_mutex_lock(&dci_plot_mutex[rf_idx]);
 					srsran_vec_cf_copy(pdcch_buf[rf_idx], dci_decoder->ue_dl.pdcch.d, nof_pdcch_sample);
+					srsran_vec_cf_copy(pdsch_cw1_buf[rf_idx], dci_decoder->ue_dl.pdsch.d[0], dci_decoder->pdsch_cfg.grant.nof_re);
+					srsran_vec_cf_copy(pdsch_cw2_buf[rf_idx], dci_decoder->ue_dl.pdsch.d[1], dci_decoder->pdsch_cfg.grant.nof_re);
 
 					if (sz > 0) {
 						srsran_vec_f_zero(&(csi_amp[rf_idx][0]), sz);
@@ -896,7 +965,7 @@ void* dci_decoder_thread(void* p){
     			printf("DCI-buffer between decoder and status tracker is full! Considering increase its side!\n");
     		}
 
-            //printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci,
+            // printf("TTI :%d ul_dci: %d dl_dci:%d nof_dci:%d\n", dci_ret.tti, dci_per_sub.nof_ul_dci,
             //                                        dci_per_sub.nof_dl_dci, dci_ready.nof_dci);
             pthread_cond_signal(&dci_ready.cond);
             pthread_mutex_unlock(&dci_ready.mutex);
@@ -919,6 +988,8 @@ void* dci_decoder_thread(void* p){
 			pthread_cond_signal(&dci_plot_cond[rf_idx]);
 			pthread_join(plot_thread, NULL);
 			free(pdcch_buf[rf_idx]);
+			free(pdsch_cw1_buf[rf_idx]);
+			free(pdsch_cw2_buf[rf_idx]);
 		}
 	}
 #endif

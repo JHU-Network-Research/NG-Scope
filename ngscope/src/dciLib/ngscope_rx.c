@@ -751,6 +751,10 @@ void update_record_header(rx_record_header_t *hdr){
     to_update.phich_resources = hdr->phich_resources;
     to_update.cp = hdr->cp;
 
+    to_update.min_gain_db = hdr->min_gain_db;
+    to_update.max_gain_db = hdr->max_gain_db;
+    to_update.init_gain_db = hdr->init_gain_db;
+
     to_update.decoded_frames = hdr->decoded_frames;
     to_update.desynced_frames = hdr->desynced_frames;
     to_update.skipped_frames = hdr->skipped_frames;
@@ -765,6 +769,9 @@ void update_record_header(rx_record_header_t *hdr){
     printf("\trf_freq: %.02f\n", to_update.rf_freq);
     printf("\trecord start (us): %ld\n", to_update.record_start_ns);
     printf("\trecord duration (us): %ld\n", to_update.record_duration_ns);
+    printf("\tmin gain db: %.02f\n", to_update.min_gain_db);
+    printf("\tmax gain db: %.02f\n", to_update.max_gain_db);
+    printf("\tinit gain db: %.02f\n", to_update.init_gain_db);
     printf("\tnof decoded frames:\t%d\n",to_update.decoded_frames);
     printf("\tnof desynced frames:\t%d\n", to_update.desynced_frames);
     printf("\tnof skipped frames:\t%d\n", to_update.skipped_frames);

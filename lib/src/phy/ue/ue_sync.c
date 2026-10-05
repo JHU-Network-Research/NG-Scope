@@ -154,6 +154,7 @@ int srsran_ue_sync_start_agc(srsran_ue_sync_t* q,
     srsran_agc_set_gain_range(&q->agc, min_gain_db, max_gain_db);
     srsran_agc_set_gain(&q->agc, init_gain_value_db);
     srsran_ue_sync_set_agc_period(q, 4);
+    printf("[AGC] set initial gain=%.02f\n",init_gain_value_db);
   }
   return n;
 }
