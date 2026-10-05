@@ -684,6 +684,10 @@ void* task_scheduler_thread(void* p){
        	fprintf(decodelog,"timestamp,collection_time,type,tti,rnti,prb,dl,harq,ncce,L,format,mean_llr,nof_tb,decode_prob,corr,mcs1,tbs1,rv1,ndi1,mcs2,tbs2,rv2,ndi2,rach_ok\n");
     	fclose(decodelog);
 
+        char snrpath[1024];
+        sprintf(snrpath, "%ssnr-report-%d.csv",task_scheduler->prog_args.out_path,task_scheduler->prog_args.rf_index);
+        initialize_snr_report(snrpath);
+
 
         // RACH log: one row per decoded Random Access Response
         if(task_scheduler->prog_args.decode_RAR){
@@ -978,6 +982,7 @@ void* task_scheduler_thread(void* p){
     for(int i=0;i<nof_decoder;i++){
         pthread_join(dci_thd[i], NULL);
     }
+    destroy_snr_report();
 
     // Only now that every decoder thread has exited: closing earlier would leave them writing
     // into a closed FILE*.

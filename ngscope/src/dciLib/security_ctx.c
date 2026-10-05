@@ -1,3 +1,5 @@
+#include <srsran/phy/phch/pdsch_cfg.h>
+#include <srsran/phy/ue/ue_dl.h>
 #include <stdint.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -133,6 +135,33 @@ static pthread_mutex_t sec_mutex[MAX_NOF_RF_DEV] = {
     PTHREAD_MUTEX_INITIALIZER,
     PTHREAD_MUTEX_INITIALIZER,
 };
+
+typedef struct{
+    pthread_mutex_t mutex;
+    FILE *fd;
+    bool enabled;
+} snr_report_t;
+
+static snr_report_t snr_report;
+
+int initialize_snr_report(const char* path){
+    if (!(snr_report.fd = fopen(path,"w"))){
+        return -1;
+    }
+    const char *hdr = "tb1_mod,tb2_mod,snr_rx0_port0,snr_rx0_port1,snr_rx0_port2,snr_rx0_port3,snr_rx1_port0,snr_rx1_port1,snr_rx1_port2,snr_rx1_port3,crc_result\n";
+    if (fwrite(hdr,strlen(hdr),1,snr_report.fd) == 0){
+        return -1;
+    }
+    snr_report.enabled = true;
+    pthread_mutex_init(&snr_report.mutex,NULL);
+    return 0;
+}
+
+void destroy_snr_report(){
+    fflush(snr_report.fd);
+    fclose(snr_report.fd);
+    pthread_mutex_destroy(&snr_report.mutex);
+}
 
 static inline bool rf_idx_valid(int rf_idx)
 {
@@ -457,6 +486,28 @@ static const char* sec_tm_name(int t){
 static const char* sec_scheme_name(int s){
     static const char* names[SEC_NOF_SCHEMES] = {"PORT0", "DIVERSITY", "SPATIALMUX", "CDD"};
     return (s >= 0 && s < SEC_NOF_SCHEMES) ? names[s]: "?";
+}
+
+bool snr_report_enabled(){
+    return snr_report.enabled;
+}
+
+int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome){
+
+        pthread_mutex_lock(&snr_report.mutex);
+        // tb1 mod, tb2 mod, snr_rx0_tx0 - snr_rx1_tx3, crc_result
+        int mod1, mod2 = -1;
+        mod1 = pdsch_cfg->grant.tb[0].mod;
+
+        if (pdsch_cfg->grant.nof_tb >1){
+            mod2 = pdsch_cfg->grant.tb[1].mod;
+        }
+        char data[1024];
+        sprintf(data,"%s,%s,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%d\n", srsran_mod_string(mod1), srsran_mod_string(mod2), ue_dl->chest_res.snr_ant_port_db[0][0],ue_dl->chest_res.snr_ant_port_db[0][1],ue_dl->chest_res.snr_ant_port_db[0][2],ue_dl->chest_res.snr_ant_port_db[0][3],ue_dl->chest_res.snr_ant_port_db[1][0],ue_dl->chest_res.snr_ant_port_db[1][1],ue_dl->chest_res.snr_ant_port_db[1][2],ue_dl->chest_res.snr_ant_port_db[1][3],outcome == NGSCOPE_SEC_GRANT_CRC_PASS);
+        size_t res = fwrite(data,strlen(data),1,snr_report.fd);
+        pthread_mutex_unlock(&snr_report.mutex);
+
+        return res != 0;
 }
 
 void ngscope_sec_count_codebook_idx(int rf_idx, int outcome, int codebook_idx)

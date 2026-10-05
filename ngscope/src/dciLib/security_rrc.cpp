@@ -384,6 +384,9 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         outcome = NGSCOPE_SEC_GRANT_CRC_FAIL;
       }
 
+    if ((outcome == NGSCOPE_SEC_GRANT_CRC_FAIL || outcome == NGSCOPE_SEC_GRANT_CRC_PASS) && snr_report_enabled()){
+        write_snr_report(ue_dl, pdsch_cfg, outcome);
+    }
       // if (scheme == 3 && outcome == NGSCOPE_SEC_GRANT_CRC_FAIL){
       //     ERROR("CDD FAILED CRC: nof_ports=%d, nof_rx=%d, nof_layers=%d, tm=%d, format=%d",ue_dl->cell.nof_ports, (uint32_t)ue_dl->nof_rx_antennas,pdsch_cfg->grant.nof_layers,tm,dci_dl[d].format);
       // }

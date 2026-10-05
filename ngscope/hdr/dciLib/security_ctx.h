@@ -77,6 +77,11 @@ void ngscope_sec_set_cell(int rf_idx, uint32_t nof_ports, uint32_t nof_rxant);
  * since most tracked UEs simply have no grant in a given subframe. */
 void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci);
 
+int initialize_snr_report(const char* path);
+void destroy_snr_report();
+int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome);
+bool snr_report_enabled();
+
 /* One built grant, classified. `fmt` is an srsran_dci_format_t and `scheme` an
  * srsran_tx_scheme_t, both passed as plain int: this header is a leaf that includes only
  * stdbool/stdint, and pulling srsran.h in here would force the C/C++ linkage dance that
