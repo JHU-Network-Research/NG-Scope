@@ -88,6 +88,32 @@ raw 32.2% would also fall if the receiver were merely having a bad day.
 
 Report both, and never quote either without the coverage counters below.
 
+### Security evidence over every UE, not just the ones that RACHed
+
+`rate` counts one observation (a SecurityModeCommand) over one population (UEs that RACHed
+here). `security_summary.json` also carries `security_evidence`, split by anchor (`rar`,
+`crc`, `all`). It counts three independent observations of an AS security context:
+
+| key | evidence |
+|---|---|
+| `smc` | SecurityModeCommand seen (`outcome = established`) |
+| `drb` | a decoded PDU on a data radio bearer, LCID 3–10 (`n_drb_pdus > 0` in `security_sessions`) |
+| `reused` | `RRCConnectionReestablishment` / `Resume` restored a stored context |
+
+A DRB only exists after a completed SecurityModeCommand, and its payload is ciphered. The
+LCID sits in the MAC subheader, so seeing one needs no decryption. That makes DRB data the
+only evidence available for a CRC-confirmed UE, whose SMC came before the capture started.
+`drb_without_smc` is what it adds.
+
+On `4x2/tmobile-5035-studentcenter` (81 RACHed + 59 CRC-confirmed): SMC 64/140, DRB 72/140
+(20 with no SMC seen), SMC or DRB 84/140 = 60.0%, all three 97/140 = 69.3%. Of the 20,
+19 are CRC-confirmed.
+
+`rate` is deliberately left as it was, so historical figures stay comparable. `with_traffic`
+here follows `n_pdus` and counts tracked (`src=targeted`) blocks only. A CRC-confirmed UE
+whose single decoded block was the one that confirmed it (`src=probe`) therefore shows no
+traffic.
+
 ### A second cell, for scale
 
 An 80 s AT&T capture (PCI 405, 100 PRB, 2 ports) gives **234 / 692 = 33.8%** — close to the band
@@ -482,7 +508,7 @@ Outputs:
 | file | contents |
 |---|---|
 | `security_events-<rf>.csv` | one row per indicator occurrence found by `security_scan.py` — RRC and NAS, with the tshark field that fired and the frame number in `pcap_joined/` |
-| `security_sessions-<rf>.csv` | one row per RAR-anchored session: the funnel and the denominator. Seeded from `rar_log`, so a UE with no evidence still has a row |
+| `security_sessions-<rf>.csv` | one row per session (RAR- or CRC-anchored): the funnel and the denominator. Seeded from `rar_log`, so a UE with no evidence still has a row. `n_srb_pdus` / `n_drb_pdus` count decoded PDUs on signalling / data radio bearers |
 | `security_summary.json` | provenance (tshark version, fields queried), the validity checks, per-cell counts and both rates |
 | ~~`security_reuse-<rf>.csv`~~ | *retired* — reuse is now an `outcome` value in `security_sessions`. Was: one row per UE seen resuming an AS context it already held — `RRCConnectionReestablishment` or `RRCConnectionResume-r13`. These never send a SecurityModeCommand, so they do not belong in the denominator |
 | ~~`security_log-<rf>.csv`~~ | *retired*, replaced by `security_sessions-<rf>.csv`. The zero-boundary rule carries over: `security_scan.py` writes its three files with headers before anything that can fail, so a header-only file means "scanned, found nothing" — the result of interest here — and an absent file means the run was never scanned |

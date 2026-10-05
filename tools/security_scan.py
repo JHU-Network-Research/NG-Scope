@@ -154,7 +154,7 @@ SESSION_HEADER = ["rnti", "rar_tti", "rar_ct", "session_end_ct", "window_end_ct"
                   "outcome", "outcome_event", "outcome_ct", "ms_rar_to_outcome",
                   "nas_outcome", "nas_outcome_event",
                   "identity_exposure", "identity_event", "identity_ct",
-                  "n_pdus", "n_srb_pdus", "n_events", "evidence"]
+                  "n_pdus", "n_srb_pdus", "n_drb_pdus", "n_events", "evidence"]
 
 # How the UE got here, which is a different question from what it then did.
 #
@@ -635,6 +635,25 @@ def build_events(rows):
     return events, frames
 
 
+def is_drb_frame(f):
+    """True if the PDU carries a data radio bearer (DL-SCH LCID 3-10).
+
+    A DRB is only configured by an RRCConnectionReconfiguration that follows a completed
+    SecurityModeCommand, and everything on it is ciphered. So a decoded DRB PDU is direct
+    evidence that the UE held an AS security context with this cell -- and it needs no
+    decryption to see, because the LCID sits in the MAC subheader. It is the only evidence
+    there is for a UE whose SecurityModeCommand fell before the capture began.
+    """
+    for t in f["lcid"].split(","):
+        t = t.strip()
+        try:
+            if t and 3 <= int(t, 0) <= 10:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 def build_sessions(anchors, events, frames):
     """Attribute every event and PDU to the session that was open when it happened.
 
@@ -653,7 +672,7 @@ def build_sessions(anchors, events, frames):
                 **a,
                 "session_end_ct": nxt,
                 "window_end_ct": a["rar_ct"] + TRACK_WINDOW_US,
-                "events": [], "n_pdus": 0, "n_srb_pdus": 0,
+                "events": [], "n_pdus": 0, "n_srb_pdus": 0, "n_drb_pdus": 0,
             })
     sessions.sort(key=lambda s: (s["rnti"], s["rar_ct"]))
 
@@ -680,6 +699,8 @@ def build_sessions(anchors, events, frames):
         s["n_pdus"] += 1
         if any(t.strip() in ("0x01", "0x02") for t in f["lcid"].split(",")):
             s["n_srb_pdus"] += 1
+        if is_drb_frame(f):
+            s["n_drb_pdus"] += 1
 
     for e in events:
         s = find(e["rnti"], e["ct"])
@@ -960,8 +981,20 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
     rach_counts = Counter()
     prov_counts = Counter()
     crc_out_counts = Counter()
+    # Per-anchor tallies for `security_evidence`; see the summary below.
+    sec_ev = {a: Counter() for a in (SESSION_ANCHOR_RAR, SESSION_ANCHOR_CRC)}
     for s in sessions:
         outcome, ev, nas_outcome, nas_ev = resolve_outcome(s)
+        smc, drb = outcome == "established", s["n_drb_pdus"] > 0
+        t = sec_ev.setdefault(s.get("anchor", SESSION_ANCHOR_RAR), Counter())
+        t["ues"] += 1
+        t["with_traffic"] += s["n_pdus"] > 0
+        t["smc"] += smc
+        t["drb"] += drb
+        t["drb_without_smc"] += drb and not smc
+        t["smc_or_drb"] += smc or drb
+        t["reused"] += outcome == "reused"
+        t["smc_or_drb_or_reused"] += smc or drb or outcome == "reused"
         identity, id_ev = resolve_identity(s)
         id_counts[identity] += 1
         if s.get("anchor", SESSION_ANCHOR_RAR) == SESSION_ANCHOR_RAR:
@@ -994,7 +1027,7 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
             nas_outcome, nas_ev["event"] if nas_ev else "",
             identity, id_ev["event"] if id_ev else "",
             id_ev["ct"] if id_ev and id_ev["ct"] is not None else "",
-            s["n_pdus"], s["n_srb_pdus"], len(s["events"]),
+            s["n_pdus"], s["n_srb_pdus"], s["n_drb_pdus"], len(s["events"]),
             ";".join(e["event"] for e in s["events"]),
         ])
 
@@ -1088,6 +1121,17 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
             "preamble_boundary": boundary,
             "pdcch_orders_to_known_rnti": len(orders),
             "crc_anchored_outcomes": dict(crc_out_counts),
+        },
+        # Evidence of an AS security context, by UE, over BOTH populations -- RACHed here
+        # and CRC-confirmed. Deliberately not folded into `rate`, which stays "SMC seen /
+        # UEs that RACHed here" so every historical figure remains comparable. Three
+        # independent observations: a SecurityModeCommand (smc), a decoded PDU on a data
+        # radio bearer (drb -- see is_drb_frame), and a reestablishment/resume restoring a
+        # stored context (reused). drb_without_smc is what DRB adds: almost entirely
+        # CRC-confirmed UEs whose SMC preceded the capture.
+        "security_evidence": {
+            **{a: dict(c) for a, c in sec_ev.items()},
+            "all": dict(sum(sec_ev.values(), Counter())),
         },
         "events": dict(ev_counts),
         # Identity exposure is reported beside the security rate, never inside it. An IMSI
@@ -1208,6 +1252,16 @@ def main():
               f"{r['raw_pct']}% of all RACHing UEs")
         print(f"                      {r['established']}/{r['with_traffic_denominator']} = "
               f"{r['with_traffic_pct']}% of those we decoded any traffic for")
+        se = (cell.get("security_evidence") or {}).get("all")
+        if se and se.get("ues"):
+            n = se["ues"]
+            def pct(k):
+                return f"{se.get(k, 0)}/{n} = {round(100.0 * se.get(k, 0) / n, 1)}%"
+            print(f"  security evidence : over all {n} UEs (RACHed + CRC-confirmed):")
+            print(f"                      SMC {pct('smc')}; DRB data {pct('drb')} "
+                  f"({se.get('drb_without_smc', 0)} with no SMC seen)")
+            print(f"                      SMC or DRB {pct('smc_or_drb')}; "
+                  f"+ reestablish/resume {pct('smc_or_drb_or_reused')}")
         ident = cell["identity_exposure"]
         if ident["sessions"]:
             print(f"  IDENTITY EXPOSURE : " +
