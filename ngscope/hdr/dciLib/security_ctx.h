@@ -79,7 +79,7 @@ void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci);
 
 int initialize_snr_report(const char* path);
 void destroy_snr_report();
-int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome);
+int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome, int format);
 bool snr_report_enabled();
 
 /* One built grant, classified. `fmt` is an srsran_dci_format_t and `scheme` an
