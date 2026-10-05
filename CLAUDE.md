@@ -57,60 +57,9 @@ project's positive result, so that is a phantom detection. `assert_dissected()` 
 ## Measuring
 
 **Replay, not live.** The scheduler blocks on a busy decoder in replay but *discards* subframes
-live, so only replay gives a comparable yield figure.
-
-**`replay_fname` may be compressed** -- `.bz2`/`.gz`/`.xz`, decompressed by a subprocess on a
-pipe (`lbzip2` preferred, `bzip2` fallback). Never changes the result, only wall time:
-verified identical frames/DCIs/RARs across all three on a 3.14 GB capture. `libbz2` in-process
-was rejected on measurement -- same single-threaded algorithm as `bzcat`, which is a symlink to
-`bzip2`, so it buys nothing and loses the concurrency. Whether it bottlenecks depends on the
-cell, so every replay now prints a `REPLAY SOURCE` teardown line with the fraction of wall time
-blocked on the source: 1% plain, 13% lbzip2, **79% serial bzip2** on a 100 PRB cell (27 s ->
-37 s -> 115 s). `measurements/` has the harness; its
-README explains the scripts.
-
-**The harness is not yet host-native.** `measurements/run.sh` hard-codes `/src/measurements/…`
-and `/src/build-docker/ngscope/src/ngscope`, and the `*.toml` files are templates carrying
-container-absolute `replay_fname` (plus `rf_freq` for whichever capture). Rewrite those to host
-paths — `build/ngscope/src/ngscope` and a real capture path — before a run here.
-
-**Captures live outside the repo.** `recordings/` is gitignored and on this machine does not
-exist; the data is under `~/ngscope-data/` (`att_trolley`, `shriver`, `mt_airy02`,
-`verizon_66636`, and smaller T-Mobile/Verizon sets). The reference capture below,
-`tmobile_5035_poconos.bin` (13.7 GB, 300 s) with its 10 s and 60 s prefixes, is **not present
-here** — the figures that follow are recorded results, not something reproducible on this box as
-it stands. **Cut prefixes on frame boundaries** — `nof_samples` varies per frame, so the chain
-must be walked, not strided (`rx_frame_header_t` in `ngscope/hdr/dciLib/ngscope_rx.h`).
-
-Reference cell: band 12, EARFCN 5035, cell 44, FDD, **25 PRB, 4 ports**. The 4-port part
-matters for *post-security data*: srsRAN cannot predecode spatial multiplexing or CDD there at
-any antenna count. It does not touch pre-security traffic, which is transmit diversity by
-construction and which srsRAN decodes on 4 ports at 1 or 2 antennas. The old "~91% of grants"
-figure was unsourced and used the wrong criterion; the decodable share is now counted per
-transmission scheme at teardown. Current result: **424 of 1318 RACHing UEs reached AS
-security (32.2%)**.
-
-Four more captures, all on this machine and all replayed clean.
-`docs/security-implementation.md` §9 has the full table and the per-capture notes.
-
-| capture | cell | rate | note |
-|---|---|---|---|
-| `att_trolley` | PCI 405, 100 PRB, 2 ports | 234/692 = 33.8% | no metadata sidecar; `rf_freq` can be 0 |
-| `mt_airy02/earfcn-5110` | PCI 358, 50 PRB, 2 ports | 12/26 = 46.2% | segments heavily — the capture that exercises the RLC work |
-| `mt_airy02/earfcn-5330` | PCI 206, 50 PRB, 4 ports | 10/97 = 10.3% | weak; read as a floor. Needs `decode_SIB = false` |
-| `verizon_66636` | PCI 56, 100 PRB, 4 ports | 52/96 = 54.2% | cleanest run; TBS probe **inconclusive** here |
-
-The two `mt_airy02` captures carry their live run's `rar_log-0.csv`, and the replay reproduces
-each exactly, per-UE on `(temp C-RNTI, RAR tti)`. That is the strongest check available that the
-replay path is faithful.
-
-**Do not read the spread as cell behaviour.** Port count does not predict it — the 4-port cells
-sit at both ends — and the `PDSCH decoded` figure is confounded by tracking exit, since a UE
-stops being scanned once its SecurityModeCommand is seen. Signal strength dominates.
-
-**`decode_SIB = true` segfaults on the 5330 capture** inside `srsran_ue_dl_find_and_decode_sib1`,
-about two minutes in. Pre-existing: it reproduces on a stock build with the security changes
-stashed, at the identical site. `docs/security-implementation.md` §7 has the trace.
+live, so only replay gives a comparable yield figure. Captures live under `~/ngscope-data/`, not
+the repo. Harness paths, capture table, reference results and per-capture traps: the
+`ngscope-measure` skill (`.claude/skills/ngscope-measure/SKILL.md`).
 
 ### Regression gates that caught real mistakes
 
@@ -247,14 +196,7 @@ guarantee.
 
 ## State
 
-Branch `pcap`, 20 commits ahead of `13a0b95`, `origin/security` merged in. Pushed and level with
-`origin/pcap`.
-
-`Dockerfile` is now tracked (`2aaa4d7`), which settles the question of where the
-`amarder89/ng-scope:gui` image came from. `measurements/README.md` and `measurements/run.sh`
-still assume the container and its `/src/...` paths.
-
-**Uncommitted work in the tree.** RRC/NAS detection has moved out of ngscope entirely:
+**Detection is offline.** RRC/NAS detection has moved out of ngscope entirely:
 `security_rrc.cpp` went from 858 lines to ~247, the whole RLC reassembly / length-indicator /
 ASN.1 path is gone, and `security_ctx.c` keeps only the tracked set and the coverage counters.
 ngscope writes `mac-<rf>.pcapng` and claims nothing; `tools/security_scan.py` dissects it with

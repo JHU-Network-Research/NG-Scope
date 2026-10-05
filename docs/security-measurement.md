@@ -323,16 +323,18 @@ instead of dropping, so only replay yields a coverage figure that means anything
 holding a partial SDU is sound where nothing goes missing, but a discarded middle segment leaves
 a partial that never completes, which looks exactly like a UE that never reached security.
 
-**Cell antenna configuration sets a ceiling, but a narrower one than this document used to
-claim.** srsRAN cannot predecode spatial multiplexing on a 4-port cell at any receive-antenna
-count — the same gap exists in LTESniffer, which builds on a byte-identical `precoding.c` —
-and it cannot do CDD there either. It *can* do 4-port transmit diversity, at one antenna or
-two.
+**Cell antenna configuration sets a ceiling, and on 4 ports it is now rank.** Upstream srsRAN
+(and LTESniffer, which shares its `precoding.c`) cannot predecode spatial multiplexing or CDD
+on a 4-port cell. ngscope now can, for rank 1 and rank 2 (`srsran_predecoding_multiplex_4port`,
+`srsran_predecoding_ccd_4port` in `precoding.c`); rank 2 needs two receive antennas. Rank 3/4,
+a codeword spread over two layers, and "use the last PUSCH PMI" grants are refused when the
+grant is built and show as found-but-not-built.
 
-That distinction decides what the ceiling costs. A UE is in TM1/TM2 until an
-`RRCConnectionReconfiguration` moves it, and that only follows a completed
-SecurityModeCommand, so **every pre-security downlink message is transmit diversity** and none
-of it is behind the gap. What 4 ports costs is post-security data traffic.
+Measurements taken on 4-port cells before 2026-10 undercount. **Pre-security traffic is not
+transmit diversity by construction**, as this section used to claim: `RRCConnectionSetup`
+carries `physicalConfigDedicated` and can set TM4 before security. On the 4x2 T-Mobile capture
+(PCI 272) 57 of 76 SecurityModeCommands were Format2 and 14 were closed-loop SM. Fixing 4-port
+SM took that capture from 55/81 to 58/81 established.
 
 The figure is now measured rather than asserted. `ngscope_sec_report()` counts every built
 grant by transmission scheme and reports the share that is decodable on this cell with this

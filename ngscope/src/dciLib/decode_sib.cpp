@@ -272,6 +272,12 @@ srsran_dci_location_t *sib_loc
     }
     if (debug)
       printf("CELL: have sib1=%d\n",have_sib1);
+    /* The PDSCH decoder writes its output whether or not the CRC passed, so a failed block is
+     * noise. Unpacking it as ASN.1 is what crashed replays of 4-port cells (std::bad_alloc
+     * from a garbage length) -- a cell where the SIB fails CRC often enough to hit one. */
+    if (!pdsch_res[0].crc) {
+      return 0;
+    }
     // if (have_sib1 == false) {
     asn1::rrc::bcch_dl_sch_msg_s dlsch;
     asn1::rrc::sib_type1_s sib1;
@@ -283,6 +289,11 @@ srsran_dci_location_t *sib_loc
       if (debug)
         printf("CELL: Returing from SIB1 decode with error\n");
       return SRSRAN_ERROR;
+    }
+    /* The asn1 choice accessors only log on a type mismatch and then reinterpret the union. */
+    if (dlsch.msg.type().value != asn1::rrc::bcch_dl_sch_msg_type_c::types::c1 ||
+        dlsch.msg.c1().type().value != asn1::rrc::bcch_dl_sch_msg_type_c::c1_c_::types::sib_type1) {
+      return 0;
     }
 
     sib1 = dlsch.msg.c1().sib_type1();
@@ -414,6 +425,11 @@ srsran_dci_location_t *sib_loc
         acks[tb] = pdsch_res[tb].crc;
       }
     }
+    /* Same two guards as SIB1: a failed CRC is noise, and SI-RNTI also carries SIB1 and
+     * extension messages that must not be reinterpreted as SystemInformation. */
+    if (!pdsch_res[0].crc) {
+      return 0;
+    }
     asn1::rrc::bcch_dl_sch_msg_s dlsch;
     //asn1::rrc::sys_info_s sibs;
     asn1::cbit_ref dlsch_bref(pdsch_res->payload, pdsch_cfg->grant.tb[0].tbs / 8);
@@ -422,6 +438,10 @@ srsran_dci_location_t *sib_loc
 
     if(err != asn1::SRSASN_CODE::SRSASN_SUCCESS){
       return SRSRAN_ERROR;
+    }
+    if (dlsch.msg.type().value != asn1::rrc::bcch_dl_sch_msg_type_c::types::c1 ||
+        dlsch.msg.c1().type().value != asn1::rrc::bcch_dl_sch_msg_type_c::c1_c_::types::sys_info) {
+      return 0;
     }
     
     //FILE *sib2out = fopen("sib2out.txt", "a");

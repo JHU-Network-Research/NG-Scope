@@ -79,6 +79,9 @@ typedef struct {
     uint64_t   nof_tb_decoded;
     uint64_t   nof_tb_retried;
     uint64_t   nof_tb_retry_tried;
+    /* Of nof_tb_decoded, how many were the second transport block of a two-codeword grant --
+     * the share of the pcap that only exists because TB1 is decoded at all. */
+    uint64_t   nof_tb_second;
 
     /* What the targeted search actually looked at. nof_scan_no_dci was a bare `continue`
      * before there was anywhere to count it. */
@@ -430,6 +433,16 @@ void ngscope_sec_count_tb_table(int rf_idx, bool retried)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+void ngscope_sec_count_tb_second(int rf_idx)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_tb_second++;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 void ngscope_sec_count_tb_retry(int rf_idx)
 {
     if (!rf_idx_valid(rf_idx)) {
@@ -542,10 +555,12 @@ void ngscope_sec_report(int rf_idx)
      * here rather than moving offline. A block either passes its CRC on a table or it does
      * not. */
     if (q->nof_tb_decoded > 0) {
-        printf("SECURITY (cell %d): MCS->TBS table -- %llu transport blocks decoded, %llu of them "
+        printf("SECURITY (cell %d): MCS->TBS table -- %llu transport blocks decoded (%llu the "
+               "second codeword of a two-codeword grant), %llu of them "
                "(%.1f%%) only after falling back to the other table",
                rf_idx,
                (unsigned long long)q->nof_tb_decoded,
+               (unsigned long long)q->nof_tb_second,
                (unsigned long long)q->nof_tb_retried,
                100.0 * (double)q->nof_tb_retried / (double)q->nof_tb_decoded);
         if (q->nof_tb_retried == 0 && q->nof_tb_retry_tried > 0) {

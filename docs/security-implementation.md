@@ -399,10 +399,15 @@ corrupt or unsupported decodes.
 **Multi-channel IQ recording.** Needs a format version bump so old files are not misparsed.
 Currently refused rather than silently wrong.
 
-**Implementing 4-port MIMO predecoding.** `srsran_predecoding_multiplex()` is *"not implemented
-for 4 Tx ports"* and `srsran_predecoding_ccd_zf()` is *"Only 2 ports supported"*. Real DSP work,
-and it would need 2+ RX antennas to be usable once written. Worth knowing this is a software
-gap, not a physical limit — 4-port spatial multiplexing is decodable in principle.
+**4-port MIMO predecoding -- done for rank 1/2 (2026-10).** The codebook is generated from the
+36.211 Table 6.3.4.2.3-2 Householder vectors rather than typed in (an earlier hand-typed table
+had wrong signs and held Format2 CRC passes to 13%). The 4-port pinfo is decoded per 36.212
+Table 5.3.3.1.5-5: with one codeword, TPMI is pinfo-1, not pinfo. Verified on
+`4x2/tmobile-5035-studentcenter` with an all-TPMI oracle: the signalled TPMI is the one that
+passes, with no consistent permutation. Still open: rank 2 on one codeword (needs the two-layer
+TBS translation, 36.213 7.1.7.2.2), rank 3/4 (needs more than two antennas), and MCS 29-31
+retransmissions, which carry no TBS -- 616 grants on that capture -- and would need per-HARQ
+state.
 
 ---
 
