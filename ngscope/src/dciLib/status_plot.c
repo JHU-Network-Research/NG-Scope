@@ -92,10 +92,10 @@ static int plot_sink_write(int fd, const void* buf, size_t len)
     return 0;
 }
 
-static int plot_sink_send(int fd, uint32_t seq, const cf_t* iq_pdcch, int nof_const_pdcch, cf_t *iq_pdsch_cw1, cf_t *iq_pdsch_cw2, int nof_const_pdsch, const float* csi, int nof_csi)
+static int plot_sink_send(int fd, uint32_t seq, const cf_t* iq_pdcch, int nof_const_pdcch, cf_t *iq_pdsch_cw1, cf_t *iq_pdsch_cw2, int nof_const_pdsch, const float* csi, int nof_csi, const float* snr, int nof_snr)
 {
     uint32_t header[2] = {NGSCOPE_PLOT_MAGIC, seq};
-    uint16_t counts[3] = {(uint16_t)nof_const_pdcch, (uint16_t) nof_const_pdsch, (uint16_t)nof_csi};
+    uint16_t counts[4] = {(uint16_t)nof_const_pdcch, (uint16_t) nof_const_pdsch, (uint16_t)nof_csi, (uint16_t)nof_snr};
 
     if (plot_sink_write(fd, header, sizeof(header)) < 0){
         ERROR("Writing plot sink header");
@@ -123,6 +123,9 @@ static int plot_sink_send(int fd, uint32_t seq, const cf_t* iq_pdcch, int nof_co
         ERROR("Writing CSI");
         return -1;
     }
+    if (nof_snr > 0 && plot_sink_write(fd, snr, (size_t)nof_snr * sizeof(float)) < 0) {
+        ERROR("Writing SNR");
+    }
     return 0;
 }
 extern bool go_exit;
@@ -135,6 +138,7 @@ extern cf_t* pdcch_buf;
 extern cf_t* pdsch_cw1_buf;
 extern cf_t* pdsch_cw2_buf;
 extern float csi_amp[110 * 15 * 2048];
+extern float snr_ant_port_buf[SRSRAN_MAX_PORTS * SRSRAN_MAX_PORTS];
 extern pthread_cond_t 	dci_plot_cond;
 //
 //void init_plot_data(ngscope_CA_status_t* q, int nof_dev){
@@ -405,11 +409,13 @@ void* plot_pdcch_run(void* arg)
 	int nof_pdcch_sample 	= q->nof_pdcch_sample;
 	int nof_pdsch_sample    = q->nof_pdsch_sample;
 	int size 				= q->size;
+	int snr_size            = q->snr_size;
 
     plot_scatter_t pdcch;
     plot_scatter_t pdsch_cw1;
     plot_scatter_t pdsch_cw2;
     plot_real_t csi;
+    plot_real_t snr;
 
     /* NGSCOPE_PLOT_SOCK routes the same two series to a front end instead of opening
      * srsGUI's own windows. Unset -> unchanged behaviour. */
@@ -442,6 +448,13 @@ void* plot_pdcch_run(void* arg)
         plot_real_setLabels(&csi, "Subcarrier Index", "dB");
         plot_real_setYAxisScale(&csi, -40, 40);
         plot_real_addToWindowGrid(&csi, (char*)"pdsch_ue", 0, 3);
+
+        plot_real_init(&snr);
+        plot_real_setTitle(&snr, "Signal to Noise Ratio");
+        plot_real_setLabels(&snr, "X", "dB");
+        plot_real_setYAxisScale(&snr, -40, 40);
+        plot_real_addToWindowGrid(&snr, (char*)"pdsch_ue", 0, 4);
+
     }
 
     /* Snapshot buffers: the socket write must not happen under dci_plot_mutex, or a slow
@@ -450,12 +463,14 @@ void* plot_pdcch_run(void* arg)
     cf_t*  iq_snapshot_pdsch_cw1 = NULL;
     cf_t*  iq_snapshot_pdsch_cw2 = NULL;
     float* csi_snapshot = NULL;
+    float* snr_snapshot = NULL;
     if (sink >= 0) {
         iq_snapshot_pdcch  = srsran_vec_cf_malloc(nof_pdcch_sample > 0 ? nof_pdcch_sample : 1);
         iq_snapshot_pdsch_cw1  = srsran_vec_cf_malloc(nof_pdsch_sample > 0 ? nof_pdsch_sample : 1);
         iq_snapshot_pdsch_cw2  = srsran_vec_cf_malloc(nof_pdsch_sample > 0 ? nof_pdsch_sample : 1);
         csi_snapshot = srsran_vec_f_malloc(size > 0 ? size : 1);
-        if (iq_snapshot_pdcch == NULL || iq_snapshot_pdsch_cw1 == NULL || iq_snapshot_pdsch_cw2 == NULL || csi_snapshot == NULL) {
+        snr_snapshot = srsran_vec_f_malloc(snr_size > 0 ? snr_size : 1);
+        if (iq_snapshot_pdcch == NULL || iq_snapshot_pdsch_cw1 == NULL || iq_snapshot_pdsch_cw2 == NULL || csi_snapshot == NULL || snr_snapshot == NULL) {
             printf("plot: out of memory for snapshot buffers\n");
             close(sink);
             sink = -1;
@@ -484,9 +499,10 @@ void* plot_pdcch_run(void* arg)
             memcpy(iq_snapshot_pdsch_cw1, pdsch_cw1_buf, (size_t)nof_pdsch_sample * sizeof(cf_t));
             memcpy(iq_snapshot_pdsch_cw2, pdsch_cw2_buf, (size_t)nof_pdsch_sample * sizeof(cf_t));
             memcpy(csi_snapshot, csi_amp, (size_t)size * sizeof(float));
+            memcpy(snr_snapshot, snr_ant_port_buf, (size_t) snr_size * sizeof(float));
             pthread_mutex_unlock(&dci_plot_mutex);
 
-            if (plot_sink_send(sink, seq++, iq_snapshot_pdcch, nof_pdcch_sample,iq_snapshot_pdsch_cw1, iq_snapshot_pdsch_cw2, nof_pdsch_sample, csi_snapshot, size) < 0) {
+            if (plot_sink_send(sink, seq++, iq_snapshot_pdcch, nof_pdcch_sample,iq_snapshot_pdsch_cw1, iq_snapshot_pdsch_cw2, nof_pdsch_sample, csi_snapshot, size, snr_snapshot, snr_size) < 0) {
                 printf("plot: listener closed the connection, stopping plot stream\n");
                 close(sink);
                 sink = -1;
@@ -501,6 +517,7 @@ void* plot_pdcch_run(void* arg)
         // if (pdsch_cw2_buf != NULL)
         plot_scatter_setNewData(&pdsch_cw2, pdsch_cw2_buf, nof_pdsch_sample);
       	plot_real_setNewData(&csi, csi_amp, size);
+        plot_real_setNewData(&snr, snr_ant_port_buf, snr_size);
         pthread_mutex_unlock(&dci_plot_mutex);
 	}
 

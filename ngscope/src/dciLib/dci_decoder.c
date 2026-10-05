@@ -76,6 +76,7 @@ cf_t* pdcch_buf[MAX_NOF_RF_DEV];
 cf_t* pdsch_cw1_buf[MAX_NOF_RF_DEV];
 cf_t* pdsch_cw2_buf[MAX_NOF_RF_DEV];
 float csi_amp[MAX_NOF_RF_DEV][110 * 15 * 2048];
+float snr_ant_port_buf[SRSRAN_MAX_PORTS * SRSRAN_MAX_PORTS];
 
 int dci_decoder_init
 (
@@ -824,8 +825,9 @@ void* dci_decoder_thread(void* p){
 	int nof_pdcch_sample = 36 * dci_decoder->ue_dl.pdcch.nof_cce[0];
 	int nof_prb = dci_decoder->cell.nof_prb;
 	int nof_pdsch_sample = nof_prb * MAX_PDSCH_RE(dci_decoder->cell.cp);
-	printf("NOF_PDSCH_SAMPLE: %d\n",nof_pdsch_sample);
+
 	int sz = srsran_symbol_sz(nof_prb);
+	int snr_sz = dci_decoder->cell.nof_ports * dci_decoder->prog_args.rf_nof_rx_ant;
 	bool enable_plot = !dci_decoder->prog_args.disable_plots;
     pthread_t plot_thread;
 	if(enable_plot){
@@ -845,6 +847,7 @@ void* dci_decoder_thread(void* p){
 			decoder_plot.nof_pdsch_sample   = nof_pdsch_sample;
 			decoder_plot.nof_prb 			= nof_prb;
 			decoder_plot.size 				= sz;
+			decoder_plot.snr_size           = snr_sz;
 			plot_init_pdcch_thread(&plot_thread, &decoder_plot);
 		}
 	}
@@ -923,6 +926,12 @@ void* dci_decoder_thread(void* p){
 					srsran_vec_cf_copy(pdcch_buf[rf_idx], dci_decoder->ue_dl.pdcch.d, nof_pdcch_sample);
 					srsran_vec_cf_copy(pdsch_cw1_buf[rf_idx], dci_decoder->ue_dl.pdsch.d[0], dci_decoder->pdsch_cfg.grant.nof_re);
 					srsran_vec_cf_copy(pdsch_cw2_buf[rf_idx], dci_decoder->ue_dl.pdsch.d[1], dci_decoder->pdsch_cfg.grant.nof_re);
+
+					for(int a = 0; a < dci_decoder->prog_args.rf_nof_rx_ant; a++){
+					    for (int p = 0; p < dci_decoder->cell.nof_ports; p++){
+							snr_ant_port_buf[(dci_decoder->cell.nof_ports*a)+p] = dci_decoder->ue_dl.chest_res.snr_ant_port_db[a][p];
+						}
+					}
 
 					if (sz > 0) {
 						srsran_vec_f_zero(&(csi_amp[rf_idx][0]), sz);

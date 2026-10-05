@@ -1018,6 +1018,8 @@ window.onSweepProgress = function onSweepProgress(state) {
 const CONST_LIMIT = 3;      // plot_scatter_setXAxisScale(&pdcch, -3, 3)
 const CSI_MIN_DB = -40;     // plot_real_setYAxisScale(&csi, -40, 40)
 const CSI_MAX_DB = 40;
+const SNR_MIN_DB = 0;
+const SNR_MAX_DB = 40;
 
 let lastFrame = null;
 let plotPending = false;
@@ -1131,6 +1133,39 @@ function drawChannelResponse(csi) {
   ctx.stroke();
 }
 
+function drawSNR(snr) {
+  const canvas = $('plot-snr');
+  const { ctx, w, h } = prepCanvas(canvas);
+  const pad = { l: 30, r: 8, t: 8, b: 18 };
+  const iw = w - pad.l - pad.r;
+  const ih = h - pad.t - pad.b;
+
+  ctx.strokeStyle = css('--border');
+  ctx.fillStyle = css('--text-faint');
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.beginPath();
+  for (let db = SNR_MIN_DB; db <= SNR_MAX_DB; db += 10) {
+    const y = pad.t + ih * (1 - (db - SNR_MIN_DB) / (SNR_MAX_DB - SNR_MIN_DB));
+    ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + iw, y);
+    ctx.fillText(String(db), 4, y + 3);
+  }
+  ctx.stroke();
+  drawFrame(ctx, w, h, pad);
+  ctx.fillText('Rx Channel', pad.l + iw / 2 - 38, pad.t + ih + 14);
+
+  if (!snr || !snr.length) return;
+  ctx.strokeStyle = css('--ok');
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < snr.length; i++) {
+    const x = pad.l + (iw * i) / Math.max(1, snr.length - 1);
+    const clamped = Math.min(SNR_MAX_DB, Math.max(SNR_MIN_DB, snr[i]));
+    const y = pad.t + ih * (1 - (clamped - SNR_MIN_DB) / (SNR_MAX_DB - SNR_MIN_DB));
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
 function renderPlots() {
   plotPending = false;
   if ($('plots').classList.contains('collapsed')) return;
@@ -1138,6 +1173,7 @@ function renderPlots() {
   drawConstellation(lastFrame && lastFrame.iq_pdsch_cw1,'plot-pdsch-1-const');
   drawConstellation(lastFrame && lastFrame.iq_pdsch_cw2,'plot-pdsch-2-const');
   drawChannelResponse(lastFrame && lastFrame.csi);
+  drawSNR(lastFrame && lastFrame.snr);
 }
 
 /* Frames arrive up to 20/s; coalesce onto the frame clock so a slow paint cannot queue up. */

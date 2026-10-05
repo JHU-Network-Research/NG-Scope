@@ -40,6 +40,7 @@ typedef struct{
 	int nof_pdsch_sample;
 	int nof_prb;
 	int size;
+	int snr_size;
 }decoder_plot_t;
 
 int dci_decoder_init(ngscope_dci_decoder_t*     dci_decoder,

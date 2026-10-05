@@ -685,6 +685,17 @@ static int srsran_pdsch_codeword_decode(srsran_pdsch_t*     q,
          cfg->grant.nof_re,
          cfg->grant.tb[tb_idx].nof_bits,
          rv);
+    // if(codeword_idx != 0){
+    //     printf("Decoding PDSCH SF: %d (CW%d -> TB%d), Mod %s, NofBits: %d, NofSymbols: %d, NofBitsE: %d, rv_idx: %d\n",
+    //         sf->tti % 10,
+    //         codeword_idx,
+    //         tb_idx,
+    //         srsran_mod_string(mcs->mod),
+    //         mcs->tbs,
+    //         cfg->grant.nof_re,
+    //         cfg->grant.tb[tb_idx].nof_bits,
+    //         rv);
+    // }
 
     /* demodulate symbols
      * The MAX-log-MAP algorithm used in turbo decoding is unsensitive to SNR estimation,

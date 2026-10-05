@@ -11,6 +11,7 @@ Frame layout, little-endian, matching plot_sink_send():
     float  iq[2 * nof_const]
     float  iq[2 * nof_const]
     float  csi[nof_csi]
+    float  snr[nof_snr]
 
 Frames are decimated to roughly the width of the canvas before being handed on: the wire
 carries up to 2048 CSI points and ~2900 constellation points per frame, and pushing all of
@@ -24,11 +25,12 @@ import tempfile
 import threading
 
 MAGIC = 0x3150474E  # "NGP1"
-HEADER = struct.Struct("<IIHHH")
+HEADER = struct.Struct("<IIHHHH")
 
 # Enough to draw with; beyond this the extra points land on pixels already lit.
 MAX_CONST_POINTS = 1200
 MAX_CSI_POINTS = 600
+MAX_SNR_POINTS = 8
 
 
 def _recv_exactly(conn, n):
@@ -81,7 +83,7 @@ class PlotFeed:
                 head = _recv_exactly(conn, HEADER.size)
                 if head is None:
                     break
-                magic, seq, nof_const_pdcch, nof_const_pdsch, nof_csi = HEADER.unpack(head)
+                magic, seq, nof_const_pdcch, nof_const_pdsch, nof_csi, nof_snr = HEADER.unpack(head)
                 if magic != MAGIC:
                     # Out of step with the stream; there is no way to resynchronise.
                     break
@@ -90,14 +92,16 @@ class PlotFeed:
                 iq_bytes_pdsch_cw1 = _recv_exactly(conn, nof_const_pdsch * 2 * 4);
                 iq_bytes_pdsch_cw2 = _recv_exactly(conn, nof_const_pdsch * 2 * 4);
                 csi_bytes = _recv_exactly(conn, nof_csi * 4)
-                if iq_bytes_pdcch is None or iq_bytes_pdsch_cw1 is None or iq_bytes_pdsch_cw2 is None or csi_bytes is None:
+                snr_bytes = _recv_exactly(conn, nof_snr * 4);
+                if iq_bytes_pdcch is None or iq_bytes_pdsch_cw1 is None or iq_bytes_pdsch_cw2 is None or csi_bytes is None or snr_bytes is None:
                     break
 
                 iq_pdcch = struct.unpack(f"<{nof_const_pdcch * 2}f", iq_bytes_pdcch) if nof_const_pdcch else ()
                 iq_pdsch_cw1 = struct.unpack(f"<{nof_const_pdsch * 2}f", iq_bytes_pdsch_cw1) if nof_const_pdsch else ()
                 iq_pdsch_cw2 = struct.unpack(f"<{nof_const_pdsch * 2}f", iq_bytes_pdsch_cw2) if nof_const_pdsch else ()
                 csi = struct.unpack(f"<{nof_csi}f", csi_bytes) if nof_csi else ()
-
+                snr = struct.unpack(f"<{nof_snr}f", snr_bytes) if nof_snr else ()
+                # print(nof_snr)
                 points_pdcch = list(zip(iq_pdcch[0::2], iq_pdcch[1::2]))
                 thinned_pdcch = _decimate(points_pdcch, MAX_CONST_POINTS)
 
@@ -115,9 +119,11 @@ class PlotFeed:
                         "iq_pdsch_cw1": [round(v, 4) for pair in thinned_pdsch_cw1 for v in pair],
                         "iq_pdsch_cw2": [round(v, 4) for pair in thinned_pdsch_cw2 for v in pair],
                         "csi": [round(v, 2) for v in _decimate(csi, MAX_CSI_POINTS)],
+                        "snr": [round(v, 2) for v in _decimate(snr, MAX_SNR_POINTS)],
                         "nof_const_pdcch": nof_const_pdcch,
                         "nof_const_pdsch": nof_const_pdsch,
                         "nof_csi": nof_csi,
+                        "nof_snr": nof_snr
                     })
                 except Exception:  # noqa: BLE001 - a render failure must not kill the feed
                     pass
