@@ -88,6 +88,32 @@ raw 32.2% would also fall if the receiver were merely having a bad day.
 
 Report both, and never quote either without the coverage counters below.
 
+### Security evidence over every UE, not just the ones that RACHed
+
+`rate` counts one observation (a SecurityModeCommand) over one population (UEs that RACHed
+here). `security_summary.json` also carries `security_evidence`, split by anchor (`rar`,
+`crc`, `all`). It counts three independent observations of an AS security context:
+
+| key | evidence |
+|---|---|
+| `smc` | SecurityModeCommand seen (`outcome = established`) |
+| `drb` | a decoded PDU on a data radio bearer, LCID 3–10 (`n_drb_pdus > 0` in `security_sessions`) |
+| `reused` | `RRCConnectionReestablishment` / `Resume` restored a stored context |
+
+A DRB only exists after a completed SecurityModeCommand, and its payload is ciphered. The
+LCID sits in the MAC subheader, so seeing one needs no decryption. That makes DRB data the
+only evidence available for a CRC-confirmed UE, whose SMC came before the capture started.
+`drb_without_smc` is what it adds.
+
+On `4x2/tmobile-5035-studentcenter` (81 RACHed + 59 CRC-confirmed): SMC 64/140, DRB 72/140
+(20 with no SMC seen), SMC or DRB 84/140 = 60.0%, all three 97/140 = 69.3%. Of the 20,
+19 are CRC-confirmed.
+
+`rate` is deliberately left as it was, so historical figures stay comparable. `with_traffic`
+here follows `n_pdus` and counts tracked (`src=targeted`) blocks only. A CRC-confirmed UE
+whose single decoded block was the one that confirmed it (`src=probe`) therefore shows no
+traffic.
+
 ### A second cell, for scale
 
 An 80 s AT&T capture (PCI 405, 100 PRB, 2 ports) gives **234 / 692 = 33.8%** — close to the band
@@ -323,16 +349,18 @@ instead of dropping, so only replay yields a coverage figure that means anything
 holding a partial SDU is sound where nothing goes missing, but a discarded middle segment leaves
 a partial that never completes, which looks exactly like a UE that never reached security.
 
-**Cell antenna configuration sets a ceiling, but a narrower one than this document used to
-claim.** srsRAN cannot predecode spatial multiplexing on a 4-port cell at any receive-antenna
-count — the same gap exists in LTESniffer, which builds on a byte-identical `precoding.c` —
-and it cannot do CDD there either. It *can* do 4-port transmit diversity, at one antenna or
-two.
+**Cell antenna configuration sets a ceiling, and on 4 ports it is now rank.** Upstream srsRAN
+(and LTESniffer, which shares its `precoding.c`) cannot predecode spatial multiplexing or CDD
+on a 4-port cell. ngscope now can, for rank 1 and rank 2 (`srsran_predecoding_multiplex_4port`,
+`srsran_predecoding_ccd_4port` in `precoding.c`); rank 2 needs two receive antennas. Rank 3/4,
+a codeword spread over two layers, and "use the last PUSCH PMI" grants are refused when the
+grant is built and show as found-but-not-built.
 
-That distinction decides what the ceiling costs. A UE is in TM1/TM2 until an
-`RRCConnectionReconfiguration` moves it, and that only follows a completed
-SecurityModeCommand, so **every pre-security downlink message is transmit diversity** and none
-of it is behind the gap. What 4 ports costs is post-security data traffic.
+Measurements taken on 4-port cells before 2026-10 undercount. **Pre-security traffic is not
+transmit diversity by construction**, as this section used to claim: `RRCConnectionSetup`
+carries `physicalConfigDedicated` and can set TM4 before security. On the 4x2 T-Mobile capture
+(PCI 272) 57 of 76 SecurityModeCommands were Format2 and 14 were closed-loop SM. Fixing 4-port
+SM took that capture from 55/81 to 58/81 established.
 
 The figure is now measured rather than asserted. `ngscope_sec_report()` counts every built
 grant by transmission scheme and reports the share that is decodable on this cell with this
@@ -480,7 +508,7 @@ Outputs:
 | file | contents |
 |---|---|
 | `security_events-<rf>.csv` | one row per indicator occurrence found by `security_scan.py` — RRC and NAS, with the tshark field that fired and the frame number in `pcap_joined/` |
-| `security_sessions-<rf>.csv` | one row per RAR-anchored session: the funnel and the denominator. Seeded from `rar_log`, so a UE with no evidence still has a row |
+| `security_sessions-<rf>.csv` | one row per session (RAR- or CRC-anchored): the funnel and the denominator. Seeded from `rar_log`, so a UE with no evidence still has a row. `n_srb_pdus` / `n_drb_pdus` count decoded PDUs on signalling / data radio bearers |
 | `security_summary.json` | provenance (tshark version, fields queried), the validity checks, per-cell counts and both rates |
 | ~~`security_reuse-<rf>.csv`~~ | *retired* — reuse is now an `outcome` value in `security_sessions`. Was: one row per UE seen resuming an AS context it already held — `RRCConnectionReestablishment` or `RRCConnectionResume-r13`. These never send a SecurityModeCommand, so they do not belong in the denominator |
 | ~~`security_log-<rf>.csv`~~ | *retired*, replaced by `security_sessions-<rf>.csv`. The zero-boundary rule carries over: `security_scan.py` writes its three files with headers before anything that can fail, so a header-only file means "scanned, found nothing" — the result of interest here — and an absent file means the run was never scanned |

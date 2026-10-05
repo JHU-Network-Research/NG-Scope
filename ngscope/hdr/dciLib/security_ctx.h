@@ -58,6 +58,9 @@ int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out)
  * other MCS->TBS table, i.e. the configured enable_256qam is wrong for that grant. */
 void ngscope_sec_count_tb_table(int rf_idx, bool retried);
 
+/* That block was the second transport block of a two-codeword grant. */
+void ngscope_sec_count_tb_second(int rf_idx);
+
 /* A retry was actually attempted. Counted separately so the report can tell "tested, and the
  * configured table fits" from "never tested" -- with qam_retry off the two are otherwise
  * indistinguishable, and claiming the former would be a fabricated result. */

@@ -255,8 +255,8 @@ three buckets, never collapsed into real-versus-spurious:
 | `crc_fail` | DCI found, transport block did not decode — **inconclusive** |
 | `crc_pass` | decoded: the DCI is real |
 
-`crc_fail` proves nothing on its own. srsRAN cannot predecode spatial multiplexing on a
-4-port cell, the MCS→TBS table is per-UE state a sniffer cannot see (which is why the probe
+`crc_fail` proves nothing on its own. 4-port spatial multiplexing above rank 2 cannot be
+predecoded with two antennas, the MCS→TBS table is per-UE state a sniffer cannot see (which is why the probe
 honours `qam_retry`), the signal may be weak, and an `rv > 0` retransmission needs HARQ
 combining across TTIs that this does not do.
 

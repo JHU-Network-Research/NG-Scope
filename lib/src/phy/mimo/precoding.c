@@ -64,6 +64,196 @@ static srsran_mimo_decoder_t mimo_decoder = SRSRAN_MIMO_DECODER_MMSE;
 
 /************************************************
  *
+ * FOUR ANTENNA PORT CODEBOOK (closed-loop spatial multiplexing and large-delay CDD)
+ *
+ * 36.211 Table 6.3.4.2.3-2 defines every 4-port precoder from a generating vector u_n:
+ *
+ *     W_n = I - 2 u_n u_n^H / (u_n^H u_n)
+ *
+ * and a rank-v precoder is a column subset of W_n scaled by 1/sqrt(v). Generating W_n from
+ * u_n, rather than typing the 16 matrices out, is deliberate: the hand-typed rank-2 table this
+ * replaced had wrong signs on most entries, which on a 4-port cell held Format2 CRC passes to
+ * 13% while transmit diversity on the same capture decoded at 86%.
+ *
+ * All four functions below build the effective channel He = H * P (rx x layer) for the
+ * precoder P actually used on each RE, then equalize against He. That keeps the kernel
+ * independent of the codebook entry, at the price of being scalar. At 100 PRB that is ~12k
+ * REs per grant, small next to the turbo decoder that follows.
+ *
+ **************************************************/
+
+#define CB4_S2 ((float)M_SQRT1_2)
+static const cf_t cb4_u[16][4] = {
+    {1, -1, -1, -1},
+    {1, -_Complex_I, 1, _Complex_I},
+    {1, 1, -1, 1},
+    {1, _Complex_I, 1, -_Complex_I},
+    {1, (-1 - _Complex_I) * CB4_S2, -_Complex_I, (1 - _Complex_I) * CB4_S2},
+    {1, (1 - _Complex_I) * CB4_S2, _Complex_I, (-1 - _Complex_I) * CB4_S2},
+    {1, (1 + _Complex_I) * CB4_S2, -_Complex_I, (-1 + _Complex_I) * CB4_S2},
+    {1, (-1 + _Complex_I) * CB4_S2, _Complex_I, (1 + _Complex_I) * CB4_S2},
+    {1, -1, 1, 1},
+    {1, -_Complex_I, -1, -_Complex_I},
+    {1, 1, 1, -1},
+    {1, _Complex_I, -1, _Complex_I},
+    {1, -1, -1, 1},
+    {1, -1, 1, -1},
+    {1, 1, -1, -1},
+    {1, 1, 1, 1},
+};
+
+/* Column sets for rank 2, zero-based ({1,4} in the spec is {0,3} here). Rank 1 is always the
+ * first column. */
+static const uint8_t cb4_rank2_cols[16][2] = {{0, 3}, {0, 1}, {0, 1}, {0, 1}, {0, 3}, {0, 3}, {0, 2}, {0, 2},
+                                              {0, 1}, {0, 3}, {0, 2}, {0, 2}, {0, 1}, {0, 2}, {0, 2}, {0, 1}};
+
+/* P[port][layer] for codebook index n and rank v (1 or 2), normalization included. */
+static void cb4_precoder(int n, int v, cf_t P[4][2])
+{
+  const cf_t* u = cb4_u[n];
+  for (int l = 0; l < v; l++) {
+    int c = (v == 1) ? 0 : cb4_rank2_cols[n][l];
+    for (int p = 0; p < 4; p++) {
+      /* u^H u == 4 for every entry of the table, since all elements have unit modulus. */
+      cf_t w  = ((p == c) ? 1.0f : 0.0f) - u[p] * conjf(u[c]) * 0.5f;
+      P[p][l] = (v == 1) ? w : w * CB4_S2;
+    }
+  }
+}
+
+/* He[rx][layer] = sum_p h[p][rx][i] * P[p][layer] */
+static inline void cb4_effective(cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                 int   i,
+                                 int   nof_rxant,
+                                 int   v,
+                                 cf_t  P[4][2],
+                                 cf_t  He[2][2])
+{
+  for (int r = 0; r < nof_rxant; r++) {
+    for (int l = 0; l < v; l++) {
+      He[r][l] = h[0][r][i] * P[0][l] + h[1][r][i] * P[1][l] + h[2][r][i] * P[2][l] + h[3][r][i] * P[3][l];
+    }
+  }
+}
+
+/* Rank-2 equalization of one RE: MMSE, or ZF when the decoder is set to it. */
+static inline void cb4_equalize_2l(cf_t*  y[SRSRAN_MAX_PORTS],
+                                   int    i,
+                                   cf_t   He[2][2],
+                                   cf_t*  x[SRSRAN_MAX_LAYERS],
+                                   float* csi[SRSRAN_MAX_CODEWORDS],
+                                   float  noise_estimate,
+                                   float  norm)
+{
+  float c0, c1;
+  float n0 = (mimo_decoder == SRSRAN_MIMO_DECODER_ZF) ? 0.0f : noise_estimate;
+  srsran_mat_2x2_mmse_csi_gen(
+      y[0][i], y[1][i], He[0][0], He[0][1], He[1][0], He[1][1], &x[0][i], &x[1][i], &c0, &c1, n0, norm);
+  if (csi && csi[0]) {
+    csi[0][i] = c0;
+  }
+  if (csi && csi[1]) {
+    csi[1][i] = c1;
+  }
+}
+
+/* Closed-loop spatial multiplexing on antenna ports {0,1,2,3}, rank 1 or 2. Rank 2 needs two
+ * receive antennas; rank 3 and 4 cannot be separated by two and are refused upstream. */
+static int srsran_predecoding_multiplex_4port(cf_t*  y[SRSRAN_MAX_PORTS],
+                                              cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                              cf_t*  x[SRSRAN_MAX_LAYERS],
+                                              float* csi[SRSRAN_MAX_CODEWORDS],
+                                              int    nof_rxant,
+                                              int    nof_layers,
+                                              int    codebook_idx,
+                                              int    nof_symbols,
+                                              float  scaling,
+                                              float  noise_estimate)
+{
+  if (codebook_idx < 0 || codebook_idx > 15) {
+    ERROR("4-port spatial multiplexing: invalid codebook index %d", codebook_idx);
+    return SRSRAN_ERROR;
+  }
+  if (nof_layers < 1 || nof_layers > 2 || nof_layers > nof_rxant || nof_rxant > 2) {
+    ERROR("4-port spatial multiplexing: %d layers cannot be separated with %d rx antennas", nof_layers, nof_rxant);
+    return SRSRAN_ERROR;
+  }
+
+  cf_t P[4][2];
+  cb4_precoder(codebook_idx, nof_layers, P);
+  const float norm = 1.0f / scaling;
+
+  for (int i = 0; i < nof_symbols; i++) {
+    cf_t He[2][2];
+    cb4_effective(h, i, nof_rxant, nof_layers, P, He);
+    if (nof_layers == 1) {
+      /* Maximum ratio combining over the receive antennas, as srsran_predecoding_single_csi. */
+      cf_t  r  = 0;
+      float hh = 0;
+      for (int a = 0; a < nof_rxant; a++) {
+        r += y[a][i] * conjf(He[a][0]);
+        hh += crealf(He[a][0]) * crealf(He[a][0]) + cimagf(He[a][0]) * cimagf(He[a][0]);
+      }
+      float c = hh + noise_estimate;
+      x[0][i] = r * norm / c;
+      if (csi && csi[0]) {
+        csi[0][i] = c;
+      }
+    } else {
+      cb4_equalize_2l(y, i, He, x, csi, noise_estimate, norm);
+    }
+  }
+  return nof_symbols;
+}
+
+/* Large-delay CDD on antenna ports {0,1,2,3}, two layers (36.211 6.3.4.3):
+ *
+ *     y(i) = W(i) D(i) U x(i),   W(i) = C_k, k = (floor(i/2) mod 4) + 1
+ *
+ * where C_1..C_4 are the rank-2 precoders with codebook indices 12..15, U = [1 1; 1 -1]/sqrt2
+ * and D(i) = diag(1, (-1)^i). i is the layer symbol index across the allocation, which is
+ * the RE order the symbols arrive in -- the same convention the 2-port kernel relies on. */
+static int srsran_predecoding_ccd_4port(cf_t*  y[SRSRAN_MAX_PORTS],
+                                        cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
+                                        cf_t*  x[SRSRAN_MAX_LAYERS],
+                                        float* csi[SRSRAN_MAX_CODEWORDS],
+                                        int    nof_rxant,
+                                        int    nof_layers,
+                                        int    nof_symbols,
+                                        float  scaling,
+                                        float  noise_estimate)
+{
+  if (nof_layers != 2 || nof_rxant != 2) {
+    ERROR("4-port CDD: %d layers with %d rx antennas not supported", nof_layers, nof_rxant);
+    return SRSRAN_ERROR;
+  }
+
+  /* The precoder cycles with period 8 symbols: four codebook entries times two D(i). */
+  cf_t Pc[8][4][2];
+  for (int k = 0; k < 4; k++) {
+    cf_t W[4][2];
+    cb4_precoder(12 + k, 2, W);
+    for (int odd = 0; odd < 2; odd++) {
+      float s = odd ? -1.0f : 1.0f;
+      for (int p = 0; p < 4; p++) {
+        /* W * D U, with D U = [1 1; s -s] / sqrt2 */
+        Pc[2 * k + odd][p][0] = (W[p][0] + s * W[p][1]) * CB4_S2;
+        Pc[2 * k + odd][p][1] = (W[p][0] - s * W[p][1]) * CB4_S2;
+      }
+    }
+  }
+
+  const float norm = 1.0f / scaling;
+  for (int i = 0; i < nof_symbols; i++) {
+    cf_t He[2][2];
+    cb4_effective(h, i, nof_rxant, 2, Pc[i % 8], He);
+    cb4_equalize_2l(y, i, He, x, csi, noise_estimate, norm);
+  }
+  return nof_symbols;
+}
+
+/************************************************
+ *
  * RECEIVER SIDE FUNCTIONS
  *
  **************************************************/
@@ -1033,7 +1223,7 @@ static int srsran_predecoding_ccd_zf(cf_t*  y[SRSRAN_MAX_PORTS],
       return -1;
     }
   } else if (nof_ports == 4) {
-    ERROR("Error predecoding CCD: Only 2 ports supported");
+    return srsran_predecoding_ccd_4port(y, h, x, csi, nof_rxant, nof_layers, nof_symbols, scaling, 0.0f);
   } else {
     ERROR("Error predecoding CCD: Invalid combination of ports %d and rx antennax %d", nof_ports, nof_rxant);
   }
@@ -1575,15 +1765,8 @@ int srsran_predecoding_ccd_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
       ERROR("Error predecoding CCD: Invalid number of layers %d", nof_layers);
       return -1;
     }
-  } else if (nof_ports == 4 && nof_rxant == 2) {
-      if (csi && csi[0] && csi[1])
-        return srsran_predecoding_ccd_4x2_mmse_csi(y, h, x, csi, nof_symbols, scaling, noise_estimate);
-      else {
-          if (csi[0] && !csi[1]){
-              ERROR("MISSING CSI[1]");
-          }
-        return srsran_predecoding_ccd_4x2_mmse(y, h, x, nof_symbols, scaling, noise_estimate);
-      }
+  } else if (nof_ports == 4) {
+    return srsran_predecoding_ccd_4port(y, h, x, csi, nof_rxant, nof_layers, nof_symbols, scaling, noise_estimate);
   } else {
     ERROR("Error predecoding CCD: Invalid combination of ports %d and rx antennax %d", nof_ports, nof_rxant);
   }
@@ -4457,55 +4640,8 @@ static int srsran_predecoding_multiplex(cf_t*  y[SRSRAN_MAX_PORTS],
       }
     }
   } else if (nof_ports == 4) {
-    // return SRSRAN_ERROR;
-    if (nof_layers == 1){
-        switch(mimo_decoder){
-            case SRSRAN_MIMO_DECODER_ZF:
-                // return SRSRAN_ERROR;
-                if (csi && csi[0]){
-                    return srsran_predecoding_multiplex_4x1_zf_csi(y, h, x, csi[0], codebook_idx, nof_symbols, scaling);
-                } else {
-                    return srsran_predecoding_multiplex_4x1_zf(y, h, x, codebook_idx, nof_symbols, scaling);
-                }
-                break;
-            case SRSRAN_MIMO_DECODER_MMSE:
-                // return SRSRAN_ERROR;
-                if (csi && csi[0]) {
-                  return srsran_predecoding_multiplex_4x1_mmse_csi(
-                      y, h, x, csi[0], codebook_idx, nof_symbols, scaling, noise_estimate);
-                } else {
-                  return srsran_predecoding_multiplex_4x1_mmse(y, h, x, codebook_idx, nof_symbols, scaling, noise_estimate);
-                }
-                break;
-        }
-    }
-    // return SRSRAN_ERROR;
-    if (nof_layers == 2){
-        switch(mimo_decoder){
-            case SRSRAN_MIMO_DECODER_ZF:
-                if (csi && csi[0]){
-                    return srsran_predecoding_multiplex_4x2_zf_csi(y, h, x, csi, codebook_idx, nof_symbols, scaling);
-                } else {
-                    return srsran_predecoding_multiplex_4x2_zf(y, h, x, codebook_idx, nof_symbols, scaling);
-                }
-                break;
-            case SRSRAN_MIMO_DECODER_MMSE:
-                // return SRSRAN_ERROR;
-                if (csi && csi[0] && csi[1]) {
-                  return srsran_predecoding_multiplex_4x2_mmse_csi(
-                      y, h, x, csi, codebook_idx, nof_symbols, scaling, noise_estimate);
-                } else {
-                    if (csi[0] && !csi[1]){
-                        ERROR("MISSING CSI[1]");
-                    }
-                  return srsran_predecoding_multiplex_4x2_mmse(y, h, x, codebook_idx, nof_symbols, scaling, noise_estimate);
-                }
-                break;
-        }
-    }
-
-    ERROR("Error predecoding multiplex: not implemented for %d Tx ports and %d layers", nof_ports, nof_layers);
-    fprintf(stderr,"Error predecoding multiplex: not implemented for %d Tx ports and %d layers\n", nof_ports, nof_layers);
+    return srsran_predecoding_multiplex_4port(
+        y, h, x, csi, nof_rxant, nof_layers, codebook_idx, nof_symbols, scaling, noise_estimate);
   } else {
     ERROR("Error predecoding multiplex: Invalid combination of ports %d and rx antennas %d", nof_ports, nof_rxant);
     fprintf(stderr,"Error predecoding multiplex: Invalid combination of ports %d and rx antennas %d\n", nof_ports, nof_rxant);

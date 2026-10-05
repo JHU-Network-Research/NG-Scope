@@ -109,9 +109,9 @@ static srsran_tm_t tm_for_format(srsran_dci_format_t f, uint32_t nof_ports)
   }
 }
 
-/* Build the grant for one DCI on a given MCS->TBS table and decode its transport block.
+/* Build the grant for one DCI on a given MCS->TBS table and decode its transport blocks.
  *
- * Returns 1 if the block passed CRC, 0 if it was attempted and failed, and -1 if the grant
+ * Returns 1 if any enabled block passed CRC, 0 if it was attempted and none did, and -1 if the grant
  * could not be built or enabled no codeword. That third case is deliberately distinct: it is
  * not an attempt, and counting it as one would understate the decode rate.
  *
@@ -169,7 +169,14 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
   if (srsran_ue_dl_decode_pdsch(ue_dl, sf, pdsch_cfg, pdsch_res) != SRSRAN_SUCCESS) {
     return -2;
   }
-  return (pdsch_res[0].crc && pdsch_cfg->grant.tb[0].tbs > 0) ? 1 : 0;
+  /* Any codeword, not just the first: a two-codeword grant whose TB0 the channel beat can
+   * still carry a good TB1, and judging the grant by TB0 alone threw that block away. */
+  for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
+    if (pdsch_cfg->grant.tb[tb].enabled && pdsch_res[tb].crc && pdsch_cfg->grant.tb[tb].tbs > 0) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /* Can srsRAN predecode this scheme on this cell, with this many receive antennas?
@@ -179,8 +186,10 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
  * which is why a 4-port cell is not the ceiling it has been described as: every pre-security
  * downlink message is carried by it.
  *
- * Spatial multiplexing and CDD are the real gaps, and both are 2-Tx-port only
- * (precoding.c:1853, :1219).
+ * Spatial multiplexing and CDD are implemented for 2 and 4 ports. On 4 ports that covers
+ * rank 1 and rank 2 (srsran_predecoding_multiplex_4port / _ccd_4port); rank 3/4 grants and
+ * a codeword spread over two layers are refused when the grant is built (ra_dl.c,
+ * config_mimo_pmi), so they never reach this test.
  *
  * Spatial multiplexing works at one receive antenna as well as two, which is worth stating
  * because the kernel looks as though it should not: srsran_predecoding_multiplex_2x1_mrc()
@@ -208,11 +217,12 @@ static bool scheme_supported(srsran_tx_scheme_t s, uint32_t nof_ports, uint32_t 
  *
  * srsran_ue_dl_find_dl_dci() derives this from cfg->cfg.tm, which dci_decoder.c pins to TM4
  * for the cell's port count -- giving {1A, 2}. That is the format pair a UE *in TM4*
- * monitors, and it is the wrong question for a sniffer. A UE is in TM1/TM2 until an
- * RRCConnectionReconfiguration moves it, and that reconfiguration only follows a completed
- * SecurityModeCommand. So every message this tool exists to see -- Msg4, RRCConnectionSetup,
- * the SecurityModeCommand itself, the NAS above them -- is scheduled with Format1 or
- * Format1A, and Format1 was never searched on any multi-port cell.
+ * monitors, and it is the wrong question for a sniffer. A UE's transmission mode comes from
+ * physicalConfigDedicated, which RRCConnectionSetup can already carry -- so the
+ * SecurityModeCommand may arrive in any mode the cell uses. Measured on a 4-port T-Mobile
+ * cell (PCI 272): 57 of 76 SMCs were Format2, 14 of them closed-loop spatial multiplexing.
+ * Msg4 itself is scheduled before any dedicated config, with Format1 or Format1A, and Format1
+ * was never searched on any multi-port cell.
  *
  * Format2A is included for the same reason in the other direction: TM3 is a real
  * configuration, and a single-codeword 2A grant is transmit diversity, which decodes on a
@@ -331,9 +341,9 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
       srsran_tm_t tm = tm_for_format(dci_dl[d].format, ue_dl->cell.nof_ports);
       ngscope_sec_count_dci(rf_idx, (int)dci_dl[d].format, tm);
 
-      /* Deliberately NOT skipping spatial-multiplexing grants. srsRAN has no multiplex
-       * predecoder for 4 Tx ports, so on such a cell these attempts emit a pair of errors
-       * whenever they fail -- ~3000 over a 150 s replay. But measurement showed the failing
+      /* Deliberately NOT skipping spatial-multiplexing grants. Before the 4-port predecoder
+       * existed these attempts emitted a pair of errors whenever they failed -- ~3000 over a
+       * 150 s replay. But measurement showed the failing
        * and succeeding attempts are the same population: filtering them out took the
        * SecurityModeCommand detections on the mt_airy02 capture from 159 down to 2. The log
        * noise is the cheaper problem, and this whole path is opt-in. */
@@ -400,43 +410,49 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
 
       bool pdsch_ok = false;
 
-      if (r == 1) {
-        const int tbs = pdsch_cfg->grant.tb[0].tbs;
-        {
-          pdsch_ok = true;
-          ngscope_sec_count_tb_table(rf_idx, used_alt != cfg_alt);
-
-          /* This is the interesting traffic -- Msg4, the SecurityModeCommand and the NAS
-           * that rides above them all live here, and the search was targeted, so the PDCCH
-           * CRC was checked against a known RNTI and the identity is trustworthy.
-           *
-           * Writing it is now the whole job: nothing here parses the payload or claims
-           * anything about it. tools/security_scan.py dissects the resulting pcapng with
-           * Wireshark, which reassembles RLC and understands NAS -- neither of which this
-           * file ever managed. A no-op unless pcap_mac is set, which
-           * ngscope_config_finalize() forces on when mark_security_phase is. */
-          ngscope_mac_tb_t cap;
-          memset(&cap, 0, sizeof(cap));
-          cap.rf_idx    = rf_idx;
-          cap.tti       = tti;
-          cap.ts_us     = dci_per_sub->timestamp;
-          cap.collection_time = dci_per_sub->collection_time;
-          cap.rnti      = rnti;
-          cap.src       = NGSCOPE_MAC_SRC_TARGETED;
-          cap.rv        = pdsch_cfg->grant.tb[0].rv;
-          cap.mcs       = pdsch_cfg->grant.tb[0].mcs_idx;
-          cap.tbs       = tbs;
-          cap.prb       = pdsch_cfg->grant.nof_prb;
-          cap.harq_pid  = dci_dl[d].pid;
-          cap.format    = dci_dl[d].format;
-          cap.tx_scheme = pdsch_cfg->grant.tx_scheme;
-          cap.rach_ok   = true; /* tracked RNTIs are RAR-anchored by construction */
-          cap.evm       = pdsch_res[0].evm;
-          cap.payload   = pdsch_res[0].payload;
-          cap.len       = (uint32_t)tbs / 8;
-          ngscope_mac_pcap_write(&cap);
-          nof_written++;
+      /* Every codeword that passed, each as its own MAC PDU -- the two transport blocks of a
+       * spatial-multiplexing grant carry separate MAC PDUs, each with its own CRC. */
+      for (int tb = 0; r == 1 && tb < SRSRAN_MAX_CODEWORDS; tb++) {
+        const int tbs = pdsch_cfg->grant.tb[tb].tbs;
+        if (!pdsch_cfg->grant.tb[tb].enabled || !pdsch_res[tb].crc || tbs <= 0) {
+          continue;
         }
+        pdsch_ok = true;
+        ngscope_sec_count_tb_table(rf_idx, used_alt != cfg_alt);
+        if (tb > 0) {
+          ngscope_sec_count_tb_second(rf_idx);
+        }
+
+        /* This is the interesting traffic -- Msg4, the SecurityModeCommand and the NAS
+         * that rides above them all live here, and the search was targeted, so the PDCCH
+         * CRC was checked against a known RNTI and the identity is trustworthy.
+         *
+         * Writing it is now the whole job: nothing here parses the payload or claims
+         * anything about it. tools/security_scan.py dissects the resulting pcapng with
+         * Wireshark, which reassembles RLC and understands NAS -- neither of which this
+         * file ever managed. A no-op unless pcap_mac is set, which
+         * ngscope_config_finalize() forces on when mark_security_phase is. */
+        ngscope_mac_tb_t cap;
+        memset(&cap, 0, sizeof(cap));
+        cap.rf_idx    = rf_idx;
+        cap.tti       = tti;
+        cap.ts_us     = dci_per_sub->timestamp;
+        cap.collection_time = dci_per_sub->collection_time;
+        cap.rnti      = rnti;
+        cap.src       = NGSCOPE_MAC_SRC_TARGETED;
+        cap.rv        = pdsch_cfg->grant.tb[tb].rv;
+        cap.mcs       = pdsch_cfg->grant.tb[tb].mcs_idx;
+        cap.tbs       = tbs;
+        cap.prb       = pdsch_cfg->grant.nof_prb;
+        cap.harq_pid  = dci_dl[d].pid;
+        cap.format    = dci_dl[d].format;
+        cap.tx_scheme = pdsch_cfg->grant.tx_scheme;
+        cap.rach_ok   = true; /* tracked RNTIs are RAR-anchored by construction */
+        cap.evm       = pdsch_res[tb].evm;
+        cap.payload   = pdsch_res[tb].payload;
+        cap.len       = (uint32_t)tbs / 8;
+        ngscope_mac_pcap_write(&cap);
+        nof_written++;
       }
 
       ngscope_sec_count_attempt(rf_idx, pdsch_ok);
@@ -637,10 +653,22 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       }
       cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
 
-      tbs     = (uint32_t)(pdsch_cfg->grant.tb[0].tbs > 0 ? pdsch_cfg->grant.tb[0].tbs : 0);
-      mcs     = pdsch_cfg->grant.tb[0].mcs_idx;
+      /* Report the codeword that passed. decode_grant_with_table() succeeds on any codeword,
+       * and a two-codeword grant can pass on TB1 alone: reading TB0 then walked (and wrote to
+       * the pcap) a payload that had failed its CRC, or -- with TB0's size 0 -- silently wrote
+       * nothing, so the promoted UE never reached the scan. */
+      int tb_sel = 0;
+      for (int tb = 0; r == 1 && tb < SRSRAN_MAX_CODEWORDS; tb++) {
+        if (pdsch_cfg->grant.tb[tb].enabled && pdsch_res[tb].crc && pdsch_cfg->grant.tb[tb].tbs > 0) {
+          tb_sel = tb;
+          break;
+        }
+      }
+
+      tbs     = (uint32_t)(pdsch_cfg->grant.tb[tb_sel].tbs > 0 ? pdsch_cfg->grant.tb[tb_sel].tbs : 0);
+      mcs     = pdsch_cfg->grant.tb[tb_sel].mcs_idx;
       prb     = pdsch_cfg->grant.nof_prb;
-      rv      = pdsch_cfg->grant.tb[0].rv;
+      rv      = pdsch_cfg->grant.tb[tb_sel].rv;
       fmt     = (int)dci_dl[0].format;
       outcome = (r == 1) ? "crc_pass" : "crc_fail";
       nof_tb  = pdsch_cfg->grant.nof_tb;
@@ -649,7 +677,7 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       if (r == 1) {
         q->bytes[ok] += tbs / 8;
         bool drb = false, srb = false, ccch = false;
-        probe_walk_lcids(pdsch_res[0].payload, tbs / 8, lcids, sizeof(lcids), &drb, &srb,
+        probe_walk_lcids(pdsch_res[tb_sel].payload, tbs / 8, lcids, sizeof(lcids), &drb, &srb,
                          &ccch);
         ch = drb ? "drb" : (srb ? "srb" : (ccch ? "ccch" : "other"));
         if (drb) {
@@ -684,16 +712,16 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
           cap.collection_time = collection_time;
           cap.rnti            = rnti;
           cap.src             = NGSCOPE_MAC_SRC_PROBE;
-          cap.rv              = pdsch_cfg->grant.tb[0].rv;
-          cap.mcs             = pdsch_cfg->grant.tb[0].mcs_idx;
+          cap.rv              = pdsch_cfg->grant.tb[tb_sel].rv;
+          cap.mcs             = pdsch_cfg->grant.tb[tb_sel].mcs_idx;
           cap.tbs             = (int)tbs;
           cap.prb             = pdsch_cfg->grant.nof_prb;
           cap.harq_pid        = dci_dl[0].pid;
           cap.format          = dci_dl[0].format;
           cap.tx_scheme       = pdsch_cfg->grant.tx_scheme;
           cap.rach_ok         = false; /* no RAR here -- that is the finding, not a defect */
-          cap.evm             = pdsch_res[0].evm;
-          cap.payload         = pdsch_res[0].payload;
+          cap.evm             = pdsch_res[tb_sel].evm;
+          cap.payload         = pdsch_res[tb_sel].payload;
           cap.len             = tbs / 8;
           ngscope_mac_pcap_write(&cap);
         }

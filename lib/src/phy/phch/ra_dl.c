@@ -512,7 +512,13 @@ config_mimo_type(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_
       }
       break;
     case SRSRAN_TM3:
-      if (nof_tb == 1) {
+      /* On 4 ports Format2A carries 2 bits of precoding information (36.212 Table
+       * 5.3.3.1.5A-2): one codeword, 0 = TxD and 1 = two-layer CDD; two codewords, 0/1/2 =
+       * 2/3/4 layers. Only one layer per codeword is built -- see config_mimo_pmi(). On 2
+       * ports the field is absent and pinfo is 0. */
+      if (cell->nof_ports == 4 && dci->pinfo != 0) {
+        valid_config = false;
+      } else if (nof_tb == 1) {
         grant->tx_scheme = SRSRAN_TXSCHEME_DIVERSITY;
       } else if (nof_tb == 2) {
         grant->tx_scheme = SRSRAN_TXSCHEME_CDD;
@@ -604,15 +610,26 @@ static int config_mimo_pmi(const srsran_cell_t* cell, const srsran_dci_dl_t* dci
       }
 
     } else if (cell->nof_ports == 4) {
-      // 4-antenna ports: 6-bit pinfo field
-      // Extract lower 4 bits for TPMI/codebook index (0-15)
-      grant->pmi = dci->pinfo & 0x0F;
-
-      // Note: Bit 4 is TB-CW swap, Bit 5 is precoding confirmation
-      // These are ignored here but may need handling in PDSCH decoder
-      if (dci->pinfo > 15) {
-        DEBUG("4-port pinfo=%d: pmi=%d, flags=%d",
-              dci->pinfo, grant->pmi, dci->pinfo >> 4);
+      /* 36.212 Table 5.3.3.1.5-5, 6-bit field. Codeword count and pinfo together give the
+       * rank and TPMI:
+       *
+       *   one codeword:  0 TxD | 1-16 rank 1, TPMI 0-15 | 17 rank 1, last PUSCH PMI
+       *                  18-33 rank 2, TPMI 0-15 | 34 rank 2, last PUSCH PMI | 35-63 reserved
+       *   two codewords: 0-15 rank 2, TPMI 0-15 | 16 rank 2, last PUSCH PMI
+       *                  17-32 rank 3 | 33 | 34-49 rank 4 | 50 | 51-63 reserved
+       *
+       * Only one layer per codeword is built. Rank 2 on one codeword needs the two-layer TBS
+       * translation (36.213 7.1.7.2.2), rank 3/4 cannot be separated by two receive antennas,
+       * and "last PUSCH PMI" is UE state a sniffer does not have. Refusing those here keeps
+       * them visible as found-but-not-built rather than as CRC failures. pinfo was taken as
+       * the TPMI directly before, which put every rank-1 grant one codebook entry off. */
+      if (nof_tb == 1 && dci->pinfo >= 1 && dci->pinfo <= 16) {
+        grant->pmi = dci->pinfo - 1;
+      } else if (nof_tb == 2 && dci->pinfo <= 15) {
+        grant->pmi = dci->pinfo;
+      } else {
+        INFO("4-port spatial multiplexing with nof_tb=%d pinfo=%d not supported", nof_tb, dci->pinfo);
+        return -1;
       }
 
     } else {
