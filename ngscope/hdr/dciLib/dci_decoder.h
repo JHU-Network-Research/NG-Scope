@@ -32,6 +32,10 @@ typedef struct{
     prog_args_t        prog_args;
     int                decoder_idx;
     ASNDecoder * decoder;
+    /* The subframe being decoded, in dispatch order, and whether its anchor phase has been
+     * marked done (ngscope_sec_anchor_done). See dci_decoder_decode(). */
+    uint64_t           cur_seq;
+    bool               cur_anchor_marked;
 }ngscope_dci_decoder_t;
 
 typedef struct{

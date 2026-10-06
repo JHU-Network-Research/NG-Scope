@@ -31,6 +31,15 @@ typedef struct{
     cf_t*           IQ_buffer[SRSRAN_MAX_PORTS]; //IQ buffer that stores the IQ sample
     pthread_mutex_t         sf_mutex;
     pthread_cond_t          sf_cond;
+    /* Set by the scheduler when it hands this decoder a subframe, cleared by the decoder when
+     * it takes it. Without it any wakeup -- the shutdown signal, or a spurious one -- decoded
+     * whatever was still in the buffer: every run ended with each decoder thread writing its
+     * last subframe to the pcap a second time. Last member, so the positional initializer
+     * in task_scheduler.c leaves it false. */
+    bool                    pending;
+    /* Dispatch order, stamped by the scheduler on every subframe it hands out (empty ones
+     * included). The anchor barrier (security_ctx.h) orders subframes by it. */
+    uint64_t                seq;
 }ngscope_sf_buffer_t;
 
 typedef struct{

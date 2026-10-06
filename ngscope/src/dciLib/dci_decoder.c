@@ -102,10 +102,25 @@ int decoder_idx
         exit(-1);
     }
 
+    /* The SIB, RAR and blind-search steps each run FFT + channel estimation on the same
+     * subframe; reuse the first result (srsran_ue_dl_decode_fft_estimate). Exact, in every
+     * mode -- see ue_dl.c. dci_decoder_decode() marks each new subframe. */
+    srsran_ue_dl_set_fft_reuse(&dci_decoder->ue_dl, true);
+
     /* Both counts, together, decide which transmission schemes are decodable at all, so the
      * security report can state that rather than leave it to be inferred from the cell type
      * file. Idempotent across decoder threads: they all share one cell. */
     ngscope_sec_set_cell(prog_args.rf_index, cell->nof_ports, prog_args.rf_nof_rx_ant);
+
+    /* tracked_search = cache / solve_first: memoize PDCCH candidate decodes for this thread's
+     * subframes. Replay only, matching task_scheduler.c. Lossless -- every decode returns the
+     * same bytes -- and it also serves the SI/RA-RNTI and blind-probe searches on this ue_dl. */
+    if (prog_args.mode == REPLAY && prog_args.tracked_search != NGSCOPE_TRACKED_SEARCH_PER_RNTI) {
+        if (srsran_pdcch_set_decode_cache(&dci_decoder->ue_dl.pdcch, true) != SRSRAN_SUCCESS) {
+            ERROR("Allocating the PDCCH decode cache");
+            exit(-1);
+        }
+    }
 
     ZERO_OBJECT(dci_decoder->ue_dl_cfg);
     ZERO_OBJECT(dci_decoder->dl_sf);
@@ -296,6 +311,9 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
     uint32_t tti = sfn * 10 + sf_idx;
 
     bool decode_pdsch = false;
+
+    /* New IQ in this thread's buffer: no estimate from the previous subframe may be reused. */
+    srsran_ue_dl_new_subframe(&dci_decoder->ue_dl);
 
 	bool decode_SIB 		= dci_decoder->prog_args.decode_SIB;
 	bool decode_RAR 		= dci_decoder->prog_args.decode_RAR;
@@ -589,6 +607,31 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 		}
 
+		/* Blind-DCI probe. Runs BEFORE the RACH filter below, deliberately: the population
+		 * being measured is what the blind search reported, and the filter is the thing
+		 * whose necessity this is testing. Confirming DCIs after filtering them would only
+		 * ever confirm the filter's own output.
+		 *
+		 * And before the tracked scan: a UE it confirms is anchored in time for this
+		 * subframe's scan, which then decodes and writes the block like any other. */
+		if (dci_decoder->prog_args.probe_blind_dci) {
+			ngscope_sec_probe_blind(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
+									dci_per_sub, rf_idx, tti, dci_per_sub->timestamp,
+									dci_per_sub->collection_time);
+		}
+
+		/* Everything that creates an anchor -- the RAR above, the probe's CRC confirmation --
+		 * is done for this subframe. In replay, wait for every earlier subframe to reach the
+		 * same point before scanning, so the tracked set this scan sees is the same however
+		 * the decoder threads happened to be scheduled. The anchor steps never wait, so this
+		 * cannot deadlock, and they come early in a subframe, so the wait is short. */
+		ngscope_sec_anchor_done(rf_idx, dci_decoder->cur_seq);
+		dci_decoder->cur_anchor_marked = true;
+		if (dci_decoder->prog_args.mode == REPLAY && dci_decoder->prog_args.mark_security_phase) {
+			ngscope_sec_anchor_wait(rf_idx, dci_decoder->cur_seq);
+		}
+
 		// Look for the SecurityModeCommand in the still-unciphered RRC of UEs that are
 		// mid-setup, which is what puts a real boundary under the pre/post labelling. Runs
 		// before the filter below so it is unaffected by what that drops.
@@ -609,17 +652,6 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 		// security state any more, so every record leaves as NGSCOPE_SEC_UNKNOWN (0) and
 		// tools/security_phase_join.py fills it in from the offline scan. The field stays
 		// in ngscope_dci_msg_t because it is part of the remote-sink wire struct.
-
-		/* Blind-DCI probe. Runs BEFORE the RACH filter below, deliberately: the population
-		 * being measured is what the blind search reported, and the filter is the thing
-		 * whose necessity this is testing. Confirming DCIs after filtering them would only
-		 * ever confirm the filter's own output. */
-		if (dci_decoder->prog_args.probe_blind_dci) {
-			ngscope_sec_probe_blind(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
-									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
-									dci_per_sub, rf_idx, tti, dci_per_sub->timestamp,
-									dci_per_sub->collection_time);
-		}
 
 		// Restrict the reported DCIs to RNTIs that were seen completing RACH. Applied after
 		// the debug CSV is written, so that file stays a complete record of what the decoder
@@ -888,8 +920,20 @@ void* dci_decoder_thread(void* p){
 //--->  Wait the signal
         //printf("%d-th decoder is waiting for conditional signal!\n", dci_decoder->decoder_idx);
 		//t1 = timestamp_us();
-        pthread_cond_wait(&sf_buffer[rf_idx][decoder_idx].sf_cond,
-                          &sf_buffer[rf_idx][decoder_idx].sf_mutex);
+        while (!sf_buffer[rf_idx][decoder_idx].pending && !go_exit && task_scheduler_up[rf_idx]) {
+            pthread_cond_wait(&sf_buffer[rf_idx][decoder_idx].sf_cond,
+                              &sf_buffer[rf_idx][decoder_idx].sf_mutex);
+        }
+        if (!sf_buffer[rf_idx][decoder_idx].pending) {
+            /* Woken to shut down, not to work: the buffer still holds the last subframe,
+             * and decoding it again is what duplicated every run's final frames. */
+            pthread_mutex_unlock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);
+            if (!task_scheduler_up[rf_idx]) {
+                break;
+            }
+            continue;
+        }
+        sf_buffer[rf_idx][decoder_idx].pending = false;
 
         uint32_t sfn    = sf_buffer[rf_idx][decoder_idx].sfn;
         uint32_t sf_idx = sf_buffer[rf_idx][decoder_idx].sf_idx;
@@ -897,12 +941,15 @@ void* dci_decoder_thread(void* p){
 
         uint32_t tti    = sfn * 10 + sf_idx;
 		bool   empty_sf = sf_buffer[rf_idx][decoder_idx].empty_sf;
+		dci_decoder->cur_seq           = sf_buffer[rf_idx][decoder_idx].seq;
+		dci_decoder->cur_anchor_marked = false;
         //printf("%d-th decoder Get the conditional signal! empty:%d\n", dci_decoder->decoder_idx, empty_sf);
 		//fprintf(fd,"%d\n", tti);
 
         //printf("decoder:%d Get the signal! sfn:%d sf_idx:%d tti:%d\n", decoder_idx, sfn, sf_idx, sfn * 10 + sf_idx);
 		// We only decode when the subframe is not empty
 		if(empty_sf){
+			ngscope_sec_anchor_done(rf_idx, dci_decoder->cur_seq); /* nothing to anchor */
 			pthread_mutex_unlock(&sf_buffer[rf_idx][decoder_idx].sf_mutex);
 			fprintf(fd,"%d\t%d\t\n", tti, 0);
 		}else{
@@ -912,6 +959,12 @@ void* dci_decoder_thread(void* p){
 			// if (dci_decoder->prog_args.mode != RECORD){
  			uint64_t t1 = timestamp_us();
  			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub, decoder_idx);
+			/* Every exit from the decode -- including the early ones -- must release later
+			 * subframes waiting on this one's anchors. */
+			if (!dci_decoder->cur_anchor_marked) {
+				ngscope_sec_anchor_done(rf_idx, dci_decoder->cur_seq);
+				dci_decoder->cur_anchor_marked = true;
+			}
  			uint64_t t2 = timestamp_us();
  			fprintf(fd,"%d\t%ld\t\n", tti, t2-t1);
 			// } else {
@@ -986,6 +1039,11 @@ void* dci_decoder_thread(void* p){
 	// we free the ue dl in task scheduler
     //srsran_ue_dl_free(&dci_decoder->ue_dl);
 
+	ngscope_sec_add_fft_reuse(rf_idx, dci_decoder->ue_dl.fft_computed, dci_decoder->ue_dl.fft_reused,
+	                          dci_decoder->ue_dl.fft_verified);
+	ngscope_sec_add_pdcch_cache(rf_idx, dci_decoder->ue_dl.pdcch.dec_cache_hits,
+	                            dci_decoder->ue_dl.pdcch.dec_cache_misses,
+	                            dci_decoder->ue_dl.pdcch.dec_cache_verified);
 	wait_for_decoder_ready_to_close(rf_idx, decoder_idx);
 	// free the ue dl and the related buffer
     //srsran_ue_dl_free(&dci_decoder->ue_dl);
