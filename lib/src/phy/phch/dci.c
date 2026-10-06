@@ -998,8 +998,8 @@ static int dci_format1Cs_unpack(srsran_cell_t*      cell,
   uint8_t* y = msg->payload;
 
   if (msg->nof_bits != srsran_dci_format_sizeof(cell, sf, cfg, SRSRAN_DCI_FORMAT1C)) {
-    ERROR("Invalid message length for format 1C");
-    printf("DEBUG: Invalid message length for format 1C: (got %d, expected %d)\n", msg->nof_bits, srsran_dci_format_sizeof(cell, sf, cfg, SRSRAN_DCI_FORMAT1C));
+    // ERROR("Invalid message length for format 1C");
+    // printf("DEBUG: Invalid message length for format 1C: (got %d, expected %d)\n", msg->nof_bits, srsran_dci_format_sizeof(cell, sf, cfg, SRSRAN_DCI_FORMAT1C));
     return SRSRAN_ERROR;
   }
 

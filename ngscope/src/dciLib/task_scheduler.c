@@ -982,7 +982,9 @@ void* task_scheduler_thread(void* p){
     for(int i=0;i<nof_decoder;i++){
         pthread_join(dci_thd[i], NULL);
     }
-    destroy_snr_report();
+    if (snr_report_enabled()){
+        destroy_snr_report();
+    }
 
     // Only now that every decoder thread has exited: closing earlier would leave them writing
     // into a closed FILE*.
