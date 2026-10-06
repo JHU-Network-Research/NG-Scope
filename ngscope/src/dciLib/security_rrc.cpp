@@ -1,4 +1,5 @@
 #include "ngscope/hdr/dciLib/security_rrc.h"
+#include <srsran/phy/common/phy_common.h>
 #include <srsran/phy/phch/dci.h>
 
 extern "C" {
@@ -354,6 +355,31 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
        * decoder thread's own, but the field is read elsewhere in the thread, so restore it. */
       const bool cfg_alt  = cfg->cfg.pdsch.use_tbs_index_alt;
       bool       used_alt = cfg_alt;
+
+
+      double mean_snr = 0;
+      double snr_count = 0;
+      for (uint32_t a = 0; a < ue_dl->nof_rx_antennas; a++){
+          for(uint32_t p = 0; p < ue_dl->cell.nof_ports; p++){
+              mean_snr += ue_dl->chest_res.snr_ant_port_db[a][p];
+              snr_count += 1;
+          }
+      }
+      mean_snr /= snr_count;
+      int mod1, mod2 = -1;
+      mod1 = pdsch_cfg->grant.tb[0].mod;
+
+      if (pdsch_cfg->grant.nof_tb >1){
+          mod2 = pdsch_cfg->grant.tb[1].mod;
+      }
+
+      if(mean_snr < 20.0 && (mod1 >= SRSRAN_MOD_64QAM && mod2 >= SRSRAN_MOD_64QAM)){
+          continue;
+      }
+
+      if(mean_snr < 15.0 && (mod1 >= SRSRAN_MOD_64QAM ||mod2 >= SRSRAN_MOD_64QAM)){
+          continue;
+      }
 
       int r = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[d], data, pdsch_res,
                                       cfg_alt);
