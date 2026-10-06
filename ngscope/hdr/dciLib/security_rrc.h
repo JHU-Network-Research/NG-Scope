@@ -19,6 +19,7 @@ extern "C" {
 #define NGSCOPE_SEC_SCAN_CAP_LIVE 128
 #define NGSCOPE_SEC_SCAN_CAP_REPLAY 512
 
+
 /* When a transport block fails its CRC, rebuild the grant on the other MCS->TBS table and try
  * once more, keeping whichever passes. Off unless this is called.
  *
@@ -33,6 +34,13 @@ extern "C" {
  * every failure, and replay blocks on a busy decoder rather than discarding the subframe, so
  * spending CPU there is lossless. Set before any decoder thread starts. */
 void ngscope_sec_rrc_set_qam_retry(int rf_idx, bool enable);
+
+/* How the tracked-UE search runs, NGSCOPE_TRACKED_SEARCH_* (ngscope_def.h). Per device, like
+ * qam_retry; task_scheduler.c passes PER_RNTI for anything but replay. CACHE and SOLVE_FIRST
+ * also need srsran_pdcch_set_decode_cache() on the decoder threads' PDCCH objects, which
+ * dci_decoder.c does from the same setting. Set before any decoder thread starts. */
+void ngscope_sec_rrc_set_tracked_search(int rf_idx, int mode);
+int  ngscope_sec_rrc_tracked_search(int rf_idx);
 
 /* For each RNTI currently anchored by a RAR, decode its downlink transport block in this
  * subframe and write it to the MAC pcapng. Nothing here parses the payload.
@@ -82,10 +90,9 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
  * passed -- and never collapsed into "real" versus "spurious".
  *
  * Writes blind_probe-<rf_idx>.csv beside the run, one row per probed RNTI per subframe,
- * carrying rach_ok so the two populations can be compared. Deliberately NOT written to the
- * MAC pcapng: those frames would be attributed to RAR-anchored sessions by
- * tools/security_scan.py and would change n_pdus and possibly an outcome, contaminating the
- * measurement this is meant to inform.
+ * carrying rach_ok so the two populations can be compared. It writes nothing to the MAC
+ * pcapng: it runs before the tracked scan of the same subframe, so a UE it confirms is
+ * anchored in time for that scan, which decodes and writes the block like any other.
  *
  * Replay only. It costs a targeted PDCCH search plus a PDSCH decode for every distinct RNTI
  * in every subframe, which live capture would pay for in discarded subframes. */

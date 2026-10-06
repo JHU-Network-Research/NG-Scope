@@ -254,7 +254,7 @@ class Api:
             OPEN_DIALOG,
             directory=start,
             allow_multiple=False,
-            file_types=("IQ recordings (*.bin)", "All files (*.*)"),
+            file_types=("IQ recordings (*.bin;*.bz2;*.gz;*.xz)", "All files (*.*)"),
         )
 
     def pick_binary(self, current=""):

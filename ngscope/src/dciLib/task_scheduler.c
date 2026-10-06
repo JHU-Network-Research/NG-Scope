@@ -57,6 +57,9 @@ uint64_t nof_desync = 0;
 bool debug = true;
 bool silent = false;
 
+/* Next dispatch sequence number per device; only the scheduler thread touches it. */
+static uint64_t sf_dispatch_seq[MAX_NOF_RF_DEV];
+
 /******************* Global buffer for passing subframe IQ  ******************/
 ngscope_sf_buffer_t sf_buffer[MAX_NOF_RF_DEV][MAX_NOF_DCI_DECODER] =
 {
@@ -389,6 +392,8 @@ void assign_task_to_decoder(int 	 rf_idx,
 
     // Tell the corresponding idle thread to process the signal
     //printf("Send the conditional signal to the %d-th decoder!\n", idle_idx);
+    sf_buffer[rf_idx][idle_idx].pending = true;
+    sf_buffer[rf_idx][idle_idx].seq     = sf_dispatch_seq[rf_idx]++;
     pthread_cond_signal(&sf_buffer[rf_idx][idle_idx].sf_cond);
 
     //--> Unlock sf buffer
@@ -418,6 +423,8 @@ void assign_empty_task_to_decoder(int 		 rf_idx,
 
     // Tell the corresponding idle thread to process the signal
     //printf("Send the conditional signal to the %d-th decoder!\n", idle_idx);
+    sf_buffer[rf_idx][idle_idx].pending = true;
+    sf_buffer[rf_idx][idle_idx].seq     = sf_dispatch_seq[rf_idx]++;
     pthread_cond_signal(&sf_buffer[rf_idx][idle_idx].sf_cond);
 
     //--> Unlock sf buffer
@@ -737,6 +744,13 @@ void* task_scheduler_thread(void* p){
         ngscope_sec_rrc_set_qam_retry(rf_idx, (task_scheduler->prog_args.mode == REPLAY) &&
                                                 task_scheduler->prog_args.qam_retry);
 
+        /* Which tracked-UE search to run. Replay only, like qam_retry: anything else gets the
+        * original per-RNTI search. dci_decoder_init() reads prog_args the same way to decide
+        * whether its PDCCH object keeps the decode cache. */
+        ngscope_sec_rrc_set_tracked_search(rf_idx, (task_scheduler->prog_args.mode == REPLAY)
+                                                       ? task_scheduler->prog_args.tracked_search
+                                                       : NGSCOPE_TRACKED_SEARCH_PER_RNTI);
+
 	}
     for(int i = 0; i < nof_decoder; i++){
         // init the subframe buffer
@@ -952,10 +966,6 @@ void* task_scheduler_thread(void* p){
 	}
 	ngscope_pdcch_order_report(rf_idx);
 	ngscope_pdcch_order_close(rf_idx);
-	if(prog_args->mark_security_phase){
-		ngscope_sec_report(rf_idx);
-	}
-
 	/* Whether the enable_256qam guess matches what the cell is actually doing. Costs nothing
 	 * during the run and is the only way to check without decoding transport blocks. */
 	ngscope_tbs_probe_report();
@@ -972,7 +982,12 @@ void* task_scheduler_thread(void* p){
         // Tell the decoder thread to exit in case
         // they are still waiting for the signal
 		printf("Signling %d-th decoder!\n",i);
+        /* Under the mutex: a decoder re-checks task_scheduler_up and goes back to waiting
+         * when nothing is pending, so a signal sent between its check and its wait would be
+         * lost and the join below would hang. */
+        pthread_mutex_lock(&sf_buffer[rf_idx][i].sf_mutex);
         pthread_cond_signal(&sf_buffer[rf_idx][i].sf_cond);
+        pthread_mutex_unlock(&sf_buffer[rf_idx][i].sf_mutex);
 	}
 
     for(int i=0;i<nof_decoder;i++){
@@ -983,6 +998,12 @@ void* task_scheduler_thread(void* p){
     // into a closed FILE*.
     if(task_scheduler->prog_args.pcap_mac){
         ngscope_mac_pcap_close(rf_idx);
+    }
+    /* After the joins, so every decoder's counters -- including the PDCCH cache totals each
+     * thread adds as it exits -- are final. It used to print while decoders were still
+     * finishing their last subframes. */
+    if(task_scheduler->prog_args.mark_security_phase){
+        ngscope_sec_report(rf_idx);
     }
     if(task_scheduler->prog_args.probe_blind_dci){
         ngscope_sec_probe_blind_report(rf_idx);

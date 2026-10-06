@@ -53,6 +53,33 @@ void ngscope_sec_rrc_set_qam_retry(int rf_idx, bool enable)
   }
 }
 
+/* See the header. Zero-initialised, i.e. NGSCOPE_TRACKED_SEARCH_PER_RNTI. */
+static int tracked_search_mode[MAX_NOF_RF_DEV];
+
+void ngscope_sec_rrc_set_tracked_search(int rf_idx, int mode)
+{
+  if (sec_rf_idx_ok(rf_idx)) {
+    tracked_search_mode[rf_idx] = mode;
+    ngscope_sec_note_search_mode(rf_idx, mode);
+  }
+}
+
+int ngscope_sec_rrc_tracked_search(int rf_idx)
+{
+  return sec_rf_idx_ok(rf_idx) ? tracked_search_mode[rf_idx] : NGSCOPE_TRACKED_SEARCH_PER_RNTI;
+}
+
+static bool solve_first_verify(void)
+{
+  static int v = -1;
+  if (v < 0) {
+    const char* e = getenv("NGSCOPE_VERIFY_SOLVE_FIRST");
+    v             = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+  }
+  return v == 1;
+}
+
+
 /* The transmission scheme a grant is decoded under follows from the DCI format, not from a
  * cell-wide guess.
  *
@@ -267,7 +294,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
 {
   uint16_t  rntis[SEC_MAX_SCAN_RNTI];
   const int cap = (scan_cap > 0 && scan_cap < SEC_MAX_SCAN_RNTI) ? scan_cap : SEC_MAX_SCAN_RNTI;
-  int       nof_rnti = ngscope_sec_tracked(rf_idx, dci_per_sub->timestamp, rntis, cap);
+  int       nof_rnti = ngscope_sec_tracked(rf_idx, dci_per_sub->collection_time, rntis, cap);
   if (nof_rnti <= 0) {
     return 0;
   }
@@ -317,16 +344,53 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
   srsran_dci_format_t ue_formats[SRSRAN_MAX_FORMATS];
   const uint32_t      nof_ue_formats = sec_ue_formats(ue_dl->cell.nof_ports, ue_formats);
 
+  /* Solve-first: decode every candidate of this subframe once and index it by the RNTI it
+   * decodes to; then each tracked UE is found by looking itself up rather than by searching.
+   * srsran_ue_dl_find_dl_dci_formats_solved() applies srsRAN's acceptance rules unchanged
+   * (see ue_dl.c), and an RNTI with no candidate cannot yield a DCI, so it is skipped. */
+  const bool solve_first = ngscope_sec_rrc_tracked_search(rf_idx) == NGSCOPE_TRACKED_SEARCH_SOLVE_FIRST;
+  if (solve_first) {
+    srsran_ue_dl_solve_first(ue_dl, sf, cfg, ue_formats, nof_ue_formats);
+  }
+  int nof_prefiltered = 0;
+  int nof_verified    = 0;
+
   for (int i = 0; i < nof_rnti; i++) {
     const uint16_t rnti = rntis[i];
 
-    /* Targeted search of this UE's search space. The CRC is checked against the RNTI, so
-     * unlike the blind path a hit here cannot be a manufactured candidate. */
     srsran_dci_dl_t dci_dl[SRSRAN_MAX_DCI_MSG] = {};
-    /* Common SS searched too: it is where Msg4 addressed to a temporary C-RNTI is scheduled,
-     * and cfg->cfg.dci_common_ss is false everywhere in ngscope, so that pass never ran. */
-    int             nof_dci = srsran_ue_dl_find_dl_dci_formats(ue_dl, sf, cfg, rnti, ue_formats,
-                                                               nof_ue_formats, true, dci_dl);
+    int             nof_dci = 0;
+    if (solve_first) {
+      const bool has = srsran_ue_dl_solved_has(ue_dl, rnti);
+      if (has) {
+        nof_dci = srsran_ue_dl_find_dl_dci_formats_solved(ue_dl, sf, cfg, rnti, ue_formats,
+                                                          nof_ue_formats, true, dci_dl);
+      } else {
+        nof_prefiltered++;
+      }
+      if (solve_first_verify()) {
+        /* Same question to srsRAN's own search; any difference aborts. Both arrays start
+         * zeroed and are filled field by field, so they compare byte for byte. */
+        srsran_dci_dl_t chk[SRSRAN_MAX_DCI_MSG];
+        memset(chk, 0, sizeof(chk));
+        const int n = srsran_ue_dl_find_dl_dci_formats(ue_dl, sf, cfg, rnti, ue_formats,
+                                                       nof_ue_formats, true, chk);
+        const int m = nof_dci > 0 ? nof_dci : 0;
+        if ((n > 0 ? n : 0) != m || (m > 0 && memcmp(chk, dci_dl, sizeof(srsran_dci_dl_t) * (size_t)m) != 0)) {
+          fprintf(stderr, "SOLVE-FIRST MISMATCH: tti=%u rnti=%u solve-first %d DCI(s), per-RNTI %d\n",
+                  tti, rnti, nof_dci, n);
+          abort();
+        }
+        nof_verified++;
+      }
+    } else {
+      /* Targeted search of this UE's search space. The CRC is checked against the RNTI, so
+       * unlike the blind path a hit here cannot be a manufactured candidate. Common SS
+       * searched too: it is where Msg4 addressed to a temporary C-RNTI is scheduled, and
+       * cfg->cfg.dci_common_ss is false everywhere in ngscope, so that pass never ran. */
+      nof_dci = srsran_ue_dl_find_dl_dci_formats(ue_dl, sf, cfg, rnti, ue_formats, nof_ue_formats,
+                                                 true, dci_dl);
+    }
     nof_searched++;
     if (nof_dci <= 0) {
       /* Counted rather than dropped. On its own it says little -- a tracked UE usually has
@@ -444,7 +508,10 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         cap.harq_pid  = dci_dl[d].pid;
         cap.format    = dci_dl[d].format;
         cap.tx_scheme = pdsch_cfg->grant.tx_scheme;
-        cap.rach_ok   = true; /* tracked RNTIs are RAR-anchored by construction */
+        /* "A RAR anchored this UE". Not every tracked UE is RAR-anchored any more -- a passing
+         * DL-SCH CRC also anchors one -- and the probe path labels the same block this way, so
+         * a block's label no longer depends on which path wrote it. */
+        cap.rach_ok   = ngscope_rach_filter_anchor(rf_idx, rnti) == NGSCOPE_RACH_ANCHOR_RAR;
         cap.evm       = pdsch_res[tb].evm;
         cap.payload   = pdsch_res[tb].payload;
         cap.len       = (uint32_t)tbs / 8;
@@ -457,6 +524,9 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
   }
 
   ngscope_sec_count_scan(rf_idx, nof_searched, nof_no_dci);
+  if (solve_first) {
+    ngscope_sec_count_prefilter(rf_idx, nof_rnti, nof_prefiltered, nof_verified);
+  }
   pdsch_cfg->rnti = saved_rnti;
   return nof_written;
 }
@@ -683,45 +753,28 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
           q->srb[ok]++;
         }
 
+        /* Confirmed: the DL-SCH CRC is a stricter test than the RAR anchor, so admitting on
+         * it does not loosen the filter that keeps manufactured RNTIs out -- those can never
+         * pass one.
+         *
+         * One passing block is the threshold. At ~2^-24 per block the second adds little
+         * against chance, and a UE whose downlink this receiver only ever caught once is
+         * exactly the marginal case worth keeping. The anchor is recorded per DCI in the
+         * .dciLog, so anyone who wants a stricter bar can apply it afterwards on evidence
+         * rather than having it silently pre-applied here.
+         *
+         * note_crc_confirmed() is called for every passing block, not only when the RACH
+         * filter has not admitted the RNTI: whether it has depends on how far other threads
+         * have got, and the anchor rules decide from anchor times alone (an RNTI anchored at
+         * or before this block is left as it is). Both calls are idempotent and neither
+         * overrides a RAR anchor.
+         *
+         * Nothing is written here. This runs before the tracked scan of the same subframe,
+         * so the anchor is in place for that scan, which decodes and writes the block. */
         if (!ok) {
-          /* Confirmed, and no RAR on this cell ever handed this RNTI out. Promote it: the
-           * DL-SCH CRC is a stricter test than the RAR anchor, so admitting on it does not
-           * loosen the filter that keeps manufactured RNTIs out -- those can never pass one.
-           *
-           * One passing block is the threshold. At ~2^-24 per block the second adds little
-           * against chance, and a UE whose downlink this receiver only ever caught once is
-           * exactly the marginal case worth keeping. The anchor is recorded per DCI in the
-           * .dciLog, so anyone who wants a stricter bar can apply it afterwards on evidence
-           * rather than having it silently pre-applied here.
-           *
-           * Both calls are idempotent and neither overrides a RAR anchor. */
           ngscope_rach_filter_add(rf_idx, rnti, tti, NGSCOPE_RACH_ANCHOR_CRC);
-          ngscope_sec_note_crc_confirmed(rf_idx, rnti, tti, ts_us, collection_time);
-
-          /* And write the block. The probe wrote no pcap when it only had to count, but a
-           * promoted UE's first confirmed block is the one place its pre-security RRC could
-           * be, and it is the only block that arrives before the tracked scan takes over. */
-          ngscope_mac_tb_t cap;
-          memset(&cap, 0, sizeof(cap));
-          cap.rf_idx          = rf_idx;
-          cap.tti             = tti;
-          cap.ts_us           = ts_us;
-          cap.collection_time = collection_time;
-          cap.rnti            = rnti;
-          cap.src             = NGSCOPE_MAC_SRC_PROBE;
-          cap.rv              = pdsch_cfg->grant.tb[tb_sel].rv;
-          cap.mcs             = pdsch_cfg->grant.tb[tb_sel].mcs_idx;
-          cap.tbs             = (int)tbs;
-          cap.prb             = pdsch_cfg->grant.nof_prb;
-          cap.harq_pid        = dci_dl[0].pid;
-          cap.format          = dci_dl[0].format;
-          cap.tx_scheme       = pdsch_cfg->grant.tx_scheme;
-          cap.rach_ok         = false; /* no RAR here -- that is the finding, not a defect */
-          cap.evm             = pdsch_res[tb_sel].evm;
-          cap.payload         = pdsch_res[tb_sel].payload;
-          cap.len             = tbs / 8;
-          ngscope_mac_pcap_write(&cap);
         }
+        ngscope_sec_note_crc_confirmed(rf_idx, rnti, tti, ts_us, collection_time);
       }
     }
 
@@ -778,6 +831,7 @@ void ngscope_sec_probe_blind_report(int rf_idx)
          (unsigned long long)q->drb[0]);
   printf("  %-22s %14llu %14llu\n", "  of those, SRB only", (unsigned long long)q->srb[1],
          (unsigned long long)q->srb[0]);
+
   printf("  A DRB is configured by an RRCConnectionReconfiguration that only follows a\n");
   printf("  completed SecurityModeCommand, so a passing DRB block is itself proof that this\n");
   printf("  UE established AS security with this cell -- the boundary simply happened before\n");

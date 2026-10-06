@@ -168,6 +168,26 @@ TOP_LEVEL = [
         no_record=True,
     ),
     _f(
+        "tracked_search",
+        "choice",
+        "solve_first",
+        "Tracked-UE search",
+        "How the security scan finds each tracked UE's DCIs. All three return the same DCIs. "
+        "Per RNTI is srsRAN's search, run separately for every tracked UE. Cache runs the same "
+        "search but decodes each PDCCH candidate once per subframe and reuses it -- a decode "
+        "depends only on its location and size, and the RNTI is its output. Solve-first decodes "
+        "every candidate once and searches only the UEs something decoded to, so its cost does "
+        "not grow with the number of tracked UEs. Replay only; live always uses Per RNTI. On "
+        "the 4x2 capture decoder CPU went from 11.7 to 2.0 ms per subframe.",
+        options=[
+            {"value": "per_rnti", "label": "Per RNTI"},
+            {"value": "cache", "label": "Cache"},
+            {"value": "solve_first", "label": "Solve-first"},
+        ],
+        replay_only=True,
+        no_record=True,
+    ),
+    _f(
         "probe_blind_dci",
         "bool",
         False,
@@ -299,7 +319,8 @@ RF_DEV = [
         "path",
         "",
         "Replay file",
-        "Source IQ file for Replay mode. Ignored otherwise: recording always writes to "
+        "Source IQ file for Replay mode; .bz2, .gz and .xz are decompressed on the fly "
+        "(lbzip2 if installed). Ignored otherwise: recording always writes to "
         "<out_dir>/<timestamp>/recorded-samples.bin.",
     ),
     _f(

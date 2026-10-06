@@ -91,6 +91,15 @@ files from that. The gates changed shape with it.
 domain. In replay the wall clock runs at decode speed (1.45× here), so bucketing by it invents
 time that does not exist. Use `collection_time` for anything against time.
 
+**The tracking window itself was on the wall clock until 2026-10** (`ngscope_sec_tracked()`
+compared `dci_per_sub->timestamp`). So each UE's 10 s window covered as much radio time as the
+replay speed allowed: about 2.3 s on trolley, which replays ~4.4× slower than real time. On the
+4x2 capture an idle and a busy machine gave 604k vs 397k (UE, subframe) pairs searched from
+identical input. It now uses `collection_time` against `rar_ct`, the same clock
+`security_scan.py` uses for `window_end_ct`. **Every per-capture figure older than that was
+taken with a speed-dependent window.** The trolley SMC rate did not move (the SMC arrives within
+a second or two of the RAR), but traffic counts, DRB evidence and replay time all did.
+
 **Silent drops are the enemy.** A UE dropped by a cap, a filter or an overloaded scheduler is
 indistinguishable in the output from a UE that never reached security — which is exactly what
 the detector is trying to measure. Every such path is counted and reported at teardown. **If you
@@ -114,7 +123,16 @@ across 692 UEs, none carried an SMC" rather than just an empty file.
 **Report both denominators.** `established/all RARs` is comparable with the historical figures;
 `established/(RARs with decoded traffic)` drops UEs the receiver never saw — but it also drops
 UEs that RACHed and did nothing, so it is an upper bound, not a correction. On the trolley
-capture the two are 39.2% and 83.4%. Quoting one alone moves the headline by 40 points.
+capture the two are 39.2% and 83.1% (271/692, 271/326). Quoting one alone moves the headline by
+40 points.
+
+**`rate` is one observation over one population; `security_evidence` is the wider view.**
+`security_summary.json` also counts, per anchor (`rar` / `crc` / `all`), UEs with an SMC, with
+decoded DRB traffic (`n_drb_pdus`, LCID 3–10 -- a DRB only exists after security and its LCID
+is in the clear MAC header), and with `reused`. DRB is the only evidence there is for a
+CRC-confirmed UE, whose SMC preceded the capture. Trolley, all 845 UEs: SMC 279, SMC-or-DRB
+390 (46.2%), plus reused 394 (46.6%); 86 of the 153 CRC-confirmed UEs are known only by DRB.
+4x2: SMC-or-DRB 84/140 = 60.0%. `rate` is left alone so historical figures stay comparable.
 
 **Never guess a phase.** The domain is now seven values, and two pairs must not be collapsed:
 `unknown` (could not watch) vs `none` (watched, saw nothing — the detection signal), and
@@ -207,10 +225,84 @@ identical, zero comment/dissection mismatches, the `sec=` splice byte-exact.
 latent only because every config sets `log_phich = false`. (That log is no longer written at
 all; see the target-RNTI note above.)
 
-Cost measured on the trolley capture: replay 119 s -> 142 s (+19%), PDSCH attempts 3,315 ->
-11,953, tracking high-water 64 -> 93 of 512, no evictions and nothing unscanned. The extra
-work is because a UE no longer leaves the tracked set when its SMC is found -- nothing in the
-process knows what an SMC is any more.
+Cost measured on the trolley capture at the time: replay 119 s -> 142 s (+19%), PDSCH attempts
+3,315 -> 11,953, tracking high-water 64 -> 93 of 512. The extra work is because a UE no longer
+leaves the tracked set when its SMC is found. **Those figures predate the radio-clock window**
+(see *Two clocks*). Trolley with `probe_blind_dci = true`, `nof_thread = 5`: **134 s** with the
+default `tracked_search = "solve_first"`, 868 s with `per_rnti`; ~15,100 blocks decoded,
+high-water 167 of 512, no evictions.
+
+**`tracked_search` (replay only): `per_rnti` | `cache` | `solve_first`, default `solve_first`.**
+75% of decoder CPU was the tracked-UE search re-running the same PDCCH Viterbi decodes for every
+RNTI. A candidate decode depends only on the LLRs and (ncce, L, nof_bits); the RNTI is its
+*output* (CRC remainder). `cache` memoizes decodes per subframe in `srsran_pdcch_t` (generation
+bumped in `srsran_pdcch_extract_llr`). `solve_first` decodes every aligned candidate once,
+indexes it by the RNTI it decodes to (`srsran_ue_dl_solve_first`), and finds each tracked UE by
+looking itself up (`srsran_ue_dl_find_dl_dci_formats_solved`). That visits only the candidates
+that decoded to the RNTI and applies srsRAN's acceptance rules through the same helper the
+per-RNTI search uses (`dci_blind_search_accept`, `ue_dl.c`) -- exact because a non-matching
+candidate changes no state in `dci_blind_search`. Both are verified, not argued:
+`NGSCOPE_VERIFY_PDCCH_CACHE=1` / `NGSCOPE_VERIFY_SOLVE_FIRST=1` re-check every cache hit and
+compare every solve-first result with srsRAN's per-RNTI search, aborting on any difference --
+85 M decodes and 1.24 M results on 4x2, zero mismatches. **The blind search shares the cache**
+(`srsran_pdcch_decode_msg_yx`, same Viterbi/CRC and 0.3 LLR threshold; the entry also keeps its
+`decode_prob`), so the tracked search mostly reuses decodes the blind search just made and the
+blind search stops repeating its own. Decoder CPU: trolley 63 → 9.0 ms/subframe, 4x2 11.7 → 1.7;
+verify re-checked 91 M hits including the blind path's, zero mismatches.
+
+**One FFT + channel estimation per subframe.** The SIB, RAR and blind-search steps each called
+`srsran_ue_dl_decode_fft_estimate()` on the same subframe. With `srsran_ue_dl_set_fft_reuse()`
+(on for every decoder thread, live too) a repeat with the same inputs -- subframe serial from
+`srsran_ue_dl_new_subframe()`, sf config, PHICH mi, chest config -- returns the stored result
+and restores `sf->cfi`; `wiener` (stateful) always recomputes. Skipping the repeat also stops
+the LLR re-extraction from invalidating the PDCCH cache mid-subframe.
+`NGSCOPE_VERIFY_FFT_CACHE=1` recomputes every reuse and compares symbols, channel estimates,
+`chest_res`, LLRs and CFI byte for byte: 130,844 reuses on 4x2, zero mismatches. Trolley
+143 → 134 s (it runs `decode_SIB = false`, so 2 calls → 1); 4x2 1.68 → 1.61 ms/subframe. `cache` and
+`solve_first` cost the same at ~100 tracked UEs; solve-first's cost does not grow with the
+tracked set.
+
+**The tracked-UE output is now deterministic.** Each subframe carries its dispatch `seq`; a
+decoder marks it once the anchor-creating steps (RAR, then the blind probe, which now runs
+*before* the tracked scan) are done, and waits before the scan until every earlier `seq` has
+marked (`ngscope_sec_anchor_done/_wait`). Anchors keep current + previous per RNTI and a scan
+uses the newest one at or before its subframe, so registration order cannot change the tracked
+set; expiry waits a 1 s grace. The probe no longer writes to the pcap -- the scan writes the
+block of a UE the probe just confirmed -- so `src=probe` appears only in older runs. Measured:
+two trolley runs and two 4x2 runs give **byte-identical pcaps and sessions**, and `per_rnti`
+equals `solve_first`; vs. the pre-barrier run nothing is lost and 38 blocks of CRC-confirmed
+UEs within 3 ms of confirmation are gained. Cost ~12 s on trolley (189 → 202 s, before the
+shared cache), none on 4x2.
+`.dciLog` and `blind_probe` rows still vary slightly between runs: they come from the blind
+search, whose UE tracker (top-10 / active list) updates in thread-completion order.
+
+**4-port MIMO, 2026-10.** Captures from commercial cells are 4 ports; with `nof_rx_ant = 2`
+ngscope now decodes them. `docs/4x2-mimo-fixes.md` has the account; in short:
+- `precoding.c` -- one 4-port predecoder (`srsran_predecoding_multiplex_4port`, rank 1/2, and
+  `_ccd_4port`) whose codebook is *generated* from the 36.211 Householder vectors. The
+  hand-typed table it replaced had wrong signs and held Format2 CRC passes to 13%; now ~65%.
+  The old 4x1/4x2 functions are still in the file, uncalled.
+- `ra_dl.c` -- 4-port pinfo per 36.212 Table 5.3.3.1.5-5: with one codeword TPMI is pinfo−1.
+  Rank 3/4, rank 2 on one codeword and "last PUSCH PMI" are refused at grant build and show as
+  found-but-not-built.
+- `security_rrc.cpp` -- a grant counts if *any* codeword passes, and every passing codeword is
+  written; TB1 was silently dropped before (on 2x2 too).
+- `decode_sib.cpp` -- SIB1/2 were ASN.1-parsed without a CRC check; garbage eventually hit
+  `std::bad_alloc`. Same site as the old 5330 `decode_SIB` crash, so that one is probably fixed
+  too (not re-tested).
+- **Pre-security traffic is not transmit diversity by construction.** `RRCConnectionSetup` can
+  set TM4: on the 4x2 capture 57 of 76 SMCs were Format2 and 14 closed-loop SM. 4-port figures
+  from before this undercount.
+
+**Two pcap-integrity fixes, same month.** (1) Probe race: a CRC-confirmed UE decoded in two
+subframes by two threads lost whichever block did not win the promotion -- once the SMC
+itself. The tracked scan now hands the probe the RNTIs it searched, and the probe writes any
+passing block for a tracked UE the scan missed (`written to the pcap` in the probe report).
+`security_scan.py` counts `src=probe` frames in `n_pdus`. (2) Every run ended with each decoder
+thread re-decoding its last subframe at shutdown -- one duplicate subframe per thread in every
+pcap, back to the oldest runs. `ngscope_sf_buffer_t.pending` now gates the decode. A trolley
+pcap now has zero byte-identical frames; on 4x2 the only identical pairs are padding-only
+TB0/TB1.
 
 **`enable_256qam` still defaults to `true`, and in replay it no longer matters much.** The
 decoder now retries a failed transport block on the other MCS->TBS table and keeps whichever
@@ -233,11 +325,21 @@ The offline handover is done and verified; what is left is finishing the seams.
 - **`ch=` could come from the dissection.** `mac-lte.dlsch.lcid` is already in the scan's
   tshark pass, so `ccch`/`srb`/`drb` is a few lines in `security_scan.py` plus a second field
   in the comment — not the shared C classifier the old note called for.
-- **`security_scan.py` has no `--verify` pass yet.** The plan's step 6 — re-dissect the patched
-  file and assert the indicator sets are unchanged — is not implemented. The equivalent check
-  was run by hand and passed (identical dissection outside the comment line, size preserved).
 - **Ordering integrity is not yet counted.** TTI inversions after reorder would tell you when
   Wireshark's order-dependent RLC reassembly might be losing SDUs; nothing measures it today.
+
+- **HARQ retransmissions.** MCS 29–31 carries no TBS, so those grants can never decode (616 on
+  the 4x2 capture) and count as CRC failures; every attempt also resets the soft buffer, so
+  nothing combines. Needs per-(UE, HARQ process, TB) state shared across decoder threads.
+- **Replay is now scheduler-bound on small cells.** 4x2 runs at ~82 s for a 78 s capture with
+  decoders at 2 ms/subframe: the single scheduler thread (sync, MIB, memcpy) sets the pace, and
+  the `REPLAY SOURCE` line's "the decoder set the pace" wording is wrong there. Trolley is still
+  decoder-bound (`nof_thread` capped at 8, 5 in its config); how the remaining 8.3 ms per
+  subframe splits between the blind search, PDSCH decodes and the rest is not yet profiled.
+- **Blind-search determinism.** `.dciLog` / `blind_probe` still differ by a few dozen records
+  between identical runs: `ue_tracker` (route-(b) acceptance) updates in completion order.
+- **4-port leftovers.** Rank 2 on one codeword (36.213 7.1.7.2.2 TBS), 4-port CDD validated on
+  only two blocks, and `nof_rx_ant` 3–4 (the GUI allows it; the SM/CDD predecoders take ≤2).
 
 `docs/security-implementation.md` §7 lists the other gaps and §6 records what was deliberately
 *not* built, with reasons — including two inferences (opacity, payload entropy) rejected on

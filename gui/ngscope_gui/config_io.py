@@ -111,6 +111,10 @@ def _coerce(value, field):
             return bool(value)
         if type_ in ("int", "int64", "mode"):
             return int(value)
+        if type_ == "choice":
+            # ngscope refuses an unknown value outright, so never carry one forward.
+            allowed = [opt["value"] for opt in field.get("options", [])]
+            return str(value) if str(value) in allowed else field["default"]
         return str(value)
     except (TypeError, ValueError):
         return field["default"]

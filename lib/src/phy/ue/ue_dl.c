@@ -168,6 +168,10 @@ clean_exit:
 void srsran_ue_dl_free(srsran_ue_dl_t* q)
 {
   if (q) {
+    free(q->solved);
+    free(q->solved_head);
+    q->solved      = NULL;
+    q->solved_head = NULL;
     for (int port = 0; port < SRSRAN_MAX_PORTS; port++) {
       srsran_ofdm_rx_free(&q->fft[port]);
     }
@@ -357,21 +361,152 @@ static int estimate_pdcch_pcfich(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsr
   }
 }
 
-int srsran_ue_dl_decode_fft_estimate(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg)
+static int decode_fft_estimate_compute(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg)
+{
+  /* Run FFT for all subframe data */
+  for (int j = 0; j < q->nof_rx_antennas; j++) {
+    if (sf->sf_type == SRSRAN_SF_MBSFN) {
+      srsran_ofdm_rx_sf(&q->fft_mbsfn);
+    } else {
+      srsran_ofdm_rx_sf(&q->fft[j]);
+    }
+  }
+  return estimate_pdcch_pcfich(q, sf, cfg);
+}
+
+void srsran_ue_dl_set_fft_reuse(srsran_ue_dl_t* q, bool enable)
 {
   if (q) {
-    /* Run FFT for all subframe data */
-    for (int j = 0; j < q->nof_rx_antennas; j++) {
-      if (sf->sf_type == SRSRAN_SF_MBSFN) {
-        srsran_ofdm_rx_sf(&q->fft_mbsfn);
-      } else {
-        srsran_ofdm_rx_sf(&q->fft[j]);
-      }
+    q->fft_reuse_en = enable;
+    q->fft_valid    = false;
+  }
+}
+
+void srsran_ue_dl_new_subframe(srsran_ue_dl_t* q)
+{
+  if (q) {
+    q->fft_serial++;
+    q->fft_valid = false;
+  }
+}
+
+static bool fft_verify(void)
+{
+  static int v = -1;
+  if (v < 0) {
+    const char* e = getenv("NGSCOPE_VERIFY_FFT_CACHE");
+    v             = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+  }
+  return v == 1;
+}
+
+/* The subframe config as an input: everything but cfi, which the estimate produces. */
+static void fft_sf_key(const srsran_dl_sf_cfg_t* sf, srsran_dl_sf_cfg_t* key)
+{
+  memcpy(key, sf, sizeof(*key));
+  key->cfi = 0;
+}
+
+static bool fft_key_match(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg)
+{
+  if (!q->fft_valid || q->fft_key_serial != q->fft_serial || q->fft_key_mi_auto != q->mi_auto ||
+      q->fft_key_mi_idx != q->mi_manual_index) {
+    return false;
+  }
+  srsran_dl_sf_cfg_t k;
+  fft_sf_key(sf, &k);
+  /* Byte comparison: a spurious mismatch only costs a recompute, never a wrong reuse. */
+  return memcmp(&k, &q->fft_key_sf, sizeof(k)) == 0 &&
+         memcmp(&cfg->chest_cfg, &q->fft_key_chest, sizeof(cfg->chest_cfg)) == 0;
+}
+
+/* Verify mode: recompute what a reuse would have returned and compare every output byte for
+ * byte -- the symbols, every channel estimate and chest_res field, the PDCCH LLRs and the
+ * CFI. Catches a stateful estimator and anything that mutated those buffers between calls. */
+static void fft_verify_reuse(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg)
+{
+  const uint32_t sf_len  = SRSRAN_SF_LEN_RE(q->cell.nof_prb, q->cell.cp);
+  const uint32_t nof_llr = q->pdcch.max_bits;
+  const uint32_t nports  = q->cell.nof_ports;
+  const uint32_t nrx     = q->nof_rx_antennas;
+
+  cf_t*                 sym = srsran_vec_cf_malloc(sf_len * nrx);
+  cf_t*                 ce  = srsran_vec_cf_malloc(sf_len * nports * nrx);
+  float*                llr = srsran_vec_f_malloc(nof_llr);
+  srsran_chest_dl_res_t res;
+  if (sym == NULL || ce == NULL || llr == NULL) {
+    ERROR("FFT verify: allocation failed");
+    abort();
+  }
+  for (uint32_t a = 0; a < nrx; a++) {
+    memcpy(&sym[a * sf_len], q->sf_symbols[a], sizeof(cf_t) * sf_len);
+    for (uint32_t p = 0; p < nports; p++) {
+      memcpy(&ce[(a * nports + p) * sf_len], q->chest_res.ce[p][a], sizeof(cf_t) * sf_len);
     }
-    return estimate_pdcch_pcfich(q, sf, cfg);
-  } else {
+  }
+  memcpy(llr, q->pdcch.llr, sizeof(float) * nof_llr);
+  memcpy(&res, &q->chest_res, sizeof(res));
+
+  if (decode_fft_estimate_compute(q, sf, cfg) != SRSRAN_SUCCESS) {
+    fprintf(stderr, "FFT CACHE MISMATCH: recompute failed at tti=%d\n", sf->tti);
+    abort();
+  }
+  bool same = sf->cfi == q->fft_cfi && memcmp(&res, &q->chest_res, sizeof(res)) == 0 &&
+              memcmp(llr, q->pdcch.llr, sizeof(float) * nof_llr) == 0;
+  for (uint32_t a = 0; same && a < nrx; a++) {
+    same = memcmp(&sym[a * sf_len], q->sf_symbols[a], sizeof(cf_t) * sf_len) == 0;
+    for (uint32_t p = 0; same && p < nports; p++) {
+      same = memcmp(&ce[(a * nports + p) * sf_len], q->chest_res.ce[p][a], sizeof(cf_t) * sf_len) == 0;
+    }
+  }
+  if (!same) {
+    fprintf(stderr, "FFT CACHE MISMATCH: tti=%d cfi %d/%d -- the reused estimate differs from a fresh one\n",
+            sf->tti, q->fft_cfi, sf->cfi);
+    abort();
+  }
+  free(sym);
+  free(ce);
+  free(llr);
+  q->fft_verified++;
+}
+
+/* With reuse on (srsran_ue_dl_set_fft_reuse), a repeat call for the same subframe and inputs
+ * returns the stored result: the symbols, channel estimate and PDCCH LLRs are still in q from
+ * the first call, and sf->cfi is restored. Exact because the computation depends only on those
+ * inputs -- except under the wiener estimator, which keeps a time FIFO and always recomputes.
+ * Skipping the repeat also skips its LLR re-extraction, so the PDCCH decode cache is not
+ * invalidated mid-subframe. */
+int srsran_ue_dl_decode_fft_estimate(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg)
+{
+  if (q == NULL) {
     return SRSRAN_ERROR_INVALID_INPUTS;
   }
+  const bool reusable =
+      q->fft_reuse_en && sf != NULL && cfg != NULL && cfg->chest_cfg.estimator_alg != SRSRAN_ESTIMATOR_ALG_WIENER;
+
+  if (reusable && fft_key_match(q, sf, cfg)) {
+    if (fft_verify()) {
+      fft_verify_reuse(q, sf, cfg);
+    }
+    sf->cfi = q->fft_cfi;
+    q->fft_reused++;
+    return SRSRAN_SUCCESS;
+  }
+
+  const int ret = decode_fft_estimate_compute(q, sf, cfg);
+  q->fft_computed++;
+  if (reusable && ret == SRSRAN_SUCCESS) {
+    fft_sf_key(sf, &q->fft_key_sf);
+    memcpy(&q->fft_key_chest, &cfg->chest_cfg, sizeof(q->fft_key_chest));
+    q->fft_key_mi_auto = q->mi_auto;
+    q->fft_key_mi_idx  = q->mi_manual_index;
+    q->fft_key_serial  = q->fft_serial;
+    q->fft_cfi         = sf->cfi;
+    q->fft_valid       = true;
+  } else {
+    q->fft_valid = false;
+  }
+  return ret;
 }
 
 int srsran_ue_dl_decode_fft_estimate_noguru(srsran_ue_dl_t*     q,
@@ -426,6 +561,156 @@ static bool dci_location_is_allocated(srsran_ue_dl_t* q, srsran_dci_location_t n
   return false;
 }
 
+/* What dci_blind_search() does with a candidate that decoded to the searched RNTI: the corr
+ * threshold, the common-SS format override, Format0 to the pending UL list, duplicate
+ * suppression and allocation. Factored out so the solve-first search applies exactly these
+ * rules -- the two can only differ in which candidates they visit, never in what they do with
+ * one. Returns true when the location is taken and the caller moves to the next location. */
+static bool dci_blind_search_accept(srsran_ue_dl_t*     q,
+                                    srsran_dl_sf_cfg_t* sf,
+                                    srsran_dci_cfg_t*   dci_cfg,
+                                    srsran_dci_msg_t    dci_msg[SRSRAN_MAX_DCI_MSG],
+                                    uint32_t*           nof_dci,
+                                    bool                search_in_common)
+{
+  srsran_dci_msg_t* m = &dci_msg[*nof_dci];
+
+  // Compute decoded message correlation to drastically reduce false alarm probability
+  float corr = srsran_pdcch_msg_corr(&q->pdcch, m);
+
+  // Skip candidate if the threshold is not reached
+  // 0.5 is set from pdcch_test
+  if (!isnormal(corr) || corr < 0.5f) {
+    return false;
+  }
+
+  // Look for the messages found and apply the new format if the location is common
+  if (search_in_common && (dci_cfg->multiple_csi_request_enabled || dci_cfg->srs_request_enabled)) {
+    /*
+     * A UE configured to monitor PDCCH candidates whose CRCs are scrambled with C-RNTI or SPS C-RNTI,
+     * with a common payload size and with the same first CCE index ncce, but with different sets of DCI
+     * information fields in the common and UE-specific search spaces on the primary cell, is required to assume
+     * that only the PDCCH in the common search space is transmitted by the primary cell.
+     */
+    // Find a matching ncce in the common SS
+    if (srsran_location_find_location(q->current_ss_common.loc, q->current_ss_common.nof_locations, &m->location)) {
+      srsran_dci_cfg_t cfg = *dci_cfg;
+      srsran_dci_cfg_set_common_ss(&cfg);
+      // if the payload size is the same that it would have in the common SS (only Format0/1A is allowed there)
+      if (m->nof_bits == srsran_dci_format_sizeof(&q->cell, sf, &cfg, SRSRAN_DCI_FORMAT1A)) {
+        // assume that only the PDDCH is transmitted, therefore update the format to 0/1A
+        m->format = m->payload[0] ? SRSRAN_DCI_FORMAT1A : SRSRAN_DCI_FORMAT0; // Format0/1A bit indicator is the MSB
+        INFO("DCI msg found in location L=%d, ncce=%d, size=%d belongs to the common SS and is format %s",
+             m->location.L,
+             m->location.ncce,
+             m->nof_bits,
+             srsran_dci_format_string_short(m->format));
+      }
+    }
+  }
+
+  // If found a Format0, save it for later
+  if (m->format == SRSRAN_DCI_FORMAT0) {
+    // If there is space for accumulate another UL DCI dci and it was not detected before, then store it
+    if (q->pending_ul_dci_count < SRSRAN_MAX_DCI_MSG && !find_dci(q->pending_ul_dci_msg, q->pending_ul_dci_count, m)) {
+      srsran_dci_msg_t* pending_ul_dci_msg = &q->pending_ul_dci_msg[q->pending_ul_dci_count];
+      *pending_ul_dci_msg                  = *m;
+      q->pending_ul_dci_count++;
+    }
+    /* Check if the DCI is duplicated */
+  } else if (!find_dci(dci_msg, *nof_dci, m) && !find_dci(q->pending_ul_dci_msg, q->pending_ul_dci_count, m)) {
+    // Save message and continue with next location
+    if (q->nof_allocated_locations < SRSRAN_MAX_DCI_MSG) {
+      q->allocated_locations[q->nof_allocated_locations] = m->location;
+      q->nof_allocated_locations++;
+    }
+    (*nof_dci)++;
+    return true;
+  } else {
+    INFO("Ignoring message with size %d, already decoded", m->nof_bits);
+  }
+  return false;
+}
+
+/* Is there a candidate in the solve-first index at this (location, nof_bits) that decoded to
+ * rnti? nof_bits == 0 asks about any size. */
+typedef struct srsran_ue_dl_solved_s {
+  uint16_t rnti;
+  uint16_t ncce;
+  uint16_t nof_bits;
+  uint8_t  L;
+  int16_t  next;
+} ue_dl_solved_t;
+
+#define UE_DL_SOLVED_MAX 4096
+
+static bool solved_hit(srsran_ue_dl_t* q, uint16_t rnti, srsran_dci_location_t loc, uint32_t nof_bits)
+{
+  for (int16_t i = q->solved_head[rnti]; i >= 0; i = q->solved[i].next) {
+    if (q->solved[i].ncce == loc.ncce && q->solved[i].L == loc.L &&
+        (nof_bits == 0 || q->solved[i].nof_bits == nof_bits)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool solved_valid(srsran_ue_dl_t* q)
+{
+  return q->solved_ok && q->solved != NULL && q->solved_gen == q->pdcch.dec_gen;
+}
+
+/* dci_blind_search() over a search space, visiting only the locations and formats whose
+ * candidate decoded to rnti. Skipping the others is exact: in dci_blind_search() a candidate
+ * that does not decode to the RNTI changes no state -- it is decoded into a scratch slot and
+ * left -- so the visit order, the cap, the allocation check and every acceptance rule are the
+ * same on the candidates that matter. */
+static int dci_blind_search_solved(srsran_ue_dl_t*     q,
+                                   srsran_dl_sf_cfg_t* sf,
+                                   uint16_t            rnti,
+                                   dci_blind_search_t* search_space,
+                                   srsran_dci_cfg_t*   dci_cfg,
+                                   srsran_dci_msg_t    dci_msg[SRSRAN_MAX_DCI_MSG],
+                                   bool                search_in_common)
+{
+  uint32_t nof_dci = 0;
+  if (!rnti) {
+    ERROR("RNTI not specified");
+    return nof_dci;
+  }
+  for (int l = 0; l < search_space->nof_locations; l++) {
+    if (nof_dci >= SRSRAN_MAX_DCI_MSG) {
+      ERROR("Can't store more DCIs in buffer");
+      return nof_dci;
+    }
+    if (!solved_hit(q, rnti, search_space->loc[l], 0)) {
+      continue;
+    }
+    if (dci_location_is_allocated(q, search_space->loc[l])) {
+      continue;
+    }
+    for (uint32_t f = 0; f < search_space->nof_formats; f++) {
+      const uint32_t nof_bits = srsran_dci_format_sizeof(&q->cell, sf, dci_cfg, search_space->formats[f]);
+      if (!solved_hit(q, rnti, search_space->loc[l], nof_bits)) {
+        continue;
+      }
+      dci_msg[nof_dci].location = search_space->loc[l];
+      dci_msg[nof_dci].format   = search_space->formats[f];
+      dci_msg[nof_dci].rnti     = 0;
+      if (srsran_pdcch_decode_msg(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci])) {
+        ERROR("Error decoding DCI msg");
+        return SRSRAN_ERROR;
+      }
+      if ((dci_msg[nof_dci].rnti == rnti) && (dci_msg[nof_dci].nof_bits > 0)) {
+        if (dci_blind_search_accept(q, sf, dci_cfg, dci_msg, &nof_dci, search_in_common)) {
+          break;
+        }
+      }
+    }
+  }
+  return nof_dci;
+}
+
 static int dci_blind_search(srsran_ue_dl_t*     q,
                             srsran_dl_sf_cfg_t* sf,
                             uint16_t            rnti,
@@ -464,64 +749,8 @@ static int dci_blind_search(srsran_ue_dl_t*     q,
 
         // Check if RNTI is matched
         if ((dci_msg[nof_dci].rnti == rnti) && (dci_msg[nof_dci].nof_bits > 0)) {
-          // Compute decoded message correlation to drastically reduce false alarm probability
-          float corr = srsran_pdcch_msg_corr(&q->pdcch, &dci_msg[nof_dci]);
-
-          // Skip candidate if the threshold is not reached
-          // 0.5 is set from pdcch_test
-          if (!isnormal(corr) || corr < 0.5f) {
-            continue;
-          }
-
-          // Look for the messages found and apply the new format if the location is common
-          if (search_in_common && (dci_cfg->multiple_csi_request_enabled || dci_cfg->srs_request_enabled)) {
-            /*
-             * A UE configured to monitor PDCCH candidates whose CRCs are scrambled with C-RNTI or SPS C-RNTI,
-             * with a common payload size and with the same first CCE index ncce, but with different sets of DCI
-             * information fields in the common and UE-specific search spaces on the primary cell, is required to assume
-             * that only the PDCCH in the common search space is transmitted by the primary cell.
-             */
-            // Find a matching ncce in the common SS
-            if (srsran_location_find_location(
-                    q->current_ss_common.loc, q->current_ss_common.nof_locations, &dci_msg[nof_dci].location)) {
-              srsran_dci_cfg_t cfg = *dci_cfg;
-              srsran_dci_cfg_set_common_ss(&cfg);
-              // if the payload size is the same that it would have in the common SS (only Format0/1A is allowed there)
-              if (dci_msg[nof_dci].nof_bits == srsran_dci_format_sizeof(&q->cell, sf, &cfg, SRSRAN_DCI_FORMAT1A)) {
-                // assume that only the PDDCH is transmitted, therefore update the format to 0/1A
-                dci_msg[nof_dci].format = dci_msg[nof_dci].payload[0]
-                                              ? SRSRAN_DCI_FORMAT1A
-                                              : SRSRAN_DCI_FORMAT0; // Format0/1A bit indicator is the MSB
-                INFO("DCI msg found in location L=%d, ncce=%d, size=%d belongs to the common SS and is format %s",
-                     dci_msg[nof_dci].location.L,
-                     dci_msg[nof_dci].location.ncce,
-                     dci_msg[nof_dci].nof_bits,
-                     srsran_dci_format_string_short(dci_msg[nof_dci].format));
-              }
-            }
-          }
-
-          // If found a Format0, save it for later
-          if (dci_msg[nof_dci].format == SRSRAN_DCI_FORMAT0) {
-            // If there is space for accumulate another UL DCI dci and it was not detected before, then store it
-            if (q->pending_ul_dci_count < SRSRAN_MAX_DCI_MSG &&
-                !find_dci(q->pending_ul_dci_msg, q->pending_ul_dci_count, &dci_msg[nof_dci])) {
-              srsran_dci_msg_t* pending_ul_dci_msg = &q->pending_ul_dci_msg[q->pending_ul_dci_count];
-              *pending_ul_dci_msg                  = dci_msg[nof_dci];
-              q->pending_ul_dci_count++;
-            }
-            /* Check if the DCI is duplicated */
-          } else if (!find_dci(dci_msg, (uint32_t)nof_dci, &dci_msg[nof_dci]) &&
-                     !find_dci(q->pending_ul_dci_msg, q->pending_ul_dci_count, &dci_msg[nof_dci])) {
-            // Save message and continue with next location
-            if (q->nof_allocated_locations < SRSRAN_MAX_DCI_MSG) {
-              q->allocated_locations[q->nof_allocated_locations] = dci_msg[nof_dci].location;
-              q->nof_allocated_locations++;
-            }
-            nof_dci++;
+          if (dci_blind_search_accept(q, sf, dci_cfg, dci_msg, &nof_dci, search_in_common)) {
             break;
-          } else {
-            INFO("Ignoring message with size %d, already decoded", dci_msg[nof_dci].nof_bits);
           }
         }
       }
@@ -1072,6 +1301,183 @@ int srsran_ue_dl_find_dl_dci_formats(srsran_ue_dl_t*            q,
    * array. Skip the pass instead, and let the caller see that it was skipped. */
   if (search_common_1a && nof_msg < SRSRAN_MAX_DCI_MSG) {
     const int ret = find_dci_ss(q, sf, dl_cfg, rnti, &dci_msg[nof_msg], common_formats, 1, false);
+    if (ret < 0) {
+      return ret;
+    }
+    nof_msg += ret;
+  }
+
+  if (nof_msg > SRSRAN_MAX_DCI_MSG) {
+    nof_msg = SRSRAN_MAX_DCI_MSG;
+  }
+
+  for (int i = 0; i < nof_msg; i++) {
+    if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, &dl_cfg->cfg.dci, &dci_msg[i], &dci_dl[i])) {
+      ERROR("Unpacking DL DCI");
+      return SRSRAN_ERROR;
+    }
+  }
+  return nof_msg;
+}
+
+/* find_dci_ss(), but searching through the solve-first index. Builds the same search space
+ * (and refreshes current_ss_common, which the accept rules read) the same way. */
+static int find_dci_ss_solved(srsran_ue_dl_t*            q,
+                              srsran_dl_sf_cfg_t*        sf,
+                              srsran_ue_dl_cfg_t*        cfg,
+                              uint16_t                   rnti,
+                              srsran_dci_msg_t*          dci_msg,
+                              const srsran_dci_format_t* formats,
+                              uint32_t                   nof_formats,
+                              bool                       is_ue)
+{
+  dci_blind_search_t search_space = {};
+
+  uint32_t         cfi     = sf->cfi;
+  srsran_dci_cfg_t dci_cfg = cfg->cfg.dci;
+
+  if (!SRSRAN_CFI_ISVALID(cfi)) {
+    ERROR("Invalid CFI=%d", cfi);
+    return SRSRAN_ERROR_INVALID_INPUTS;
+  }
+
+  q->current_ss_common.nof_locations =
+      srsran_pdcch_common_locations(&q->pdcch, q->current_ss_common.loc, SRSRAN_MAX_CANDIDATES_COM, cfi);
+
+  if (is_ue) {
+    search_space.nof_locations =
+        srsran_pdcch_ue_locations(&q->pdcch, sf, search_space.loc, SRSRAN_MAX_CANDIDATES_UE, rnti);
+  } else {
+    srsran_dci_cfg_set_common_ss(&dci_cfg);
+    search_space = q->current_ss_common;
+  }
+
+  search_space.nof_formats = nof_formats;
+  memcpy(search_space.formats, formats, nof_formats * sizeof(srsran_dci_format_t));
+
+  return dci_blind_search_solved(q, sf, rnti, &search_space, &dci_cfg, dci_msg, cfg->cfg.dci_common_ss);
+}
+
+int srsran_ue_dl_solve_first(srsran_ue_dl_t*            q,
+                             srsran_dl_sf_cfg_t*        sf,
+                             srsran_ue_dl_cfg_t*        dl_cfg,
+                             const srsran_dci_format_t* ue_formats,
+                             uint32_t                   nof_ue_formats)
+{
+  if (q == NULL || sf == NULL || dl_cfg == NULL || ue_formats == NULL || nof_ue_formats == 0 ||
+      nof_ue_formats > SRSRAN_MAX_FORMATS) {
+    return SRSRAN_ERROR_INVALID_INPUTS;
+  }
+  if (q->solved == NULL) {
+    q->solved      = calloc(UE_DL_SOLVED_MAX, sizeof(ue_dl_solved_t));
+    q->solved_head = malloc(65536 * sizeof(int16_t));
+    if (q->solved == NULL || q->solved_head == NULL) {
+      return SRSRAN_ERROR;
+    }
+    memset(q->solved_head, 0xff, 65536 * sizeof(int16_t)); /* -1: no candidate */
+  }
+  /* Unlink last subframe's entries; only the heads it touched need resetting. */
+  for (uint32_t i = 0; i < q->nof_solved; i++) {
+    q->solved_head[q->solved[i].rnti] = -1;
+  }
+  q->nof_solved = 0;
+  q->solved_ok  = false;
+
+  set_mi_value(q, sf, dl_cfg);
+
+  /* The (dci_cfg, format) pairs find_dci_ss() uses -- the UE formats under dl_cfg->cfg.dci
+   * and Format1A under the common-SS config -- so every (location, size) a per-RNTI search
+   * can decode is decoded here, under the same cache key. */
+  srsran_dci_cfg_t ue_cfg  = dl_cfg->cfg.dci;
+  srsran_dci_cfg_t css_cfg = dl_cfg->cfg.dci;
+  srsran_dci_cfg_set_common_ss(&css_cfg);
+  srsran_dci_cfg_t*   cfgs[SRSRAN_MAX_FORMATS + 1];
+  srsran_dci_format_t fmts[SRSRAN_MAX_FORMATS + 1];
+  uint32_t            nof_tries = 0;
+  for (uint32_t f = 0; f < nof_ue_formats; f++) {
+    cfgs[nof_tries] = &ue_cfg;
+    fmts[nof_tries] = ue_formats[f];
+    nof_tries++;
+  }
+  cfgs[nof_tries] = &css_cfg;
+  fmts[nof_tries] = SRSRAN_DCI_FORMAT1A;
+  nof_tries++;
+
+  /* Every aligned candidate. UE-specific and common search-space candidates are all of the
+   * form ncce = k * 2^L with ncce + 2^L <= NOF_CCE, so this covers every one of them. */
+  const int nof_cce = srsran_pdcch_get_nof_cce_yx(&q->pdcch, sf->cfi);
+  for (uint32_t L = 0; L < 4; L++) {
+    const int step = 1 << L;
+    for (int ncce = 0; ncce + step <= nof_cce; ncce += step) {
+      for (uint32_t t = 0; t < nof_tries; t++) {
+        srsran_dci_msg_t msg = {};
+        msg.location.L       = L;
+        msg.location.ncce    = (uint32_t)ncce;
+        msg.format           = fmts[t];
+        msg.rnti             = 0;
+        if (srsran_pdcch_decode_msg(&q->pdcch, sf, cfgs[t], &msg) != SRSRAN_SUCCESS || msg.nof_bits == 0) {
+          continue; /* low-LLR skip: decodes to nothing, here or in a per-RNTI search */
+        }
+        if (q->nof_solved >= UE_DL_SOLVED_MAX) {
+          return SRSRAN_ERROR; /* solved_ok stays false: every query falls back to the full search */
+        }
+        ue_dl_solved_t* e        = &q->solved[q->nof_solved];
+        e->rnti                  = msg.rnti;
+        e->ncce                  = (uint16_t)ncce;
+        e->L                     = (uint8_t)L;
+        e->nof_bits              = (uint16_t)msg.nof_bits;
+        e->next                  = q->solved_head[msg.rnti];
+        q->solved_head[msg.rnti] = (int16_t)q->nof_solved;
+        q->nof_solved++;
+      }
+    }
+  }
+  q->solved_gen = q->pdcch.dec_gen;
+  q->solved_ok  = true;
+  return (int)q->nof_solved;
+}
+
+bool srsran_ue_dl_solved_has(srsran_ue_dl_t* q, uint16_t rnti)
+{
+  if (q == NULL || !solved_valid(q)) {
+    return true;
+  }
+  return q->solved_head[rnti] >= 0;
+}
+
+int srsran_ue_dl_find_dl_dci_formats_solved(srsran_ue_dl_t*            q,
+                                            srsran_dl_sf_cfg_t*        sf,
+                                            srsran_ue_dl_cfg_t*        dl_cfg,
+                                            uint16_t                   rnti,
+                                            const srsran_dci_format_t* ue_formats,
+                                            uint32_t                   nof_ue_formats,
+                                            bool                       search_common_1a,
+                                            srsran_dci_dl_t            dci_dl[SRSRAN_MAX_DCI_MSG])
+{
+  if (q == NULL || sf == NULL || dl_cfg == NULL || ue_formats == NULL || nof_ue_formats == 0 ||
+      nof_ue_formats > SRSRAN_MAX_FORMATS) {
+    return SRSRAN_ERROR_INVALID_INPUTS;
+  }
+  if (!solved_valid(q)) {
+    return srsran_ue_dl_find_dl_dci_formats(q, sf, dl_cfg, rnti, ue_formats, nof_ue_formats, search_common_1a, dci_dl);
+  }
+
+  /* Everything below mirrors srsran_ue_dl_find_dl_dci_formats() line for line, with
+   * find_dci_ss_solved() in place of find_dci_ss(). */
+  set_mi_value(q, sf, dl_cfg);
+
+  srsran_dci_msg_t dci_msg[SRSRAN_MAX_DCI_MSG] = {};
+
+  q->pending_ul_dci_count    = 0;
+  q->nof_allocated_locations = 0;
+
+  int nof_msg = find_dci_ss_solved(q, sf, dl_cfg, rnti, dci_msg, ue_formats, nof_ue_formats, true);
+  if (nof_msg < 0) {
+    return nof_msg;
+  }
+
+  if (search_common_1a && nof_msg < SRSRAN_MAX_DCI_MSG) {
+    const int ret = find_dci_ss_solved(q, sf, dl_cfg, rnti, &dci_msg[nof_msg], common_formats, 1, false);
     if (ret < 0) {
       return ret;
     }

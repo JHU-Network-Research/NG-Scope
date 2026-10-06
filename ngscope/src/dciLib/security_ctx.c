@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "ngscope/hdr/dciLib/security_ctx.h"
 #include "ngscope/hdr/dciLib/mac_pcap.h"
@@ -17,6 +18,9 @@ extern bool debug;
  * turns an UNKNOWN into a PRE or a POST. RRC setup plus security activation is a couple of
  * round trips to the core, so ten seconds is generous. */
 #define SEC_TRACK_WINDOW_US (10 * 1000000ULL)
+/* How long past its window an entry stays in active[], so threads a few subframes behind the
+ * one that would expire it still find it. Far above the decoders in flight (milliseconds). */
+#define SEC_EXPIRY_GRACE_US (1 * 1000000ULL)
 
 typedef struct {
     bool     anchored;      /* a RAR was seen for this RNTI */
@@ -29,6 +33,11 @@ typedef struct {
     /* Anchored by a passing DL-SCH CRC rather than by a RAR on this cell: a UE that handed
      * in, or one already connected when the capture began. */
     bool     crc_only;
+    /* The anchor before rar_ct, if any -- the previous holder of this RNTI. Kept so a scan of
+     * a subframe that falls before rar_ct still sees the anchor that was current then, even
+     * when a thread running ahead registered the newer one first. */
+    bool     has_prev;
+    uint64_t prev_ct;
 } sec_rnti_t;
 
 /* Cap on UEs tracked concurrently. Only a backstop against a pathological cell, so it must
@@ -72,7 +81,8 @@ typedef struct {
      * timeout. backwards is neither: it means a decoder thread working on an older subframe
      * than the one that anchored the RAR dropped a UE that had only just arrived. */
     uint64_t   nof_exp_window;
-    uint64_t   nof_exp_backwards;
+    uint64_t   nof_exp_backwards;   /* (rnti, subframe) scanned under the previous anchor */
+    uint64_t   nof_future_skipped;  /* (rnti, subframe) skipped: its anchor is later */
 
     /* Which MCS->TBS table the cell's transport blocks actually needed. nof_tb_retried is the
      * measurement: blocks that only passed CRC on the table enable_256qam did not select. */
@@ -82,6 +92,17 @@ typedef struct {
     /* Of nof_tb_decoded, how many were the second transport block of a two-codeword grant --
      * the share of the pcap that only exists because TB1 is decoded at all. */
     uint64_t   nof_tb_second;
+    /* tracked_search: mode in effect, solve-first prefilter and PDCCH memo totals. */
+    int        search_mode;
+    uint64_t   nof_pf_tracked;
+    uint64_t   nof_pf_skipped;
+    uint64_t   nof_pf_verified;
+    uint64_t   nof_pdcch_hits;
+    uint64_t   nof_pdcch_misses;
+    uint64_t   nof_pdcch_verified;
+    uint64_t   nof_fft_computed;
+    uint64_t   nof_fft_reused;
+    uint64_t   nof_fft_verified;
 
     /* What the targeted search actually looked at. nof_scan_no_dci was a bare `continue`
      * before there was anywhere to count it. */
@@ -159,14 +180,31 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
     sec_ctx_t* q = &sec_ctx[rf_idx];
 
     pthread_mutex_lock(&sec_mutex[rf_idx]);
-    /* Deliberately unconditional: a RAR re-arms the identity. The RACH filter keeps only
-     * the first sighting, which is right for a membership test but wrong here -- an RNTI
-     * handed out again later belongs to a different UE with a different boundary. */
-    memset(&q->rnti[rnti], 0, sizeof(sec_rnti_t));
-    q->rnti[rnti].anchored = true;
-    q->rnti[rnti].rar_us   = ts_us;
-    q->rnti[rnti].rar_tti  = tti;
-    q->rnti[rnti].rar_ct   = collection_time;
+    /* A RAR re-arms the identity. The RACH filter keeps only the first sighting, which is
+     * right for a membership test but wrong here -- an RNTI handed out again later belongs to
+     * a different UE with a different boundary.
+     *
+     * Decoder threads register anchors out of order, so this keeps the newest anchor as the
+     * current one and the one before it as prev, whichever arrives first: the end state is
+     * the same either way, which is what makes the tracked set independent of thread timing. */
+    sec_rnti_t* r = &q->rnti[rnti];
+    if (r->anchored && collection_time < r->rar_ct) {
+        /* An older RAR, registered after a newer one: it is the previous session. */
+        if (!r->has_prev || collection_time > r->prev_ct) {
+            r->has_prev = true;
+            r->prev_ct  = collection_time;
+        }
+    } else {
+        if (r->anchored) {
+            r->has_prev = true;
+            r->prev_ct  = r->rar_ct;
+        }
+        r->anchored = true;
+        r->crc_only = false;
+        r->rar_us   = ts_us;
+        r->rar_tti  = tti;
+        r->rar_ct   = collection_time;
+    }
     q->nof_rar++;
 
     bool listed = false;
@@ -185,7 +223,7 @@ void ngscope_sec_note_rar(int rf_idx, uint16_t rnti, uint32_t tti, uint64_t ts_u
              * then looks exactly like one that never reached security. */
             int oldest = 0;
             for (int i = 1; i < SEC_MAX_ACTIVE; i++) {
-                if (q->rnti[q->active[i]].rar_us < q->rnti[q->active[oldest]].rar_us) {
+                if (q->rnti[q->active[i]].rar_ct < q->rnti[q->active[oldest]].rar_ct) {
                     oldest = i;
                 }
             }
@@ -206,10 +244,24 @@ void ngscope_sec_note_crc_confirmed(int rf_idx, uint16_t rnti, uint32_t tti, uin
     sec_ctx_t* q = &sec_ctx[rf_idx];
 
     pthread_mutex_lock(&sec_mutex[rf_idx]);
-    if (q->rnti[rnti].anchored) {
-        /* Already anchored -- by a RAR, or by an earlier confirmation. Leave it: a RAR is the
-         * stronger claim and carries the TTI the offline tool joins sessions on, and
-         * re-arming on every decoded block would reset the tracking window forever. */
+    sec_rnti_t* r = &q->rnti[rnti];
+    if (r->anchored && collection_time >= r->rar_ct) {
+        /* Already anchored at or before this block -- by a RAR, or by an earlier
+         * confirmation. Leave it: a RAR is the stronger claim and carries the TTI the offline
+         * tool joins sessions on, and re-arming on every decoded block would reset the
+         * tracking window forever. */
+        pthread_mutex_unlock(&sec_mutex[rf_idx]);
+        return;
+    }
+    if (r->anchored) {
+        /* The current anchor lies after this block: a thread running ahead registered a
+         * newer RAR for this RNTI first. This confirmation belongs to the previous holder,
+         * exactly as if it had been registered in order. */
+        if (!r->has_prev || r->prev_ct > collection_time) {
+            r->has_prev = true;
+            r->prev_ct  = collection_time;
+            q->nof_crc_confirmed++;
+        }
         pthread_mutex_unlock(&sec_mutex[rf_idx]);
         return;
     }
@@ -235,7 +287,7 @@ void ngscope_sec_note_crc_confirmed(int rf_idx, uint16_t rnti, uint32_t tti, uin
         } else {
             int oldest = 0;
             for (int i = 1; i < SEC_MAX_ACTIVE; i++) {
-                if (q->rnti[q->active[i]].rar_us < q->rnti[q->active[oldest]].rar_us) {
+                if (q->rnti[q->active[i]].rar_ct < q->rnti[q->active[oldest]].rar_ct) {
                     oldest = i;
                 }
             }
@@ -246,7 +298,7 @@ void ngscope_sec_note_crc_confirmed(int rf_idx, uint16_t rnti, uint32_t tti, uin
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
-int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out)
+int ngscope_sec_tracked(int rf_idx, uint64_t now_ct, uint16_t* out, int max_out)
 {
     if (!rf_idx_valid(rf_idx) || out == NULL || max_out <= 0) {
         return 0;
@@ -267,23 +319,45 @@ int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out)
          * arrival rate x window alone), and the SMC exit was taken via note_smc rather than
          * here, so nof_exp_smc always read 0.
          *
-         * now_us is the timestamp of the subframe the calling decoder thread happens to be
+         * now_ct is the collection time of the subframe the calling decoder thread happens to be
          * working on, and threads run subframes out of order -- so it can sit behind a RAR
          * anchored moments ago by a thread that was ahead. That must not expire anything: an
          * entry newer than the current subframe cannot have exceeded the window. It used to,
          * because the guard against unsigned underflow in the subtraction below was written
          * as an expiry condition, and removal from active[] is permanent until the next RAR.
          * Measured over 60 s: 117 of 221 tracking exits were this, against 104 real timeouts. */
-        const bool behind     = now_us < r->rar_us;
-        const bool exp_window = !behind && r->anchored &&
-                                (now_us - r->rar_us) > SEC_TRACK_WINDOW_US;
-        bool expired = !r->anchored || exp_window;
-        if (behind && !expired) {
-            q->nof_exp_backwards++;   /* counted as an averted drop, not an exit */
+        /* Radio clock, not wall clock. The window was measured on the host's decode-time
+         * timestamp, which in replay runs at decode speed: the same capture tracked each UE
+         * for roughly 9 s of radio time on an idle machine and 6.5 s on a busy one, and the
+         * targeted search covered 604k vs 397k (UE, subframe) pairs. collection_time comes
+         * from the receiver's sample clock in every mode, and it is the clock
+         * tools/security_scan.py already uses for window_end_ct. */
+        /* Which anchor governs this subframe: the newest one at or before it. An anchor
+         * after it -- registered already by a thread running ahead -- is ignored, and the one
+         * before it (prev) used instead, so the answer depends only on now_ct and not on how
+         * far other threads have got. With the anchor barrier every anchor at or before
+         * now_ct is registered by the time this runs.
+         *
+         * Expiry is only removal from active[], and it waits a grace second past the window
+         * so a thread slightly behind -- at most a few subframes -- still finds the entry. */
+        bool       emit    = false;
+        const bool expired = !r->anchored ||
+                             (now_ct >= r->rar_ct && (now_ct - r->rar_ct) > SEC_TRACK_WINDOW_US + SEC_EXPIRY_GRACE_US);
+        if (r->anchored && now_ct >= r->rar_ct) {
+            emit = (now_ct - r->rar_ct) <= SEC_TRACK_WINDOW_US;
+        } else if (r->anchored && r->has_prev && now_ct >= r->prev_ct) {
+            emit = (now_ct - r->prev_ct) <= SEC_TRACK_WINDOW_US;
+            q->nof_exp_backwards++; /* scanned under the previous anchor */
+        } else if (r->anchored) {
+            q->nof_future_skipped++; /* anchor lies after this subframe: not this UE yet */
         }
         if (expired) {
-            if (exp_window) q->nof_exp_window++;
+            if (r->anchored) q->nof_exp_window++;
             q->active[i] = q->active[--q->nof_active];
+            continue;
+        }
+        if (!emit) {
+            i++;
             continue;
         }
         if (n < max_out) {
@@ -433,6 +507,102 @@ void ngscope_sec_count_tb_table(int rf_idx, bool retried)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+#define SEC_BARRIER_RING 4096 /* far above the decoders in flight (<= MAX_NOF_DCI_DECODER) */
+static pthread_mutex_t bar_mutex[MAX_NOF_RF_DEV] = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER,
+                                                    PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER};
+static pthread_cond_t  bar_cond[MAX_NOF_RF_DEV]  = {PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER,
+                                                    PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER};
+static uint64_t        bar_low[MAX_NOF_RF_DEV];   /* every seq below this has marked */
+static uint8_t         bar_done[MAX_NOF_RF_DEV][SEC_BARRIER_RING];
+static uint64_t        bar_waits[MAX_NOF_RF_DEV];
+static uint64_t        bar_timeouts[MAX_NOF_RF_DEV];
+
+void ngscope_sec_anchor_done(int rf_idx, uint64_t seq)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&bar_mutex[rf_idx]);
+    if (seq >= bar_low[rf_idx] && seq < bar_low[rf_idx] + SEC_BARRIER_RING) {
+        bar_done[rf_idx][seq % SEC_BARRIER_RING] = 1;
+        while (bar_done[rf_idx][bar_low[rf_idx] % SEC_BARRIER_RING]) {
+            bar_done[rf_idx][bar_low[rf_idx] % SEC_BARRIER_RING] = 0;
+            bar_low[rf_idx]++;
+        }
+        pthread_cond_broadcast(&bar_cond[rf_idx]);
+    }
+    pthread_mutex_unlock(&bar_mutex[rf_idx]);
+}
+
+bool ngscope_sec_anchor_wait(int rf_idx, uint64_t seq)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return true;
+    }
+    bool ok = true;
+    pthread_mutex_lock(&bar_mutex[rf_idx]);
+    bar_waits[rf_idx]++;
+    while (bar_low[rf_idx] < seq) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 10;
+        if (pthread_cond_timedwait(&bar_cond[rf_idx], &bar_mutex[rf_idx], &ts) != 0 &&
+            bar_low[rf_idx] < seq) {
+            bar_timeouts[rf_idx]++;
+            ok = false;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&bar_mutex[rf_idx]);
+    return ok;
+}
+
+void ngscope_sec_note_search_mode(int rf_idx, int mode)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].search_mode = mode;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_prefilter(int rf_idx, int nof_tracked, int nof_skipped, int nof_verified)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_pf_tracked  += (uint64_t)nof_tracked;
+    sec_ctx[rf_idx].nof_pf_skipped  += (uint64_t)nof_skipped;
+    sec_ctx[rf_idx].nof_pf_verified += (uint64_t)nof_verified;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_add_fft_reuse(int rf_idx, uint64_t computed, uint64_t reused, uint64_t verified)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_fft_computed += computed;
+    sec_ctx[rf_idx].nof_fft_reused   += reused;
+    sec_ctx[rf_idx].nof_fft_verified += verified;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_add_pdcch_cache(int rf_idx, uint64_t hits, uint64_t misses, uint64_t verified)
+{
+    if (!rf_idx_valid(rf_idx)) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_pdcch_hits     += hits;
+    sec_ctx[rf_idx].nof_pdcch_misses   += misses;
+    sec_ctx[rf_idx].nof_pdcch_verified += verified;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 void ngscope_sec_count_tb_second(int rf_idx)
 {
     if (!rf_idx_valid(rf_idx)) {
@@ -544,12 +714,21 @@ void ngscope_sec_report(int rf_idx)
         printf(", no UE dropped for want of a slot");
     }
     printf("\n");
-    printf("SECURITY (cell %d): tracking exits -- %llu on the %d s window; %llu drops averted "
-           "where a decoder thread was behind the RAR\n",
+    printf("SECURITY (cell %d): tracking exits -- %llu on the %d s window; %llu (rnti, subframe) "
+           "scanned under an RNTI's previous anchor and %llu skipped because its anchor is "
+           "later than the subframe (both are thread order made harmless, not loss)\n",
            rf_idx,
            (unsigned long long)q->nof_exp_window,
            (int)(SEC_TRACK_WINDOW_US / 1000000ULL),
-           (unsigned long long)q->nof_exp_backwards);
+           (unsigned long long)q->nof_exp_backwards,
+           (unsigned long long)q->nof_future_skipped);
+    if (bar_waits[rf_idx] > 0) {
+        printf("SECURITY (cell %d): anchor barrier -- %llu subframe scans waited for every earlier "
+               "subframe's anchors; %llu safety timeouts%s\n",
+               rf_idx, (unsigned long long)bar_waits[rf_idx],
+               (unsigned long long)bar_timeouts[rf_idx],
+               bar_timeouts[rf_idx] ? " -- THOSE SCANS MAY HAVE MISSED AN ANCHOR" : "");
+    }
 
     /* Which MCS->TBS table the traffic actually used -- a decode measurement, so it stays
      * here rather than moving offline. A block either passes its CRC on a table or it does
@@ -571,6 +750,46 @@ void ngscope_sec_report(int rf_idx)
             printf(" -- no retry ran (qam_retry off, or live capture), so the table is untested");
         }
         printf("\n");
+    }
+
+    /* Which tracked search produced this run, and what it saved. All three modes return the
+     * same DCIs; the verify counts say whether that was checked on this run. */
+    {
+        static const char* names[] = {"per_rnti", "cache", "solve_first"};
+        const int m = (q->search_mode >= 0 && q->search_mode <= 2) ? q->search_mode : 0;
+        printf("SECURITY (cell %d): tracked search = %s", rf_idx, names[m]);
+        const uint64_t dec = q->nof_pdcch_hits + q->nof_pdcch_misses;
+        if (dec > 0) {
+            printf(" -- PDCCH decodes %llu computed, %llu (%.1f%%) served from the per-subframe "
+                   "cache",
+                   (unsigned long long)q->nof_pdcch_misses, (unsigned long long)q->nof_pdcch_hits,
+                   100.0 * (double)q->nof_pdcch_hits / (double)dec);
+        }
+        if (q->nof_pf_tracked > 0) {
+            printf("; solve-first skipped %llu of %llu (rnti, subframe) searches (%.1f%%)",
+                   (unsigned long long)q->nof_pf_skipped, (unsigned long long)q->nof_pf_tracked,
+                   100.0 * (double)q->nof_pf_skipped / (double)q->nof_pf_tracked);
+        }
+        printf("\n");
+        if (q->nof_fft_computed + q->nof_fft_reused > 0) {
+            printf("SECURITY (cell %d): FFT + channel estimation -- %llu computed, %llu reused "
+                   "(the SIB, RAR and blind-search steps share one per subframe)\n",
+                   rf_idx, (unsigned long long)q->nof_fft_computed,
+                   (unsigned long long)q->nof_fft_reused);
+        }
+        if (q->nof_fft_verified > 0) {
+            printf("SECURITY (cell %d): verify mode -- %llu reused FFT + channel estimates "
+                   "recomputed and compared byte for byte (symbols, estimates, LLRs, CFI): "
+                   "0 mismatches (any mismatch aborts the run)\n",
+                   rf_idx, (unsigned long long)q->nof_fft_verified);
+        }
+        if (q->nof_pdcch_verified > 0 || q->nof_pf_verified > 0) {
+            printf("SECURITY (cell %d): verify mode -- %llu cached decodes re-checked against a "
+                   "fresh decode, and %llu solve-first results compared with srsRAN's per-RNTI "
+                   "search: 0 mismatches (any mismatch aborts the run)\n",
+                   rf_idx, (unsigned long long)q->nof_pdcch_verified,
+                   (unsigned long long)q->nof_pf_verified);
+        }
     }
 
     /* How much of the cell the targeted search actually looked at.
