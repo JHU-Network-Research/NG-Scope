@@ -33,7 +33,14 @@ PRB_RE = re.compile(r"^\s*-\s*PRB:\s*(\d+)")
 # The receive path is up. On its own this is NOT proof of a lock: ngscope also prints it
 # while tearing down, so a channel with no cell would appear to lock at the exact moment the
 # give-up timer fired. Lock therefore requires a starred Found Cell_id first (see _on_lock).
-READY_RE = re.compile(r"Radio is ready|ALL THREE CELL ARE READY")
+#
+# Record mode never prints either of those: ngscope_main.c does not start the status tracker
+# there, and that thread is what says "Radio is ready". The task scheduler's own line after
+# cell search and MIB is printed in every mode, so it is accepted too -- but only with a
+# non-zero PRB count, which is what the status tracker waits for anyway.
+READY_RE = re.compile(
+    r"Radio is ready|ALL THREE CELL ARE READY|Finished copying to cell:\s*\d+\s+prb:\s*[1-9]"
+)
 
 
 class Sweep:
