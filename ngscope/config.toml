@@ -118,7 +118,7 @@ rf_freq = 2680_000_000
 # Force the PSS sequence (0-2), or -1 to search all three.
 N_id_2 = -1
 
-# Passed straight to the SDR driver, e.g. "type=b200,clock_source=external". Max 100 chars.
+# Passed straight to the SDR driver, e.g. "type=b200,clock=external". Max 100 chars.
 rf_args = "type=b200"
 
 # DCI decoder threads for this cell. Max 8. Too few and subframes are dropped in live

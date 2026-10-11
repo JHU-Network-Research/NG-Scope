@@ -236,7 +236,7 @@ RF_DEV = [
         "str",
         "",
         "RF args",
-        'Passed straight to the SDR driver, e.g. "type=b200,clock_source=external".',
+        'Passed straight to the SDR driver, e.g. "type=b200,clock=external".',
         maxlen=RF_ARGS_MAX_LEN,
     ),
     _f(

@@ -638,6 +638,12 @@ int stop_record(){
     pthread_join(flush_thread, NULL);  // no cancel needed
     if (debug)
         printf("DEBUG: final flush done\n");
+    /* Always printed, zero included: a recording with no refused inserts should say so. */
+    printf("RECORD: %lu inserts (%.1f MB) refused because the buffer was full -- the disk fell "
+           "%.0f GB behind%s\n",
+           (unsigned long)record_buf.nof_dropped_inserts,
+           record_buf.nof_dropped_bytes / 1e6, record_buf.capacity / 1e9,
+           record_buf.nof_dropped_inserts ? "; the file is missing data at those points" : "");
     record_ring_buffer_destroy(&record_buf);
 
     return 0;
@@ -691,9 +697,11 @@ void flush_record(void *arg){
             pthread_cond_wait(&buf->cond,&buf->mutex);
         }
         // printf("[FLUSH] out of wait\n");
-        record_ring_buffer_flush(buf);
-
+        /* Released before flushing: the flush takes the lock itself only around its
+         * bookkeeping, so the receive thread can keep inserting while the disk write runs. */
         pthread_mutex_unlock(&buf->mutex);
+
+        record_ring_buffer_flush(buf);
 
     }
     pthread_cleanup_pop((void*)buf);
@@ -707,9 +715,7 @@ void flush_thread_cleanup(void *arg){
 
     record_ring_buffer_t *buf = (record_ring_buffer_t *) arg;
 
-    pthread_mutex_lock(&buf->mutex);
     record_ring_buffer_flush(buf);
-    pthread_mutex_unlock(&buf->mutex);
     // pthread_mutex_unlock(&buf->mutex);
 
 }
