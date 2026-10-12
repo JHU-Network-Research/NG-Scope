@@ -47,6 +47,11 @@ typedef struct{
 }cell_args_t;
 
 void* task_scheduler_thread(void* p);
+
+/* Decoder threads publish the reference-signal CFO residual they measured on a subframe-5
+ * decode (srsran chest_res.cfo, subcarrier units); the scheduler thread, which owns ue_sync,
+ * feeds it back with srsran_ue_sync_set_cfo_ref(). See task_scheduler.c. */
+void ngscope_sync_publish_cfo_ref(int rf_idx, float cfo);
  
 #ifdef __cplusplus
 }

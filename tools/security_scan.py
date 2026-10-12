@@ -829,6 +829,54 @@ def _patch_epb(body, endian, verdict):
     return bytes(out)
 
 
+def zero_payload_frames(path, frames):
+    """Frame numbers whose MAC PDU is all zeros. These are never real and must not count.
+
+    A transport block of all zeros matches its CRC24A (and per-code-block CRC24B) trivially,
+    because the CRCs start from zero, and all zeros is what the turbo decoder returns for a
+    retransmission (rv=2, high MCS) that carried none of the systematic bits, decoded
+    without its first transmission. So the CRC "oracle" admits them, and Wireshark then reads
+    zeros as LCID 0 / DL-CCCH choice 0 -- an RRCConnectionReestablishment, i.e. a phantom
+    `reused`. Measured on ny_87_broadway/buffer/earfcn-650: 38 of 59 frames, all src=probe.
+    ngscope rejects these at decode time now; this protects pcaps written before that.
+
+    A real eNB never sends one -- MAC padding is LCID 31 -- so the test is exact. The MAC PDU
+    is the trailing tbs/8 bytes of each packet (mac_pcap.c appends the payload after the
+    context header), so no framing-tag parsing is needed.
+    """
+    tbs_by_frame = {f["frame"]: f["tbs"] for f in frames if f.get("tbs")}
+    zero = set()
+    with open(path, "rb") as src:
+        head = src.read(12)
+        if len(head) < 12 or struct.unpack("<I", head[:4])[0] != PCAPNG_SHB:
+            raise ValueError(f"{path}: not a pcapng section header")
+        endian = "<" if head[8:12] == b"\x4d\x3c\x2b\x1a" else ">"
+        total = struct.unpack(endian + "I", head[4:8])[0]
+        src.read(total - 12)
+        n = 0
+        while True:
+            hdr = src.read(8)
+            if len(hdr) < 8:
+                break
+            btype, total = struct.unpack(endian + "II", hdr)
+            if total < 12:
+                break
+            body = src.read(total - 8)
+            if len(body) < total - 8:
+                break
+            if btype != PCAPNG_EPB or len(body) < 20:
+                continue
+            n += 1
+            nbytes = (tbs_by_frame.get(n) or 0) // 8
+            caplen = struct.unpack(endian + "I", body[12:16])[0]
+            if nbytes <= 0 or nbytes > caplen:
+                continue
+            data = body[20:20 + caplen]
+            if not any(data[caplen - nbytes:]):
+                zero.add(n)
+    return zero
+
+
 def patch_pcap(path, verdict_by_frame):
     """Rewrite sec= in place, keyed on frame number.
 
@@ -928,6 +976,13 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
     rows = run_tshark(work)
     assert_dissected(rows, work)
     events, frames = build_events(rows)
+    # Before anything is built from them: an all-zero block would otherwise create a
+    # CRC-anchored session for a fabricated RNTI and a phantom reestablishment in it. The
+    # frames stay in the file (sec= is patched to "unknown") but are counted and excluded.
+    zero = zero_payload_frames(work, frames)
+    zero_by_src = Counter(f["src"] or "?" for f in frames if f["frame"] in zero)
+    frames = [f for f in frames if f["frame"] not in zero]
+    events = [e for e in events if e["frame"] not in zero]
     anchors, rar_path = load_rar_anchors(run_dir, rf_idx)
     rar_rntis = {a["rnti"] for a in anchors}
 
@@ -1095,10 +1150,13 @@ def scan_cell(run_dir, pcap, rf_idx, out_dir, do_reorder=True, do_verify=True):
         "rf_idx": rf_idx,
         "pcap": os.path.basename(pcap),
         "pcap_md5": md5(pcap),
-        "frames": len(frames),
+        "frames": len(frames) + len(zero),
         "reorder": {"status": status, "out_of_order": out_of_order},
         "rar_crosscheck": rar_check,
         "comment_vs_dissection_mismatches": mismatch,
+        # All-zero MAC PDUs dropped before sessions were built; see zero_payload_frames().
+        # Always present, so 0 reads as "checked, none" rather than "never checked".
+        "zero_payload_frames_excluded": {"total": len(zero), "by_src": dict(zero_by_src)},
         "sec_field_patched": patched,
         "verify": verify,
         "sec_distribution": dict(Counter(verdicts.values())),

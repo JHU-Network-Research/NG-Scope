@@ -61,6 +61,10 @@ void ngscope_sec_count_tb_table(int rf_idx, bool retried);
 /* That block was the second transport block of a two-codeword grant. */
 void ngscope_sec_count_tb_second(int rf_idx);
 
+/* n decoded codewords were rejected because they were all zeros: they match a zero-initialised
+ * CRC without carrying anything, so they must never be counted or written as decoded blocks. */
+void ngscope_sec_count_tb_zero(int rf_idx, int n);
+
 /* A retry was actually attempted. Counted separately so the report can tell "tested, and the
  * configured table fits" from "never tested" -- with qam_retry off the two are otherwise
  * indistinguishable, and claiming the former would be a fabricated result. */

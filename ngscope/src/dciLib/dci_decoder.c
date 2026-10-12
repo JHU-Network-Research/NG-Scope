@@ -120,7 +120,9 @@ int decoder_idx
 
     /************************* Init ue_dl_cfg **************************/
     srsran_chest_dl_cfg_t chest_pdsch_cfg = {};
-    chest_pdsch_cfg.cfo_estimate_enable   = prog_args.enable_cfo_ref;
+    /* Always estimated: the residual feeds the synchronizer's CFO loop (see
+     * ngscope_sync_publish_cfo_ref). Estimation only -- nothing here corrects samples. */
+    chest_pdsch_cfg.cfo_estimate_enable   = true;
     chest_pdsch_cfg.cfo_estimate_sf_mask  = 1023;
     chest_pdsch_cfg.estimator_alg         = srsran_chest_dl_str2estimator_alg(prog_args.estimator_alg);
     chest_pdsch_cfg.sync_error_enable     = true;
@@ -314,7 +316,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	//First, we decode SIB1 and SIB2
 	srsran_chest_dl_cfg_t chest_pdsch_cfg = {};
-    chest_pdsch_cfg.cfo_estimate_enable   = dci_decoder->prog_args.enable_cfo_ref;
+    chest_pdsch_cfg.cfo_estimate_enable   = true; /* see dci_decoder_init */
     chest_pdsch_cfg.cfo_estimate_sf_mask  = 1023;
     chest_pdsch_cfg.estimator_alg         = srsran_chest_dl_str2estimator_alg(dci_decoder->prog_args.estimator_alg);
     chest_pdsch_cfg.sync_error_enable     = true;
@@ -472,6 +474,10 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			 * 0 disables that shortcut. See srsran_ngscope_tree_CP_match(). */
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
 								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL);
+			/* Once per frame, as upstream pdsch_ue does: the estimate the search just made. */
+			if (sf_idx == 5) {
+				ngscope_sync_publish_cfo_ref(rf_idx, dci_decoder->ue_dl.chest_res.cfo);
+			}
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
 			// filter the dci

@@ -54,6 +54,18 @@ int srsran_ue_dl_find_and_decode_rar(srsran_ue_dl_t*     q,
  * device, before any decoder thread for that device starts. */
 void ngscope_rar_log_init(const char* out_path, int rf_idx);
 
+/* Subframe perturbation, for re-decoding a block on slightly different samples (the RAR
+ * ladder, and the RAR/PDSCH diagnostic sweeps). snapshot copies the samples ue_dl's FFT reads;
+ * perturb writes them back shifted by `shift` samples and rotated by -cfo_hz; restore copies
+ * the snapshot back, recomputes the FFT and channel estimate, re-imposes cfi0 and frees it. */
+void ngscope_sf_snapshot(srsran_ue_dl_t* q, cf_t* orig[SRSRAN_MAX_PORTS]);
+void ngscope_sf_perturb(srsran_ue_dl_t* q, cf_t* const orig[SRSRAN_MAX_PORTS], int shift, double cfo_hz);
+void ngscope_sf_restore(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg,
+                        cf_t* orig[SRSRAN_MAX_PORTS], uint32_t cfi0);
+
+/* Teardown: how many RAR blocks were rejected as all-zero. Call after the decoder threads exit. */
+void ngscope_rar_report(int rf_idx);
+
 /* Append one RAR record. Safe to call from several decoder threads at once. */
 void ngscope_rar_log_write(const char*          out_path,
                            int                  rf_idx,
