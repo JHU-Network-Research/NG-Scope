@@ -87,6 +87,15 @@ typedef struct SRSRAN_API {
     uint64_t            collection_time;
 } ngscope_dci_per_sub_t;
 
+typedef struct {
+    int rf_idx;
+    char* out_path;
+    uint64_t timestamp;
+    uint64_t collection_time;
+    bool decode_rar;
+    bool mark_security_phase;
+}ngscope_decode_args_t;
+
 int ngscope_push_dci_to_per_sub(ngscope_dci_per_sub_t* q, ngscope_dci_msg_t* msg);
 
 int ngscope_enqueue_ul_reTx_dci_msg(ngscope_dci_per_sub_t* q, uint16_t targetRNTI);

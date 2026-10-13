@@ -358,6 +358,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars, \
 									rf_idx, dci_per_sub->timestamp, dci_per_sub->collection_time);
 		for (int i = 0; i < nof_rar; i++) {
+		    printf("Found RAR at tti=%d!\n", tti);
 			ngscope_rar_log_write(dci_decoder->prog_args.out_path, rf_idx, tti, \
 									dci_per_sub->timestamp, dci_per_sub->collection_time, &rars[i]);
 
@@ -467,11 +468,19 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 		{
     		ngscope_tree_t tree;
 
+          ngscope_decode_args_t decode_args;
+          decode_args.timestamp = dci_per_sub->timestamp;
+          decode_args.collection_time = dci_per_sub->collection_time;
+          decode_args.rf_idx = rf_idx;
+          decode_args.out_path = dci_decoder->prog_args.out_path;
+          decode_args.decode_rar = dci_decoder->prog_args.decode_RAR;
+          decode_args.mark_security_phase = dci_decoder->prog_args.mark_security_phase;
+
 			/* 0 == no preferred RNTI. The tree search treats a non-zero value as exempt from
 			 * the child-parent agreement check that every other candidate must pass; passing
 			 * 0 disables that shortcut. See srsran_ngscope_tree_CP_match(). */
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL, &decode_args);
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
 			// filter the dci
@@ -691,9 +700,17 @@ int decode_channel_for_plot(ngscope_dci_decoder_t*       dci_decoder,
     // dci_decoder->dl_sf.sf_type                         = SRSRAN_SF_NORM; //Ingore the MBSFN
     // dci_decoder->ue_dl_cfg.cfg.tm                      = tm;
 
+    ngscope_decode_args_t decode_args;
+    decode_args.timestamp = dci_per_sub->timestamp;
+    decode_args.collection_time = dci_per_sub->collection_time;
+    decode_args.rf_idx = dci_decoder->prog_args.rf_index;
+    decode_args.out_path = dci_decoder->prog_args.out_path;
+    decode_args.decode_rar = dci_decoder->prog_args.decode_RAR;
+    decode_args.mark_security_phase = dci_decoder->prog_args.mark_security_phase;
+
     ngscope_tree_t tree;
     srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL, &decode_args);
     return SRSRAN_SUCCESS;
 }
 

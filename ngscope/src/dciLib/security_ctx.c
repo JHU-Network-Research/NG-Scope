@@ -89,6 +89,8 @@ typedef struct {
      * before there was anywhere to count it. */
     uint64_t   nof_scan_rnti;
     uint64_t   nof_scan_no_dci;
+    uint64_t   nof_pdsch_decode;
+    uint64_t   nof_caps_written;
 
     /* Per DCI format, so a coverage claim can be checked rather than asserted -- in
      * particular whether widening the search past {1A, 2} finds anything. Indexed by
@@ -114,7 +116,6 @@ typedef struct {
     uint64_t   nof_crc_fail_scheme[SEC_NOF_SCHEMES];
     uint64_t   nof_unsupported_scheme[SEC_NOF_SCHEMES];
     uint64_t   nof_predecode_err_scheme[SEC_NOF_SCHEMES];
-
 
     uint64_t   codebook_idx_success[16];
     uint64_t   codebook_idx_failure[16];
@@ -378,6 +379,24 @@ void ngscope_sec_count_dci(int rf_idx, int fmt, int tm)
     sec_ctx[rf_idx].nof_dci_fmt[fmt]++;
     sec_ctx[rf_idx].nof_dci_tm[tm]++;
     // sec_ctx[rf_idx].nof_dci_scheme[scheme]++;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_caps_written(int rf_idx, int nof_written){
+    if (!rf_idx_valid(rf_idx)){
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_caps_written += nof_written;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
+void ngscope_sec_count_successful_decode(int rf_idx){
+    if(!rf_idx_valid(rf_idx)){
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_pdsch_decode++;
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
@@ -740,6 +759,8 @@ void ngscope_sec_report(int rf_idx)
             printf("\tcodebook_idx: %d, %ld successes and %ld failures\n", c, q->codebook_idx_success[c], q->codebook_idx_failure[c]);
         }
         printf("\n");
+
+        printf("SECURITY (cell %d): %ld PDSCH CRCs match, %ld caps written to file\n",rf_idx, q->nof_pdsch_decode, q->nof_caps_written);
 
         /* A counter that does not reconcile with the totals it is supposed to decompose is
          * the failure this whole family of counters exists to catch, so say so rather than

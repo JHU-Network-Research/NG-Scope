@@ -26,9 +26,13 @@ endif (RPATH)
 
 add_executable(cellinspector ${SOURCES})
 
-set(SRSRAN_SOURCES srsran_common srsran_mac srsran_phy srsran_radio srslog support system)
+# srsran_mac must come before srsran_common (console symbol resolution)
+set(SRSRAN_SOURCES srsran_phy srsran_radio srsran_mac srsran_common srslog support system)
 
-target_link_libraries(cellinspector ${SRSRAN_SOURCES}
+target_link_libraries(cellinspector
+                              -Wl,--start-group
+                              ${SRSRAN_SOURCES}
+                              -Wl,--end-group
                               ${CMAKE_THREAD_LIBS_INIT}
                               ${LIBCONFIG_LIBRARY}
                               ${ATOMIC_LIBS}
@@ -37,12 +41,7 @@ target_link_libraries(cellinspector ${SRSRAN_SOURCES}
 if (LIBASN4G)
     target_link_libraries(cellinspector ${LIBASN4G_LIBRARY})
 endif(LIBASN4G)
-                            
-
 
 if (RPATH)
   set_target_properties(cellinspector PROPERTIES INSTALL_RPATH ".")
 endif (RPATH)
-
-install(TARGETS ngscope DESTINATION ${RUNTIME_DIR})
-

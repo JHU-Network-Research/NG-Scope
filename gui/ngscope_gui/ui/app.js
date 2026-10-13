@@ -619,7 +619,7 @@ function renderSecurity() {
   const field = fieldByKey(SCHEMA.top_level, 'mark_security_phase');
   if (!field) return;
 
-  if (!replaying()) {
+  if (recording()) {
     /* Say why rather than leaving an empty panel: an unexplained blank card reads as a bug,
        and the reason is worth knowing -- detection is offline now, over the pcap. */
     const note = el('div', 'callout info');

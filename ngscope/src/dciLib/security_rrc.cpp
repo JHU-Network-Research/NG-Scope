@@ -394,9 +394,9 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         outcome = NGSCOPE_SEC_GRANT_CRC_FAIL;
       }
 
-    if ((outcome == NGSCOPE_SEC_GRANT_CRC_FAIL || outcome == NGSCOPE_SEC_GRANT_CRC_PASS) && snr_report_enabled()){
+      if ((outcome == NGSCOPE_SEC_GRANT_CRC_FAIL || outcome == NGSCOPE_SEC_GRANT_CRC_PASS) && snr_report_enabled()){
         write_snr_report(ue_dl, pdsch_cfg, outcome, dci_dl[d].format);
-    }
+      }
       // if (scheme == 3 && outcome == NGSCOPE_SEC_GRANT_CRC_FAIL){
       //     ERROR("CDD FAILED CRC: nof_ports=%d, nof_rx=%d, nof_layers=%d, tm=%d, format=%d",ue_dl->cell.nof_ports, (uint32_t)ue_dl->nof_rx_antennas,pdsch_cfg->grant.nof_layers,tm,dci_dl[d].format);
       // }
@@ -413,8 +413,10 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
       /* Every codeword that passed, each as its own MAC PDU -- the two transport blocks of a
        * spatial-multiplexing grant carry separate MAC PDUs, each with its own CRC. */
       for (int tb = 0; r == 1 && tb < SRSRAN_MAX_CODEWORDS; tb++) {
+        ngscope_sec_count_successful_decode(rf_idx);
         const int tbs = pdsch_cfg->grant.tb[tb].tbs;
         if (!pdsch_cfg->grant.tb[tb].enabled || !pdsch_res[tb].crc || tbs <= 0) {
+          ERROR("tb disabled: %d, crc fail: %d, tbs <= 0: %d",!pdsch_cfg->grant.tb[tb].enabled, !pdsch_res[tb].crc, tbs <= 0);
           continue;
         }
         pdsch_ok = true;
@@ -422,6 +424,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         if (tb > 0) {
           ngscope_sec_count_tb_second(rf_idx);
         }
+        ngscope_rach_filter_add(rf_idx, rnti, tti, NGSCOPE_RACH_ANCHOR_CRC);
 
         /* This is the interesting traffic -- Msg4, the SecurityModeCommand and the NAS
          * that rides above them all live here, and the search was targeted, so the PDCCH
@@ -451,8 +454,10 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         cap.evm       = pdsch_res[tb].evm;
         cap.payload   = pdsch_res[tb].payload;
         cap.len       = (uint32_t)tbs / 8;
-        ngscope_mac_pcap_write(&cap);
-        nof_written++;
+        if (ngscope_mac_pcap_write(&cap) == 0){
+            nof_written++;
+        }
+        // nof_written++;
       }
 
       ngscope_sec_count_attempt(rf_idx, pdsch_ok);
@@ -461,6 +466,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
 
   ngscope_sec_count_scan(rf_idx, nof_searched, nof_no_dci);
   pdsch_cfg->rnti = saved_rnti;
+  ngscope_sec_count_caps_written(rf_idx, nof_written);
   return nof_written;
 }
 

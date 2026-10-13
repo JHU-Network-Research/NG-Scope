@@ -354,7 +354,7 @@ int srsran_ra_dl_grant_to_grant_prb_allocation(const srsran_dci_dl_t* dci,
       }
       break;
     default:
-        ERROR("Invalid DCI Allocation Type: %d", dci->alloc_type);
+        // ERROR("Invalid DCI Allocation Type: %d", dci->alloc_type);
       return SRSRAN_ERROR;
   }
 
@@ -507,7 +507,7 @@ config_mimo_type(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_
         grant->tx_scheme = SRSRAN_TXSCHEME_PORT0;
       }
       if (nof_tb != 1) {
-        ERROR("Wrong number of transport blocks (%d) for %s.", nof_tb, srsran_mimotype2str(grant->tx_scheme));
+        // ERROR("Wrong number of transport blocks (%d) for %s.", nof_tb, srsran_mimotype2str(grant->tx_scheme));
         valid_config = false;
       }
       break;

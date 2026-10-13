@@ -159,7 +159,8 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
                                              ngscope_dci_per_sub_t* dci_per_sub,
   											 ngscope_tree_t* 		tree,
 											 uint16_t decoder_idx,
-                      srsran_dci_location_t* sib_loc)
+                      srsran_dci_location_t* sib_loc,
+                      ngscope_decode_args_t* decode_args)
 {
   int ret = SRSRAN_ERROR;
 
@@ -268,7 +269,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
                 printf("DEBUG: PAGING SEARCH TTI:%d NOF_CCE:%d CFI:%d NOF_LOC:%d LOC_IDX:%d ncce:%d L:%d\n",
             sf->tti, nof_cce, sf->cfi, tree->nof_location, loc_idx,
             tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
-			int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg, dci_dl);
+			int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, pdsch_cfg, cfg, dci_msg, dci_dl, decode_args);
 
 			// Unpack the dci messages
 			unpack_dci_message_vec(q, sf, cfg, pdsch_cfg, dci_msg, nof_dci, loc_idx, tree);
@@ -304,7 +305,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
                 sf->tti, nof_cce, sf->cfi, search_space.nof_locations, loc_idx,
                 tree->dci_location[loc_idx].ncce, tree->dci_location[loc_idx].L);
 		// Search all the formats in this location
-		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg, dci_dl);
+		int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, pdsch_cfg, cfg, dci_msg, dci_dl, decode_args);
         if (debug){
             printf("DEBUG: found %d DCIs at TTI=%d:\n",nof_dci,sf->tti);
             for(int idx = 0; idx < nof_dci; idx++){
@@ -409,7 +410,8 @@ int srsran_ngscope_search_all_space_array_signleUE_yx(srsran_ue_dl_t*        q,
                                              srsran_ue_dl_cfg_t*    cfg,
                                              srsran_pdsch_cfg_t*    pdsch_cfg,
                                              ngscope_dci_per_sub_t* dci_per_sub,
-											 uint16_t targetRNTI)
+											 uint16_t targetRNTI,
+											 ngscope_decode_args_t* decode_args)
 {
   int ret = SRSRAN_ERROR;
   //int nof_location = 0;
@@ -510,7 +512,7 @@ int srsran_ngscope_search_all_space_array_signleUE_yx(srsran_ue_dl_t*        q,
         search_space.loc[0] = tree.dci_location[loc_idx];
 
         // Search all the formats in this location
-        int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, dci_msg, dci_dl);
+        int nof_dci = srsran_ngscope_search_in_space_yx(q, sf, &search_space, &dci_cfg, pdsch_cfg, cfg, dci_msg, dci_dl, decode_args);
 		/*****************************************************************
 		* 	dci_msg -> dci
 		*****************************************************************/

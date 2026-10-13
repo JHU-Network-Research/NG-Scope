@@ -137,16 +137,19 @@ int ngscope_mac_pcap_init(const char* out_path, int rf_idx, const srsran_cell_t*
     return 0;
 }
 
-void ngscope_mac_pcap_write(const ngscope_mac_tb_t* tb)
+int ngscope_mac_pcap_write(const ngscope_mac_tb_t* tb)
 {
     if (tb == NULL || !rf_idx_valid(tb->rf_idx) || tb->payload == NULL || tb->len == 0) {
-        return;
+        ERROR("tb==NULL: %d, invalid rf idx: %d, tb payload is NULL: %d, tb len is 0: %d", tb == NULL, !rf_idx_valid(tb->rf_idx), tb->payload == NULL, tb->len==0);
+        return -1;
     }
     if (!mac_pcap[tb->rf_idx].is_open) {
-        return; /* feature off: callers need no guard */
+        ERROR("File is closed?");
+        return -2; /* feature off: callers need no guard */
     }
     if (tb->len > MAC_PCAP_MAX_FRAME - PCAP_CONTEXT_HEADER_MAX) {
-        return;
+        ERROR("tb->len > MAX FRAME - HEADER MAX");
+        return -3;
     }
 
     const srsran_cell_t* cell = &mac_pcap_cell[tb->rf_idx];
@@ -170,7 +173,8 @@ void ngscope_mac_pcap_write(const ngscope_mac_tb_t* tb)
     uint8_t frame[MAC_PCAP_MAX_FRAME];
     int     off = LTE_PCAP_PACK_MAC_CONTEXT_TO_BUFFER(&ctx, frame, PCAP_CONTEXT_HEADER_MAX);
     if (off <= 0) {
-        return;
+        ERROR("Offset is less than zero");
+        return -4;
     }
     memcpy(frame + off, tb->payload, tb->len);
 
@@ -209,7 +213,7 @@ void ngscope_mac_pcap_write(const ngscope_mac_tb_t* tb)
              lcids[0] ? " lcids=" : "",
              lcids);
 
-    ngscope_pcapng_write(&mac_pcap[tb->rf_idx], 0, tb->ts_us, frame, (uint32_t)off + tb->len, cmt);
+    return ngscope_pcapng_write(&mac_pcap[tb->rf_idx], 0, tb->ts_us, frame, (uint32_t)off + tb->len, cmt);
 }
 
 void ngscope_mac_pcap_close(int rf_idx)

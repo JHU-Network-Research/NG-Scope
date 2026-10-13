@@ -76,7 +76,7 @@ int ngscope_mac_pcap_init(const char* out_path, int rf_idx, const srsran_cell_t*
 
 /* Append one transport block. No-op when that device's file was never opened, so call sites
  * need no guard of their own. Safe to call from several decoder threads at once. */
-void ngscope_mac_pcap_write(const ngscope_mac_tb_t* tb);
+int ngscope_mac_pcap_write(const ngscope_mac_tb_t* tb);
 
 /* Flush, close and print a summary. Call after the decoder threads have been joined. */
 void ngscope_mac_pcap_close(int rf_idx);

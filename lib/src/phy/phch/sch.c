@@ -425,6 +425,7 @@ bool decode_tb_cb(srsran_sch_t*           q,
       uint32_t cb_noi     = 0;
       do {
         if (q->llr_is_8bit) {
+            printf("Is 8bit\n");
           srsran_tdec_iteration_8bit(&q->decoder, (int8_t*)softbuffer->buffer_f[cb_idx], &data[cb_idx * rlen / 8]);
         } else {
           srsran_tdec_iteration(&q->decoder, softbuffer->buffer_f[cb_idx], &data[cb_idx * rlen / 8]);

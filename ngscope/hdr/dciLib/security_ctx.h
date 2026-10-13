@@ -116,6 +116,10 @@ void ngscope_sec_count_grant(int rf_idx, int fmt, int scheme, int outcome, int t
  * count_grant so "found but never buildable" is visible per format. */
 void ngscope_sec_count_dci(int rf_idx, int fmt, int tm);
 
+void ngscope_sec_count_caps_written(int rf_idx, int nof_written);
+
+void ngscope_sec_count_successful_decode(int rf_idx);
+
 void ngscope_sec_report(int rf_idx);
 
 #ifdef __cplusplus

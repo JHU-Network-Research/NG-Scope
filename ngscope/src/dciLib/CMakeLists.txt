@@ -2,6 +2,11 @@ file(GLOB_RECURSE SOURCES "*.cpp" "*.c")
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/ngscope_rx.c)
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/record_ring_buffer.c)
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/rach_filter.c)
+list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/decode_rar.cpp)
+list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mac_pcap.c)
+list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/pcapng.c)
+list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/security_ctx.c)
+list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/security_rrc.cpp)
 # Called from srsran_phy (ngscope_dci.c), so it cannot live in ngscope_dci, which links
 # against srsran_phy. Same arrangement as rach_filter above.
 list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tbs_table_probe.c)
@@ -40,11 +45,24 @@ target_include_directories(ngscope_rx PUBLIC
     ${CMAKE_SOURCE_DIR}/lib/include
 )
 
-add_library(rach_filter STATIC rach_filter.c)
-target_include_directories(rach_filter PUBLIC 
+add_library(rach_filter STATIC rach_filter.c decode_rar.cpp)
+target_include_directories(rach_filter PUBLIC
   ${CMAKE_SOURCE_DIR}/ngscope/hdr
   ${CMAKE_SOURCE_DIR}/lib/include
 )
+
+add_library(rrc_security STATIC security_ctx.c security_rrc.cpp)
+target_include_directories(rrc_security PUBLIC
+  ${CMAKE_SOURCE_DIR}/ngscope/hdr
+  ${CMAKE_SOURCE_DIR}/lib/include
+)
+
+add_library(mac_pcap STATIC mac_pcap.c pcapng.c)
+target_include_directories(mac_pcap PUBLIC
+    ${CMAKE_SOURCE_DIR}/ngscope/hdr
+    ${CMAKE_SOURCE_DIR}/lib/include
+)
+target_link_libraries(mac_pcap srsran_common)
 
 add_library(tbs_table_probe STATIC tbs_table_probe.c)
 target_include_directories(tbs_table_probe PUBLIC
@@ -52,3 +70,4 @@ target_include_directories(tbs_table_probe PUBLIC
   ${CMAKE_SOURCE_DIR}/lib/include
 )
 target_link_libraries(ngscope_rx srsran_phy)
+target_link_libraries(rach_filter rrc_security mac_pcap srsran_common srsran_mac)
