@@ -109,6 +109,33 @@ typedef struct SRSRAN_API {
 
   srsran_dci_location_t allocated_locations[SRSRAN_MAX_DCI_MSG];
   uint32_t              nof_allocated_locations;
+
+  /* Solve-first index (srsran_ue_dl_solve_first): every candidate decoded this subframe,
+   * chained by the RNTI it decoded to. solved_gen is the PDCCH dec_gen it was built for; the
+   * index is only trusted while that still matches, i.e. on the same LLRs. */
+  uint32_t                      solved_gen;
+  bool                          solved_ok;
+  uint32_t                      nof_solved;
+  struct srsran_ue_dl_solved_s* solved;
+  int16_t*                      solved_head;
+
+  /* FFT + channel-estimation reuse (srsran_ue_dl_set_fft_reuse). srsran_ue_dl_decode_fft_estimate
+   * is called several times per subframe by independent steps; a repeat with the same input
+   * returns the stored result instead of recomputing it. Keyed on everything that feeds it:
+   * the subframe (serial from srsran_ue_dl_new_subframe, plus the sf config minus its output
+   * cfi), the PHICH mi setting and the channel-estimation config. */
+  bool                  fft_reuse_en;
+  bool                  fft_valid;
+  uint64_t              fft_serial;
+  uint64_t              fft_key_serial;
+  srsran_dl_sf_cfg_t    fft_key_sf;
+  srsran_chest_dl_cfg_t fft_key_chest;
+  bool                  fft_key_mi_auto;
+  uint32_t              fft_key_mi_idx;
+  uint32_t              fft_cfi;
+  uint64_t              fft_computed;
+  uint64_t              fft_reused;
+  uint64_t              fft_verified;
 } srsran_ue_dl_t;
 
 // Downlink config (includes common and dedicated variables)
@@ -175,6 +202,14 @@ SRSRAN_API void srsran_ue_dl_set_mi_manual(srsran_ue_dl_t* q, uint32_t mi_idx);
 SRSRAN_API void srsran_ue_dl_set_mi_auto(srsran_ue_dl_t* q);
 
 /* Perform signal demodulation and channel estimation and store signals in the object */
+/* Opt in to reusing a subframe's FFT + channel estimate across repeated
+ * srsran_ue_dl_decode_fft_estimate() calls. Exact for every estimator except wiener (which
+ * keeps state across calls and therefore always recomputes). */
+SRSRAN_API void srsran_ue_dl_set_fft_reuse(srsran_ue_dl_t* q, bool enable);
+
+/* New IQ is in the input buffer: nothing computed so far may be reused. */
+SRSRAN_API void srsran_ue_dl_new_subframe(srsran_ue_dl_t* q);
+
 SRSRAN_API int srsran_ue_dl_decode_fft_estimate(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg);
 
 SRSRAN_API int srsran_ue_dl_decode_fft_estimate_noguru(srsran_ue_dl_t*     q,
@@ -207,6 +242,34 @@ SRSRAN_API int srsran_ue_dl_find_dl_dci_formats(srsran_ue_dl_t*            q,
                                                 uint32_t                   nof_ue_formats,
                                                 bool                       search_common_1a,
                                                 srsran_dci_dl_t            dci_dl[SRSRAN_MAX_DCI_MSG]);
+
+/* Solve-first: decode every aligned PDCCH candidate of this subframe once, at the payload
+ * sizes srsran_ue_dl_find_dl_dci_formats() would use for these UE formats plus Format1A in
+ * the common search space, and index them by the RNTI each decodes to (its CRC remainder).
+ * Call after the LLRs are extracted; best with srsran_pdcch_set_decode_cache() on, so the
+ * searches below reuse the decodes. Returns the number of candidates indexed. */
+SRSRAN_API int srsran_ue_dl_solve_first(srsran_ue_dl_t*            q,
+                                        srsran_dl_sf_cfg_t*        sf,
+                                        srsran_ue_dl_cfg_t*        dl_cfg,
+                                        const srsran_dci_format_t* ue_formats,
+                                        uint32_t                   nof_ue_formats);
+
+/* Did any candidate in the current index decode to this RNTI? true when the index is not
+ * valid for the current LLRs, so a caller that skips on false can never skip wrongly. */
+SRSRAN_API bool srsran_ue_dl_solved_has(srsran_ue_dl_t* q, uint16_t rnti);
+
+/* Same result as srsran_ue_dl_find_dl_dci_formats(), from the solve-first index: it visits
+ * only the candidates that decoded to this RNTI, applying the identical acceptance rules
+ * (dci_blind_search_accept) in the identical order. Falls back to the full search when the
+ * index is not valid for the current LLRs. */
+SRSRAN_API int srsran_ue_dl_find_dl_dci_formats_solved(srsran_ue_dl_t*            q,
+                                                       srsran_dl_sf_cfg_t*        sf,
+                                                       srsran_ue_dl_cfg_t*        dl_cfg,
+                                                       uint16_t                   rnti,
+                                                       const srsran_dci_format_t* ue_formats,
+                                                       uint32_t                   nof_ue_formats,
+                                                       bool                       search_common_1a,
+                                                       srsran_dci_dl_t            dci_dl[SRSRAN_MAX_DCI_MSG]);
 
 SRSRAN_API int srsran_ue_dl_dci_to_pdsch_grant(srsran_ue_dl_t*       q,
                                                srsran_dl_sf_cfg_t*   sf,

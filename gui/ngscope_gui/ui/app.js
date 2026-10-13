@@ -27,7 +27,7 @@ const FIELD_GROUPS = {
   securityPrimary: ['mark_security_phase'],
   /* Sub-options of the security scan that the C side ANDs with mode == REPLAY, so they are
      shown only when a cell is actually replaying. */
-  securityReplay: ['qam_retry'],
+  securityReplay: ['qam_retry', 'tracked_search'],
   topToggles: ['decode_SIB', 'remote_enable'],
 };
 
@@ -282,6 +282,7 @@ function renderField(field, value, onChange, errorKey) {
     case 'int64': return numberField(field, value, onChange, errorKey);
     case 'path':  return pathField(field, value, onChange, errorKey,
                                    (cur) => api.pick_replay_file(cur));
+    case 'choice': return segmentedField(field, value, onChange, field.options || []);
     default:      return textField(field, value, onChange, errorKey);
   }
 }
@@ -678,10 +679,11 @@ function renderSecurity() {
   FIELD_GROUPS.securityReplay.forEach((key) => {
     const f = fieldByKey(SCHEMA.top_level, key);
     if (!f) return;
-    replayOpts.appendChild(toggleRow(f, top[key], (value) => {
+    replayOpts.appendChild(renderField(f, top[key], (value) => {
       top[key] = value;
       scheduleSave();
-    }));
+      if (f.type === 'choice') renderSecurity();
+    }, `top.${key}`));
   });
   body.appendChild(replayOpts);
 

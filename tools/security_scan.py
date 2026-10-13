@@ -531,17 +531,19 @@ def classify_rach(anchor, rapid, rar_tti, boundary, orders):
 def synth_crc_anchors(frames, rar_rntis):
     """Sessions for UEs the cell served that never RACHed here.
 
-    ngscope writes these blocks with src=probe: the DCI came from a search targeted at a
-    known RNTI, and the transport block passed CRC24A, so both the identity and the bytes are
-    sound. What is missing is a RAR, and that absence is the signal -- it is how a handover-in
-    and an already-connected UE both present from the target cell.
+    Every such block came from a search targeted at a known RNTI, and the transport block
+    passed CRC24A, so both the identity and the bytes are sound. What is missing is a RAR, and
+    that absence is the signal -- it is how a handover-in and an already-connected UE both
+    present from the target cell. ngscope writes them as src=targeted (the probe confirms the
+    UE before that subframe's tracked scan, which writes the block); older runs wrote the
+    confirming block as src=probe, so both are accepted.
 
     Anchored at the first such block rather than at a RAR, so every downstream time
     comparison keeps working unchanged.
     """
     first = {}
     for f in frames:
-        if f.get("src") != "probe" or f["rnti"] is None or f["rnti"] in rar_rntis:
+        if f.get("src") not in ("probe", "targeted") or f["rnti"] is None or f["rnti"] in rar_rntis:
             continue
         cur = first.get(f["rnti"])
         if cur is None or (f["ct"] is not None and cur["rar_ct"] > f["ct"]):
@@ -690,8 +692,11 @@ def build_sessions(anchors, events, frames):
             best = s
         return best
 
+    # probe frames count too: ngscope writes one only for a UE inside its tracking window
+    # that the tracked scan did not search in that subframe (its CRC promotion, or a
+    # decoder-thread race on the anchor), so it is the same traffic by another route.
     for f in frames:
-        if f["src"] != "targeted" or f["rnti"] is None:
+        if f["src"] not in ("targeted", "probe") or f["rnti"] is None:
             continue
         s = find(f["rnti"], f["ct"])
         if s is None:

@@ -22,6 +22,14 @@ extern "C" {
 
 #define MAX_NOF_DCI_DECODER 8
 #define MAX_NOF_RF_DEV 4
+
+/* tracked_search: how ngscope_sec_scan_subframe() finds each tracked UE's DCIs (replay only;
+ * live and record always use PER_RNTI). All three return identical DCIs -- see
+ * docs/configuration.md. */
+#define NGSCOPE_TRACKED_SEARCH_PER_RNTI    0 /* srsRAN's per-RNTI search, every decode fresh  */
+#define NGSCOPE_TRACKED_SEARCH_CACHE       1 /* same search, candidate decodes memoized       */
+#define NGSCOPE_TRACKED_SEARCH_SOLVE_FIRST 2 /* decode all candidates once, search only RNTIs
+                                                that came out; implies CACHE                  */
 #define NOF_LOG_SF 32
 
 //#define NOF_LOG_SUBF (NOF_LOG_SF * 10)

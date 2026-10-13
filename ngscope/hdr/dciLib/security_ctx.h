@@ -52,7 +52,7 @@ void ngscope_sec_note_crc_confirmed(int rf_idx, uint16_t rnti, uint32_t tti, uin
 
 /* RNTIs worth attempting a PDSCH decode for right now: anchored by a RAR and still inside
  * the tracking window. Returns how many were written to out[]. */
-int ngscope_sec_tracked(int rf_idx, uint64_t now_us, uint16_t* out, int max_out);
+int ngscope_sec_tracked(int rf_idx, uint64_t now_ct, uint16_t* out, int max_out);
 
 /* One transport block decoded. `retried` means it only passed CRC after falling back to the
  * other MCS->TBS table, i.e. the configured enable_256qam is wrong for that grant. */
@@ -60,6 +60,26 @@ void ngscope_sec_count_tb_table(int rf_idx, bool retried);
 
 /* That block was the second transport block of a two-codeword grant. */
 void ngscope_sec_count_tb_second(int rf_idx);
+
+/* tracked_search bookkeeping, for the teardown line that says which search produced a run.
+ * mode is NGSCOPE_TRACKED_SEARCH_*. prefilter: tracked RNTIs considered this subframe, how
+ * many solve-first skipped, and how many of those skips verify mode re-checked. pdcch_cache:
+ * one decoder thread's PDCCH memo totals, added when the thread closes. */
+void ngscope_sec_note_search_mode(int rf_idx, int mode);
+
+/* Anchor barrier. A tracked UE exists from its anchor -- a RAR, or a DL-SCH CRC the blind
+ * probe confirmed -- and decoder threads run subframes out of order, so whether subframe S's
+ * scan saw an anchor from an earlier subframe used to depend on thread timing. Each subframe
+ * now marks `seq` (its dispatch order) once its anchor-creating steps are done, and waits,
+ * before its tracked scan, until every lower seq has marked. Those steps never wait, so the
+ * barrier cannot deadlock or chain. done is idempotent per seq; wait returns false on its
+ * safety timeout (counted, reported, never expected). */
+void ngscope_sec_anchor_done(int rf_idx, uint64_t seq);
+bool ngscope_sec_anchor_wait(int rf_idx, uint64_t seq);
+void ngscope_sec_count_prefilter(int rf_idx, int nof_tracked, int nof_skipped, int nof_verified);
+void ngscope_sec_add_pdcch_cache(int rf_idx, uint64_t hits, uint64_t misses, uint64_t verified);
+/* One decoder thread's FFT + channel-estimation totals (srsran_ue_dl_set_fft_reuse). */
+void ngscope_sec_add_fft_reuse(int rf_idx, uint64_t computed, uint64_t reused, uint64_t verified);
 
 /* A retry was actually attempted. Counted separately so the report can tell "tested, and the
  * configured table fits" from "never tested" -- with qam_retry off the two are otherwise

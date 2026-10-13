@@ -402,6 +402,35 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
         }
     }
 
+    /* tracked_search: parse once here so everything downstream sees an int. Replay-only
+     * like qam_retry -- task_scheduler.c forces PER_RNTI for any other mode. */
+    if (strcmp(config->tracked_search, "per_rnti") == 0) {
+        config->tracked_search_mode = NGSCOPE_TRACKED_SEARCH_PER_RNTI;
+    } else if (strcmp(config->tracked_search, "cache") == 0) {
+        config->tracked_search_mode = NGSCOPE_TRACKED_SEARCH_CACHE;
+    } else if (strcmp(config->tracked_search, "solve_first") == 0) {
+        config->tracked_search_mode = NGSCOPE_TRACKED_SEARCH_SOLVE_FIRST;
+    } else {
+        printf("config: ERROR: tracked_search = \"%s\" -- must be per_rnti, cache or "
+               "solve_first\n", config->tracked_search);
+        config->tracked_search_mode = NGSCOPE_TRACKED_SEARCH_PER_RNTI;
+        nof_missing_required++;
+    }
+    if (config->tracked_search_mode != NGSCOPE_TRACKED_SEARCH_PER_RNTI) {
+        bool any_replay = false;
+        for (int i = 0; i < config->nof_rf_dev; i++) {
+            if (config->rf_config[i].mode == REPLAY) {
+                any_replay = true;
+                break;
+            }
+        }
+        if (!any_replay) {
+            printf("config: note: tracked_search = %s applies to replay only; no rf_config is "
+                   "in mode=2, so the tracked search runs per_rnti this run\n",
+                   config->tracked_search);
+        }
+    }
+
     /* qam_retry is replay-only by construction (task_scheduler.c ANDs it with
      * mode == REPLAY), so say so rather than letting a live run look as though it had it.
      * Not an error: it defaults on, so every live config would otherwise trip it. */
