@@ -62,6 +62,7 @@ typedef struct {
   int 	   probe_blind_dci;
   int 	   pcap_max_mb;
   int 	   qam_retry;
+  int 	   tracked_search; /* NGSCOPE_TRACKED_SEARCH_* */
 
   float    rf_gain;
   int      net_port;

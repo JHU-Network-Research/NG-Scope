@@ -523,7 +523,11 @@ config_mimo_type(const srsran_cell_t* cell, srsran_tm_t tm, const srsran_dci_dl_
       } else if (nof_tb == 2) {
         grant->tx_scheme = SRSRAN_TXSCHEME_CDD;
       } else {
-        ERROR("Invalid number of transport blocks (%d) for TM3", nof_tb);
+        /* INFO, not ERROR: a Format2A candidate with both transport blocks disabled is
+         * usually a PDCCH false alarm from the targeted search, which tries 2A on every
+         * multi-port cell. The grant is refused and counted as found-but-not-built; printing
+         * it to stderr only buried the console. The TM4 branch below has the same case. */
+        INFO("Invalid number of transport blocks (%d) for TM3", nof_tb);
         valid_config = false;
       }
       break;

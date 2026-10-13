@@ -109,10 +109,11 @@ On `4x2/tmobile-5035-studentcenter` (81 RACHed + 59 CRC-confirmed): SMC 64/140, 
 (20 with no SMC seen), SMC or DRB 84/140 = 60.0%, all three 97/140 = 69.3%. Of the 20,
 19 are CRC-confirmed.
 
-`rate` is deliberately left as it was, so historical figures stay comparable. `with_traffic`
-here follows `n_pdus` and counts tracked (`src=targeted`) blocks only. A CRC-confirmed UE
-whose single decoded block was the one that confirmed it (`src=probe`) therefore shows no
-traffic.
+`rate` is deliberately left as it was, so historical figures stay comparable. `n_pdus`,
+`n_srb_pdus`, `n_drb_pdus` and `with_traffic` count both `src=targeted` and `src=probe`
+blocks. Current runs write no `src=probe` frames at all (the probe confirms a UE before
+that subframe's tracked scan, which writes the block); older runs wrote the confirming block
+as `src=probe`, and it is the same traffic.
 
 ### A second cell, for scale
 

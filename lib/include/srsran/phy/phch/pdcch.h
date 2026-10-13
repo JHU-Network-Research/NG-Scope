@@ -73,7 +73,24 @@ typedef struct SRSRAN_API {
   srsran_viterbi_t     decoder;
   srsran_crc_t         crc;
 
+  /* Per-subframe memo of srsran_pdcch_decode_msg() (see srsran_pdcch_set_decode_cache). A
+   * candidate decode depends only on the LLRs and (ncce, L, nof_bits) -- the RNTI is its
+   * output -- so within one subframe every repeat of the same candidate gives the same bytes.
+   * dec_gen advances in srsran_pdcch_extract_llr(), which is where the LLRs change, so stale
+   * entries need no clearing. */
+  bool                              dec_cache_en;
+  uint32_t                          dec_gen;
+  uint32_t                          dec_cache_ncce;
+  struct srsran_pdcch_dec_entry_s*  dec_cache;
+  uint64_t                          dec_cache_hits;
+  uint64_t                          dec_cache_misses;
+  uint64_t                          dec_cache_verified;
+
 } srsran_pdcch_t;
+
+/* Enable (or disable) the decode memo. Off by default; the result of every decode is
+ * unchanged either way. Returns SRSRAN_ERROR if the cache cannot be allocated. */
+SRSRAN_API int srsran_pdcch_set_decode_cache(srsran_pdcch_t* q, bool enable);
 
 SRSRAN_API int srsran_pdcch_get_nof_cce_yx(srsran_pdcch_t* q, uint32_t cfi);
 

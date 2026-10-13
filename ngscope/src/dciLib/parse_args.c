@@ -45,6 +45,7 @@ void args_default(prog_args_t* args)
   args->enable_cfo_ref                     = false;
   args->estimator_alg                      = (char*)"interpolate";
   args->enable_256qam                      = true;
+  args->tracked_search                     = 0; /* NGSCOPE_TRACKED_SEARCH_PER_RNTI */
   args->rf_gain                            = -1;
   args->net_port                           = -1;
   args->net_address                        = (char*)"127.0.0.1";

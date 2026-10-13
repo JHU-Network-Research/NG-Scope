@@ -54,6 +54,89 @@ float srsran_pdcch_coderate(uint32_t nof_bits, uint32_t l)
 }
 
 /** Initializes the PDCCH transmitter and receiver */
+/* One remembered candidate decode. Keyed by (ncce, L) via its position in the cache array and
+ * by nof_bits within the slot list. `gen` ties it to the LLRs it was computed from. */
+#define PDCCH_DEC_SLOTS 10 /* blind search: up to 8 formats per location, + tracked sizes */
+typedef struct srsran_pdcch_dec_entry_s {
+  uint32_t gen;
+  uint32_t nof_bits;
+  bool     skipped; /* mean |LLR| <= 0.3: decode_msg returned without touching msg */
+  uint16_t crc_rem;
+  bool     has_corr;
+  float    corr;
+  bool     has_prob; /* decode_prob from the blind search's decode (srsran_pdcch_decode_msg_yx) */
+  float    prob;
+  uint8_t  payload[SRSRAN_DCI_MAX_BITS];
+} pdcch_dec_entry_t;
+
+static bool pdcch_cache_verify(void)
+{
+  static int v = -1;
+  if (v < 0) {
+    const char* e = getenv("NGSCOPE_VERIFY_PDCCH_CACHE");
+    v             = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+  }
+  return v == 1;
+}
+
+/* Slot list for (ncce, L), or NULL when the cache is off or the location is out of range. */
+static pdcch_dec_entry_t* pdcch_cache_slots(srsran_pdcch_t* q, uint32_t ncce, uint32_t L)
+{
+  if (!q->dec_cache_en || q->dec_cache == NULL || ncce >= q->dec_cache_ncce || L > 3) {
+    return NULL;
+  }
+  return &q->dec_cache[(ncce * 4 + L) * PDCCH_DEC_SLOTS];
+}
+
+static pdcch_dec_entry_t* pdcch_cache_find(srsran_pdcch_t* q, uint32_t ncce, uint32_t L, uint32_t nof_bits)
+{
+  pdcch_dec_entry_t* slots = pdcch_cache_slots(q, ncce, L);
+  if (slots == NULL) {
+    return NULL;
+  }
+  for (int i = 0; i < PDCCH_DEC_SLOTS; i++) {
+    if (slots[i].gen == q->dec_gen && slots[i].nof_bits == nof_bits) {
+      return &slots[i];
+    }
+  }
+  return NULL;
+}
+
+/* A free (stale) slot for (ncce, L), or NULL if all are current -- then simply not cached. */
+static pdcch_dec_entry_t* pdcch_cache_alloc(srsran_pdcch_t* q, uint32_t ncce, uint32_t L)
+{
+  pdcch_dec_entry_t* slots = pdcch_cache_slots(q, ncce, L);
+  if (slots == NULL) {
+    return NULL;
+  }
+  for (int i = 0; i < PDCCH_DEC_SLOTS; i++) {
+    if (slots[i].gen != q->dec_gen) {
+      return &slots[i];
+    }
+  }
+  return NULL;
+}
+
+int srsran_pdcch_set_decode_cache(srsran_pdcch_t* q, bool enable)
+{
+  if (q == NULL) {
+    return SRSRAN_ERROR_INVALID_INPUTS;
+  }
+  if (enable && q->dec_cache == NULL) {
+    /* max_bits at this point bounds the CCE count for any CFI. */
+    q->dec_cache_ncce = q->max_bits / 72 + 1;
+    q->dec_cache      = calloc((size_t)q->dec_cache_ncce * 4 * PDCCH_DEC_SLOTS, sizeof(pdcch_dec_entry_t));
+    if (q->dec_cache == NULL) {
+      q->dec_cache_ncce = 0;
+      return SRSRAN_ERROR;
+    }
+    /* gen 0 is never current: extract_llr bumps dec_gen before any decode can be cached. */
+    q->dec_gen = 1;
+  }
+  q->dec_cache_en = enable;
+  return SRSRAN_SUCCESS;
+}
+
 static int pdcch_init(srsran_pdcch_t* q, uint32_t max_prb, uint32_t nof_rx_antennas, bool is_ue)
 {
   int ret = SRSRAN_ERROR_INVALID_INPUTS;
@@ -137,6 +220,9 @@ int srsran_pdcch_init_ue(srsran_pdcch_t* q, uint32_t max_prb, uint32_t nof_rx_an
 
 void srsran_pdcch_free(srsran_pdcch_t* q)
 {
+  if (q->dec_cache) {
+    free(q->dec_cache);
+  }
   if (q->e) {
     free(q->e);
   }
@@ -486,8 +572,84 @@ int srsran_pdcch_get_nof_cce_yx(srsran_pdcch_t* q, uint32_t cfi){
  * The decoded message is stored in msg and the CRC remainder in msg->rnti
  *
  */
+static int pdcch_decode_msg_uncached(srsran_pdcch_t*     q,
+                                     srsran_dl_sf_cfg_t* sf,
+                                     srsran_dci_cfg_t*   dci_cfg,
+                                     srsran_dci_msg_t*   msg,
+                                     bool*               skipped);
+
+/* Cached front end. On a hit it reproduces every side effect of the uncached path: the
+ * nof_bits + 16 payload bytes the Viterbi decoder writes, rnti, nof_bits and the Format0/1A
+ * differentiation -- and on a low-LLR skip it leaves msg untouched, as the uncached path does. */
 int srsran_pdcch_decode_msg(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg)
 {
+  if (q == NULL || msg == NULL || !q->dec_cache_en || !srsran_dci_location_isvalid(&msg->location) ||
+      msg->location.ncce * 72 + PDCCH_FORMAT_NOF_BITS(msg->location.L) > NOF_CCE(sf->cfi) * 72) {
+    bool skipped;
+    return pdcch_decode_msg_uncached(q, sf, dci_cfg, msg, &skipped);
+  }
+
+  const uint32_t     nof_bits = srsran_dci_format_sizeof(&q->cell, sf, dci_cfg, msg->format);
+  pdcch_dec_entry_t* e        = pdcch_cache_find(q, msg->location.ncce, msg->location.L, nof_bits);
+
+  if (e != NULL) {
+    q->dec_cache_hits++;
+    if (pdcch_cache_verify()) {
+      srsran_dci_msg_t chk = *msg;
+      bool             sk  = false;
+      pdcch_decode_msg_uncached(q, sf, dci_cfg, &chk, &sk);
+      bool same = (sk == e->skipped);
+      if (same && !sk) {
+        same = chk.rnti == e->crc_rem && chk.nof_bits == nof_bits &&
+               memcmp(chk.payload, e->payload, SRSRAN_MIN(nof_bits + 16, SRSRAN_DCI_MAX_BITS)) == 0;
+      }
+      if (!same) {
+        fprintf(stderr,
+                "PDCCH CACHE MISMATCH: ncce=%d L=%d nof_bits=%d skipped %d/%d rnti 0x%x/0x%x\n",
+                msg->location.ncce, msg->location.L, nof_bits, e->skipped, sk, e->crc_rem, chk.rnti);
+        abort();
+      }
+      q->dec_cache_verified++;
+    }
+    if (e->skipped) {
+      return SRSRAN_SUCCESS;
+    }
+    memcpy(msg->payload, e->payload, SRSRAN_MIN(nof_bits + 16, SRSRAN_DCI_MAX_BITS));
+    msg->rnti     = e->crc_rem;
+    msg->nof_bits = nof_bits;
+    if (msg->format == SRSRAN_DCI_FORMAT0 || msg->format == SRSRAN_DCI_FORMAT1A) {
+      msg->format = (msg->payload[dci_cfg->cif_enabled ? 3 : 0] == 0) ? SRSRAN_DCI_FORMAT0 : SRSRAN_DCI_FORMAT1A;
+    }
+    return SRSRAN_SUCCESS;
+  }
+
+  q->dec_cache_misses++;
+  bool skipped = false;
+  int  ret     = pdcch_decode_msg_uncached(q, sf, dci_cfg, msg, &skipped);
+  if (ret == SRSRAN_SUCCESS) {
+    pdcch_dec_entry_t* n = pdcch_cache_alloc(q, msg->location.ncce, msg->location.L);
+    if (n != NULL) {
+      n->gen      = q->dec_gen;
+      n->nof_bits = nof_bits;
+      n->skipped  = skipped;
+      n->has_corr = false;
+      n->has_prob = false;
+      if (!skipped) {
+        n->crc_rem = msg->rnti;
+        memcpy(n->payload, msg->payload, SRSRAN_MIN(nof_bits + 16, SRSRAN_DCI_MAX_BITS));
+      }
+    }
+  }
+  return ret;
+}
+
+static int pdcch_decode_msg_uncached(srsran_pdcch_t*     q,
+                                     srsran_dl_sf_cfg_t* sf,
+                                     srsran_dci_cfg_t*   dci_cfg,
+                                     srsran_dci_msg_t*   msg,
+                                     bool*               skipped)
+{
+  *skipped = false;
   int ret = SRSRAN_ERROR_INVALID_INPUTS;
   if (q != NULL && msg != NULL && srsran_dci_location_isvalid(&msg->location)) {
     if (msg->location.ncce * 72 + PDCCH_FORMAT_NOF_BITS(msg->location.L) > NOF_CCE(sf->cfi) * 72) {
@@ -524,6 +686,7 @@ int srsran_pdcch_decode_msg(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dc
              mean,
              msg->rnti);
       } else {
+        *skipped = true;
         INFO("Skipping DCI:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
       }
     }
@@ -532,9 +695,15 @@ int srsran_pdcch_decode_msg(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dc
   }
   return ret;
 }
-int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob)
+static int pdcch_decode_msg_yx_uncached(srsran_pdcch_t*     q,
+                                        srsran_dl_sf_cfg_t* sf,
+                                        srsran_dci_cfg_t*   dci_cfg,
+                                        srsran_dci_msg_t*   msg,
+                                        float*              prob,
+                                        bool*               skipped)
 {
   int ret = SRSRAN_ERROR_INVALID_INPUTS;
+  *skipped = false;
   //printf("decode_msg: NOF_CCE:%d cfi:%d\n",NOF_CCE(sf->cfi), sf->cfi);
 
   if (q != NULL && msg != NULL && srsran_dci_location_isvalid(&msg->location)) {
@@ -600,6 +769,7 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
               decode_prob);
       } else {
         
+        *skipped = true;
         INFO("Skipping DCI w/ insufficient LLR:  nCCE=%d, L=%d, msg_len=%d, mean=%f", msg->location.ncce, msg->location.L, nof_bits, mean);
         if (debug)
           printf("DEBUG: Skipping DCI with insufficient LLR: TTI=%d, nCCE=%d, L=%d, msg_len=%d, mean=%f\n", 
@@ -615,6 +785,94 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
     }
   } else if (msg != NULL) {
     ERROR("Invalid parameters, location=%d,%d", msg->location.ncce, msg->location.L);
+  }
+  return ret;
+}
+
+/* The blind search's decode, through the same per-subframe cache as srsran_pdcch_decode_msg().
+ * Both run the identical rate matching, Viterbi and CRC on the same LLRs with the same 0.3
+ * mean-LLR threshold (LLR_RATIO), so an entry either path stored is the other's answer too;
+ * this one also needs decode_prob, a re-encode agreement score, which is kept in the entry.
+ * An entry the tracked path stored first has none, so that case decodes once more to get it.
+ * On a hit every side effect of the uncached path is reproduced: the nof_bits + 16 payload
+ * bytes, rnti, nof_bits, the Format0/1A differentiation and *prob -- and on a low-LLR skip,
+ * nothing. */
+int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran_dci_cfg_t* dci_cfg, srsran_dci_msg_t* msg, float* prob)
+{
+  bool skipped = false;
+  if (q == NULL || msg == NULL || !q->dec_cache_en || !srsran_dci_location_isvalid(&msg->location) ||
+      msg->location.ncce * 72 + PDCCH_FORMAT_NOF_BITS(msg->location.L) > NOF_CCE(sf->cfi) * 72) {
+    return pdcch_decode_msg_yx_uncached(q, sf, dci_cfg, msg, prob, &skipped);
+  }
+
+  const uint32_t     nof_bits = srsran_dci_format_sizeof(&q->cell, sf, dci_cfg, msg->format);
+  pdcch_dec_entry_t* e        = pdcch_cache_find(q, msg->location.ncce, msg->location.L, nof_bits);
+
+  if (e != NULL && (e->skipped || e->has_prob)) {
+    q->dec_cache_hits++;
+    if (pdcch_cache_verify()) {
+      srsran_dci_msg_t chk = *msg;
+      float            p   = 0;
+      bool             sk  = false;
+      pdcch_decode_msg_yx_uncached(q, sf, dci_cfg, &chk, &p, &sk);
+      bool same = (sk == e->skipped);
+      if (same && !sk) {
+        same = chk.rnti == e->crc_rem && chk.nof_bits == nof_bits && memcmp(&p, &e->prob, sizeof(float)) == 0 &&
+               memcmp(chk.payload, e->payload, SRSRAN_MIN(nof_bits + 16, SRSRAN_DCI_MAX_BITS)) == 0;
+      }
+      if (!same) {
+        fprintf(stderr,
+                "PDCCH CACHE MISMATCH (blind): ncce=%d L=%d nof_bits=%d skipped %d/%d rnti 0x%x/0x%x\n",
+                msg->location.ncce, msg->location.L, nof_bits, e->skipped, sk, e->crc_rem, chk.rnti);
+        abort();
+      }
+      q->dec_cache_verified++;
+    }
+    if (e->skipped) {
+      return SRSRAN_SUCCESS;
+    }
+    memcpy(msg->payload, e->payload, SRSRAN_MIN(nof_bits + 16, SRSRAN_DCI_MAX_BITS));
+    msg->rnti     = e->crc_rem;
+    msg->nof_bits = nof_bits;
+    *prob         = e->prob;
+    if (msg->format == SRSRAN_DCI_FORMAT0 || msg->format == SRSRAN_DCI_FORMAT1A) {
+      msg->format = (msg->payload[dci_cfg->cif_enabled ? 3 : 0] == 0) ? SRSRAN_DCI_FORMAT0 : SRSRAN_DCI_FORMAT1A;
+    }
+    return SRSRAN_SUCCESS;
+  }
+
+  q->dec_cache_misses++;
+  const int ret = pdcch_decode_msg_yx_uncached(q, sf, dci_cfg, msg, prob, &skipped);
+  if (ret != SRSRAN_SUCCESS) {
+    return ret;
+  }
+  if (e != NULL) {
+    /* Decoded by the tracked path, without decode_prob: add it. The bytes must agree. */
+    if (skipped != e->skipped ||
+        (!skipped && (e->crc_rem != msg->rnti ||
+                      memcmp(e->payload, msg->payload, SRSRAN_MIN(nof_bits + 16, SRSRAN_DCI_MAX_BITS)) != 0))) {
+      fprintf(stderr, "PDCCH CACHE MISMATCH (blind vs tracked decode): ncce=%d L=%d nof_bits=%d\n",
+              msg->location.ncce, msg->location.L, nof_bits);
+      abort();
+    }
+    if (!skipped) {
+      e->prob     = *prob;
+      e->has_prob = true;
+    }
+    return ret;
+  }
+  pdcch_dec_entry_t* n = pdcch_cache_alloc(q, msg->location.ncce, msg->location.L);
+  if (n != NULL) {
+    n->gen      = q->dec_gen;
+    n->nof_bits = nof_bits;
+    n->skipped  = skipped;
+    n->has_corr = false;
+    n->has_prob = !skipped;
+    if (!skipped) {
+      n->crc_rem = msg->rnti;
+      n->prob    = *prob;
+      memcpy(n->payload, msg->payload, SRSRAN_MIN(nof_bits + 16, SRSRAN_DCI_MAX_BITS));
+    }
   }
   return ret;
 }
@@ -818,12 +1076,38 @@ int srsran_pdcch_decode_msg_yx(srsran_pdcch_t* q, srsran_dl_sf_cfg_t* sf, srsran
 //   return ret;
 // }
 
+static float pdcch_msg_corr_uncached(srsran_pdcch_t* q, srsran_dci_msg_t* msg);
+
+/* corr depends only on the decoded payload and CRC remainder and on the LLRs, so it is
+ * remembered alongside the decode it belongs to -- but only when msg still carries exactly
+ * that decode's payload and remainder. */
 float srsran_pdcch_msg_corr(srsran_pdcch_t* q, srsran_dci_msg_t* msg)
 {
   if (q == NULL || msg == NULL) {
     return 0.0f;
   }
+  pdcch_dec_entry_t* e = pdcch_cache_find(q, msg->location.ncce, msg->location.L, msg->nof_bits);
+  if (e == NULL || e->skipped || e->crc_rem != msg->rnti ||
+      memcmp(e->payload, msg->payload, msg->nof_bits) != 0) {
+    return pdcch_msg_corr_uncached(q, msg);
+  }
+  if (!e->has_corr) {
+    e->corr     = pdcch_msg_corr_uncached(q, msg);
+    e->has_corr = true;
+  } else if (pdcch_cache_verify()) {
+    float c = pdcch_msg_corr_uncached(q, msg);
+    if (memcmp(&c, &e->corr, sizeof(float)) != 0) {
+      fprintf(stderr, "PDCCH CACHE MISMATCH: corr %f vs cached %f at ncce=%d L=%d\n", c, e->corr,
+              msg->location.ncce, msg->location.L);
+      abort();
+    }
+    q->dec_cache_verified++;
+  }
+  return e->corr;
+}
 
+static float pdcch_msg_corr_uncached(srsran_pdcch_t* q, srsran_dci_msg_t* msg)
+{
   uint32_t E       = PDCCH_FORMAT_NOF_BITS(msg->location.L);
   uint32_t nof_llr = E / 2;
 
@@ -858,6 +1142,7 @@ int srsran_pdcch_extract_llr(srsran_pdcch_t*        q,
     nof_symbols     = e_bits / 2;
     ret             = SRSRAN_ERROR;
     srsran_vec_f_zero(q->llr, q->max_bits);
+    q->dec_gen++; /* new LLRs: every cached decode is now stale */
 
     DEBUG("Extracting LLRs: E: %d, SF: %d, CFI: %d", e_bits, sf->tti % 10, sf->cfi);
 
