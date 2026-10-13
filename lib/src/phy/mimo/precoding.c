@@ -4700,7 +4700,7 @@ int srsran_predecoding_type(cf_t*              y[SRSRAN_MAX_PORTS],
       return SRSRAN_ERROR;
     case SRSRAN_TXSCHEME_PORT0:
       if (nof_ports == 1 && nof_layers == 1) {
-          printf("srsran_txscheme_port0\n");
+          // printf("srsran_txscheme_port0\n");
         return srsran_predecoding_single_multi(y, h[0], x[0], csi, nof_rxant, nof_symbols, scaling, noise_estimate);
       } else {
         ERROR("Number of ports and layers must be 1 for transmission on single antenna ports (%d, %d)",

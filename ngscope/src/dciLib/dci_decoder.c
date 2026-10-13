@@ -358,7 +358,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars, \
 									rf_idx, dci_per_sub->timestamp, dci_per_sub->collection_time);
 		for (int i = 0; i < nof_rar; i++) {
-		    printf("Found RAR at tti=%d!\n", tti);
+		    // printf("Found RAR at tti=%d!\n", tti);
 			ngscope_rar_log_write(dci_decoder->prog_args.out_path, rf_idx, tti, \
 									dci_per_sub->timestamp, dci_per_sub->collection_time, &rars[i]);
 

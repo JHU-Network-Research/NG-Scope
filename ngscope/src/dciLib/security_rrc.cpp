@@ -416,7 +416,7 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
         ngscope_sec_count_successful_decode(rf_idx);
         const int tbs = pdsch_cfg->grant.tb[tb].tbs;
         if (!pdsch_cfg->grant.tb[tb].enabled || !pdsch_res[tb].crc || tbs <= 0) {
-          ERROR("tb disabled: %d, crc fail: %d, tbs <= 0: %d",!pdsch_cfg->grant.tb[tb].enabled, !pdsch_res[tb].crc, tbs <= 0);
+          // ERROR("tb disabled: %d, crc fail: %d, tbs <= 0: %d",!pdsch_cfg->grant.tb[tb].enabled, !pdsch_res[tb].crc, tbs <= 0);
           continue;
         }
         pdsch_ok = true;

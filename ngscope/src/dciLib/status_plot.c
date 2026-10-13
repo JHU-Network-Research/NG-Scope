@@ -511,9 +511,9 @@ void* plot_pdcch_run(void* arg)
         }
 
       	plot_scatter_setNewData(&pdcch, pdcch_buf, nof_pdcch_sample);
-        printf("Copying data over to pdsch_cw1\n");
+        // printf("Copying data over to pdsch_cw1\n");
         plot_scatter_setNewData(&pdsch_cw1, pdsch_cw1_buf, nof_pdsch_sample);
-        printf("Copying data over to pdsch_cw2\n");
+        // printf("Copying data over to pdsch_cw2\n");
         // if (pdsch_cw2_buf != NULL)
         plot_scatter_setNewData(&pdsch_cw2, pdsch_cw2_buf, nof_pdsch_sample);
       	plot_real_setNewData(&csi, csi_amp, size);
