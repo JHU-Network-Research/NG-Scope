@@ -94,6 +94,7 @@ typedef struct {
     uint64_t collection_time;
     bool decode_rar;
     bool mark_security_phase;
+    bool decode_pdsch;
 }ngscope_decode_args_t;
 
 int ngscope_push_dci_to_per_sub(ngscope_dci_per_sub_t* q, ngscope_dci_msg_t* msg);

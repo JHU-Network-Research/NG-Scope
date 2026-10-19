@@ -28,7 +28,7 @@
 #include <string.h>
 #include "dciLib/rach_filter.h"
 #include "dciLib/decode_rar.h"
-// #include "srsran/phy/ue/ngscope_consistency.h"
+#include "dciLib/security_ctx.h"
 
 #define CURRENT_FFTSIZE srsran_symbol_sz(q->cell.nof_prb)
 #define CURRENT_SFLEN_RE SRSRAN_NOF_RE(q->cell)
@@ -882,10 +882,10 @@ static int decode_grant_with_table_jh(srsran_ue_dl_t*     ue_dl,
 {
   cfg->cfg.pdsch.use_tbs_index_alt = use_alt;
 
-  const srsran_tm_t saved_tm = cfg->cfg.tm;
+  // const srsran_tm_t saved_tm = cfg->cfg.tm;
   cfg->cfg.tm                = tm_for_format_jh(dci->format, ue_dl->cell.nof_ports);
   const int grant_ret        = srsran_ue_dl_dci_to_pdsch_grant(ue_dl, sf, cfg, dci, &pdsch_cfg->grant);
-  cfg->cfg.tm                = saved_tm;
+  // cfg->cfg.tm                = saved_tm;
   if (grant_ret) {
       // ERROR("GRANT RET");
     return -1;
@@ -1053,47 +1053,32 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
          * unconditionally, so cells 1..3 were filtered against cell 0's RNTI set and the
          * blind search dropped unicast DCIs even with rach_filter_only off. */
         if (!ngscope_rach_filter_pass_bound(dci_msg[nof_dci].rnti)){
-            // JH TODO confirm this is working as expected? Also I don't love binding thread to specific RF antennas.
-            // This may not scale super well.
-          // printf("Filtering invalid dci: %d\n", dci_msg[nof_dci].rnti);
-          //
-          //
-//           srsran_pdsch_res_t pdsch_res[SRSRAN_MAX_CODEWORDS];
-//           for (int i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
-//               srsran_vec_u8_zero(data[i],2000 * 8);
-//           }
-//           int r,r2;
-//           pdsch_cfg->rnti = dci_dl[nof_dci].rnti;
-//
-//           r = decode_grant_with_table_jh(q, sf, ue_dl_cfg, pdsch_cfg, &dci_dl[nof_dci], data, pdsch_res,
-//                                           false);
-//
-//           if (r != 1){
-//               r2 = decode_grant_with_table_jh(q, sf, ue_dl_cfg, pdsch_cfg, &dci_dl[nof_dci], data, pdsch_res,
-//                                               true);
-//           }
-//
-//
-//           if (r == 1 || r2 == 1){
-//               ngscope_rach_filter_add(0, dci_msg[nof_dci].rnti, sf->tti, NGSCOPE_RACH_ANCHOR_CRC);
-//               printf("RNTI:%d, r=%d, r2=%d\n", dci_dl[nof_dci].rnti, r, r2);
-//           }
-//
-          continue;
+          if (dci_msg[nof_dci].format == SRSRAN_DCI_FORMAT0 || !dci_msg[nof_dci].rnti || !decode_args->decode_pdsch){
+              // format 0 is uplink and should never have a PDSCH message, therefore nothing to decode
+              continue;
+          }
+
+          // attempt PDSCH decode
+          pdsch_cfg->rnti = dci_msg[nof_dci].rnti;
+          bool acks[SRSRAN_MAX_CODEWORDS];
+          int pdsch_decoded = srsran_ue_dl_find_and_decode(q,sf, ue_dl_cfg, pdsch_cfg, data ,acks);
+          bool isvalid = false;
+          if(pdsch_decoded == 1){
+              for( int tb  = 0; tb < SRSRAN_MAX_CODEWORDS; tb++){
+                  if (pdsch_cfg->grant.tb[tb].enabled && acks[tb] && pdsch_cfg->grant.tb[tb].tbs > 0){
+                      printf("Success for rnti=%d,ack=%d,tb=%d,enabled=%d,tbs=%d\n",dci_msg[nof_dci].rnti,acks[tb],tb,pdsch_cfg->grant.tb[tb].enabled, pdsch_cfg->grant.tb[tb].tbs);
+                      isvalid = true;
+                  }
+              }
+          }
+
+          if (isvalid == 1){
+              ngscope_rach_filter_add(0, dci_msg[nof_dci].rnti, sf->tti, NGSCOPE_RACH_ANCHOR_CRC);
+              // printf("Adding RNTI from successful PDSCH decode: %d\n", dci_msg[nof_dci].rnti);
+          } else{
+              continue;
+          }
         }
-
-
-        // if (r != 1 && r2 != 1){
-        //     continue;
-        // }
-
-        // if (dci_msg[nof_dci].rnti == 4 && )
-
-        // }
-        // for (int i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
-        //     srsran_vec_free()
-        // }
-
 
       	dci_msg[nof_dci].decode_prob = decode_prob;
         // Check if RNTI is matched
@@ -2515,6 +2500,9 @@ int srsran_ue_dl_find_and_decode(srsran_ue_dl_t*     q,
       srsran_dci_dl_info(&dci_dl[0], str, 512);
       INFO("PDCCH: %s, snr=%.1f dB", str, q->chest_res.snr_db);
     }
+    // char str[512];
+    // srsran_dci_dl_info(&dci_dl[0], str, 512);
+    // printf("PDCCH: %s, snr=%.1f dB\n", str, q->chest_res.snr_db);
 
     // Force known MBSFN grant
     if (sf->sf_type == SRSRAN_SF_MBSFN) {
@@ -2528,7 +2516,7 @@ int srsran_ue_dl_find_and_decode(srsran_ue_dl_t*     q,
 
     // Convert DCI message to DL grant
     if (srsran_ue_dl_dci_to_pdsch_grant(q, sf, cfg, &dci_dl[0], &pdsch_cfg->grant)) {
-      ERROR("Error unpacking DCI");
+      // ERROR("Error unpacking DCI");
       return SRSRAN_ERROR;
     }
 

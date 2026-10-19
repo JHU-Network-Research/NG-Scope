@@ -96,6 +96,16 @@ TOP_LEVEL = [
         no_record=True
     ),
     _f(
+        "decode_pdsch",
+        "bool",
+        False,
+        "Decode PDSCH",
+        "When blind decoding DCIs, attempt to decode a DCI's corresponding PDSCH message to check DCI "
+        "validity. If the UE has not already been permitted through an observed RAR, NG-Scope will "
+        "attempt to decode the PDSCH and, upon a successful decoding, add the RNTI to the allowed list.",
+        no_record=True
+    ),
+    _f(
         "rar_seed_tracker",
         "bool",
         False,

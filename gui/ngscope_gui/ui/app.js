@@ -20,7 +20,7 @@ const FIELD_GROUPS = {
   topNumbers: [],
   /* Promoted out of the Decoding list into their own card: these two decide what reaches
      the logs at all, and rach_filter_only silently forces decode_RAR on. */
-  rachPrimary: ['decode_RAR', 'rach_filter_only'],
+  rachPrimary: ['decode_RAR', 'rach_filter_only','decode_pdsch'],
   rachDependent: ['rar_seed_tracker'],
   /* Its own card: it is the only setting that decodes UE payload rather than just
      filtering or logging what the DCI search already found. */

@@ -94,6 +94,7 @@ int ngscope_main(ngscope_config_t* config)
 		prog_args[i].remote_enable    = config->remote_enable;
 		prog_args[i].decode_SIB 	  = config->decode_SIB;
 		prog_args[i].decode_RAR 	  = config->decode_RAR;
+		prog_args[i].decode_pdsch     = config->decode_pdsch;
 		prog_args[i].rar_seed_tracker = config->rar_seed_tracker;
 		prog_args[i].rach_filter_only = config->rach_filter_only;
 		prog_args[i].mark_security_phase = config->mark_security_phase;

@@ -55,6 +55,7 @@ typedef struct {
   int      remote_enable;
   int 	   decode_SIB;
   int 	   decode_RAR;
+  int      decode_pdsch;
   int 	   rar_seed_tracker;
   int 	   rach_filter_only;
   int 	   mark_security_phase;

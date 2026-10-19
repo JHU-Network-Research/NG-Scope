@@ -50,6 +50,7 @@ typedef struct{
      * read, so each backend sets it beside its own lookup. */
     int         decode_SIB_explicit;
 	int 				decode_RAR;
+	int                 decode_pdsch;
 	int 				rar_seed_tracker;
 	int 				rach_filter_only;
 	int 				mark_security_phase;
@@ -104,6 +105,7 @@ typedef struct{
     X(BOOL,   "remote_enable",     remote_enable,      false,  false)                      \
     X(BOOL,   "decode_SIB",        decode_SIB,         false,  false)                      \
     X(BOOL,   "decode_RAR",        decode_RAR,         false,  false)                      \
+    X(BOOL,   "decode_pdsch",      decode_pdsch,       false,  false)                      \
     X(BOOL,   "rar_seed_tracker",  rar_seed_tracker,   false,  false)                      \
     X(BOOL,   "rach_filter_only",  rach_filter_only,   false,  false)                      \
     X(BOOL,   "mark_security_phase", mark_security_phase, false, false)                    \
