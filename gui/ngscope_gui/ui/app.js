@@ -87,9 +87,25 @@ function recording() {
   return ((S && S.config && S.config.cells) || []).some((c) => c.mode === MODE_RECORD);
 }
 
+/* The run's effective mode is Record only when no cell replays: config_io.dumps() lets
+   Replay win, and emits no_record settings at their default only in the Record case. The
+   form has to follow the same precedence or it hides settings that will take effect. */
+function recordOnly() {
+  return recording() && !replaying();
+}
+
 function availableFields(fields) {
   const supported = fields.filter((f) => !f.unsupported);
-  return replaying() ? supported : supported.filter((f) => !f.replay_only);
+  return supported.filter((f) => !(f.replay_only && !replaying())
+    && !(f.no_record && recordOnly()));
+}
+
+/* The RACH, Security and top-level cards all depend on the set of cell modes, so anything
+   that changes that set -- a mode switch, adding or removing a cell -- re-renders them. */
+function renderModeDependent() {
+  renderRach();
+  renderSecurity();
+  renderTopLevel();
 }
 
 /* Per-cell version: a mode_locked field has exactly one valid value in this cell's mode, so
@@ -414,6 +430,7 @@ function renderCellTabs() {
       S.config.cells.splice(S.active_cell, 1);
       S.active_cell = Math.max(0, S.active_cell - 1);
       renderCells();
+      renderModeDependent();
       scheduleSave();
     });
     tabs.appendChild(remove);
@@ -429,6 +446,7 @@ function renderCellTabs() {
       S.config.cells.push(fresh);
       S.active_cell = S.config.cells.length - 1;
       renderCells();
+      renderModeDependent();
       scheduleSave();
     });
     tabs.appendChild(add);
@@ -459,10 +477,7 @@ function renderCells() {
   body.appendChild(segmentedField(modeField, cell.mode, (value) => {
     cell.mode = value;
     renderCells();
-    /* Replay-only settings appear and disappear with this, in the Security card and in the
-       "More options" leftovers, so both have to re-render. */
-    renderSecurity();
-    renderTopLevel();
+    renderModeDependent();
     scheduleSave();
   }, SCHEMA.modes));
 
@@ -563,7 +578,7 @@ function renderRach() {
     renderTopLevel();
   };
 
-  if (recording()) {
+  if (recordOnly()) {
     /* When recording, we don't want to decode rach because it will add cpu load */
     const note = el('div', 'callout info');
     note.innerHTML = 'Normal or Replay only. Turn off <b>Record</b> to configure this &mdash; '
@@ -724,7 +739,7 @@ function renderTopLevel() {
 
   const toggles = el('div', 'toggles');
   FIELD_GROUPS.topToggles.forEach((key) => {
-    const field = fieldByKey(SCHEMA.top_level, key);
+    const field = fieldByKey(availableFields(SCHEMA.top_level), key);
     if (field) toggles.appendChild(toggleRow(field, top[key], set(key)));
   });
   body.appendChild(toggles);

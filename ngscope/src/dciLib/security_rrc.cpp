@@ -8,6 +8,7 @@ extern "C" {
 }
 
 #include "ngscope/hdr/dciLib/mac_pcap.h"
+#include "ngscope/hdr/dciLib/decode_rar.h"
 // #include "srsran/srsran.h"
 // #include "srsran/phy/ue/ngscope_dci.h"
 
@@ -143,7 +144,33 @@ static srsran_tm_t tm_for_format(srsran_dci_format_t f, uint32_t nof_ports)
  * not an attempt, and counting it as one would understate the decode rate.
  *
  * The grant is rebuilt for each table because the table is precisely what sets the transport
- * block size, and a wrong size cannot be rate-matched -- which is why the CRC can decide. */
+ * block size, and a wrong size cannot be rate-matched -- which is why the CRC can decide.
+ *
+ * A codeword that decodes to all zeros is NOT a pass, whatever its CRC says, and is counted
+ * in *nof_zero. The CRCs are not initialised to ones, so an all-zero block carries an
+ * all-zero CRC24A (and CRC24B per code block) and matches -- the "~2^-24" argument does not
+ * apply, because the output is not random. Every block is decoded standalone from a reset
+ * soft buffer, and an rv=2 transmission at high MCS starts past the systematic part of the
+ * circular buffer (36.212 5.1.4.1.2) and ends before wrapping back to it: none of the data
+ * bits were sent in it. Their soft bits are therefore exactly zero, the decision is `> 0`
+ * (turbodecoder_gen.c), so the output is all zeros and the zero-initialised CRC (sch.c)
+ * matches. The real payload was whatever the rv=0 transmission carried, unrecoverable
+ * without HARQ combining. Measured on ny_87_broadway/buffer/earfcn-650: 39 such blocks, all
+ * from the blind probe and all rv=2 (TB1 of a 2A grant or a 1A diversity grant, MCS mostly
+ * 23-28); 374 of 3,156 rv=2 grants carried no systematic bits and yielded 36 of them, and
+ * no rv=2 grant produced a real pass. Each would have promoted an RNTI on no evidence and
+ * dissected as an RRCConnectionReestablishment (all-zero MAC is LCID 0, all-zero DL-CCCH its
+ * first choice) -- a phantom `reused`. A real MAC PDU is never all zeros: padding is LCID 31. */
+static bool tb_all_zero(const uint8_t* p, uint32_t len)
+{
+  for (uint32_t i = 0; i < len; i++) {
+    if (p[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
                                    srsran_dl_sf_cfg_t* sf,
                                    srsran_ue_dl_cfg_t* cfg,
@@ -151,7 +178,8 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
                                    srsran_dci_dl_t*    dci,
                                    uint8_t*            data[SRSRAN_MAX_CODEWORDS],
                                    srsran_pdsch_res_t* pdsch_res,
-                                   bool                use_alt)
+                                   bool                use_alt,
+                                   int*                nof_zero)
 {
   cfg->cfg.pdsch.use_tbs_index_alt = use_alt;
 
@@ -196,6 +224,15 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
   if (srsran_ue_dl_decode_pdsch(ue_dl, sf, pdsch_cfg, pdsch_res) != SRSRAN_SUCCESS) {
     return -2;
   }
+  /* Demote all-zero codewords before anything reads crc (see above). Every caller walks
+   * pdsch_res[].crc after this, so clearing it here keeps them all out of the pcap. */
+  for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
+    if (pdsch_cfg->grant.tb[tb].enabled && pdsch_res[tb].crc && pdsch_cfg->grant.tb[tb].tbs > 0 &&
+        tb_all_zero(pdsch_res[tb].payload, (uint32_t)pdsch_cfg->grant.tb[tb].tbs / 8)) {
+      pdsch_res[tb].crc = false;
+      (*nof_zero)++;
+    }
+  }
   /* Any codeword, not just the first: a two-codeword grant whose TB0 the channel beat can
    * still carry a good TB1, and judging the grant by TB0 alone threw that block away. */
   for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
@@ -204,6 +241,112 @@ static int decode_grant_with_table(srsran_ue_dl_t*     ue_dl,
     }
   }
   return 0;
+}
+
+/* ------------------------------------------------------------- PDSCH sweep (diagnostic)
+ *
+ * NGSCOPE_PDSCH_SWEEP=<csv path>: for every tracked-UE block that fails its CRC on a
+ * supported scheme, and the first PDSCH_SWEEP_PASSES that pass, re-decode under small
+ * FFT-window shifts and CFO offsets (same table logic as the scan: configured, then the other
+ * if qam_retry) and write one row with a bitmask of the variants that passed (non-zero
+ * payload). Answers whether tracked-UE failures are the same alignment marginality the RAR
+ * sweep found. Everything the scan reads afterwards -- samples, FFT, estimate, CFI, grant,
+ * results and payloads -- is restored. */
+#define PDSCH_SWEEP_PASSES 400
+static const struct {
+  int    shift;
+  double cfo_hz;
+} PDSCH_SWEEP[] = {{2, 0}, {0, 100}, {-4, -500}, {-2, 0}, {4, 0}, {0, -100}, {0, 500}, {1, 0}, {-1, 0}};
+#define PDSCH_SWEEP_LEN (int)(sizeof(PDSCH_SWEEP) / sizeof(PDSCH_SWEEP[0]))
+static FILE*           pdsch_sweep_fd    = NULL;
+static int             pdsch_sweep_state = -1; /* -1 unchecked, 0 off, 1 on */
+static uint64_t        pdsch_sweep_passes = 0;
+static pthread_mutex_t pdsch_sweep_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static bool pdsch_sweep_open(void)
+{
+  pthread_mutex_lock(&pdsch_sweep_mutex);
+  if (pdsch_sweep_state < 0) {
+    const char* path = getenv("NGSCOPE_PDSCH_SWEEP");
+    pdsch_sweep_state = 0;
+    if (path && *path) {
+      pdsch_sweep_fd = fopen(path, "w");
+      if (pdsch_sweep_fd) {
+        fprintf(pdsch_sweep_fd, "tti,rnti,base,format,scheme,rv,mcs,tbs,nof_prb,nof_layers,nof_tb,evm,mask\n");
+        pdsch_sweep_state = 1;
+      }
+    }
+  }
+  const bool on = pdsch_sweep_state == 1;
+  pthread_mutex_unlock(&pdsch_sweep_mutex);
+  return on;
+}
+
+static int decode_grant_with_table(srsran_ue_dl_t*, srsran_dl_sf_cfg_t*, srsran_ue_dl_cfg_t*, srsran_pdsch_cfg_t*,
+                                   srsran_dci_dl_t*, uint8_t* [SRSRAN_MAX_CODEWORDS], srsran_pdsch_res_t*, bool,
+                                   int*);
+
+static void pdsch_sweep(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg,
+                        srsran_pdsch_cfg_t* pdsch_cfg, srsran_dci_dl_t* dci, uint8_t* data[SRSRAN_MAX_CODEWORDS],
+                        srsran_pdsch_res_t* pdsch_res, int rf_idx, uint32_t tti, uint16_t rnti, bool cfg_alt,
+                        int base)
+{
+  if (!pdsch_sweep_open()) {
+    return;
+  }
+  if (base == 1) {
+    pthread_mutex_lock(&pdsch_sweep_mutex);
+    const bool take = pdsch_sweep_passes < PDSCH_SWEEP_PASSES;
+    pdsch_sweep_passes += take;
+    pthread_mutex_unlock(&pdsch_sweep_mutex);
+    if (!take) {
+      return;
+    }
+  }
+  /* Save everything the scan reads after this point. */
+  static __thread uint8_t keep[SRSRAN_MAX_CODEWORDS][2000 * 8]; /* the size dci_decoder gives data[] */
+  const srsran_pdsch_grant_t grant0 = pdsch_cfg->grant;
+  srsran_pdsch_res_t         res0[SRSRAN_MAX_CODEWORDS];
+  memcpy(res0, pdsch_res, sizeof(res0));
+  for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
+    if (grant0.tb[tb].enabled && grant0.tb[tb].tbs > 0) {
+      memcpy(keep[tb], data[tb], (size_t)grant0.tb[tb].tbs / 8);
+    }
+  }
+  const uint32_t cfi0 = sf->cfi;
+  cf_t*          orig[SRSRAN_MAX_PORTS];
+  ngscope_sf_snapshot(q, orig);
+
+  unsigned mask = 0;
+  for (int k = 0; k < PDSCH_SWEEP_LEN; k++) {
+    ngscope_sf_perturb(q, orig, PDSCH_SWEEP[k].shift, PDSCH_SWEEP[k].cfo_hz);
+    srsran_ue_dl_decode_fft_estimate(q, sf, cfg);
+    sf->cfi      = cfi0;
+    int nof_zero = 0;
+    int r        = decode_grant_with_table(q, sf, cfg, pdsch_cfg, dci, data, pdsch_res, cfg_alt, &nof_zero);
+    if (r == 0 && qam_retry_enabled[rf_idx]) {
+      r = decode_grant_with_table(q, sf, cfg, pdsch_cfg, dci, data, pdsch_res, !cfg_alt, &nof_zero);
+    }
+    cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
+    if (r == 1) {
+      mask |= 1u << k;
+    }
+  }
+  ngscope_sf_restore(q, sf, cfg, orig, cfi0);
+  pdsch_cfg->grant = grant0;
+  memcpy(pdsch_res, res0, sizeof(res0));
+  for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
+    if (grant0.tb[tb].enabled && grant0.tb[tb].tbs > 0) {
+      memcpy(data[tb], keep[tb], (size_t)grant0.tb[tb].tbs / 8);
+    }
+    pdsch_res[tb].payload = res0[tb].payload;
+  }
+
+  pthread_mutex_lock(&pdsch_sweep_mutex);
+  fprintf(pdsch_sweep_fd, "%u,%u,%d,%s,%d,%d,%d,%d,%u,%u,%u,%.3f,%u\n", tti, rnti, base,
+          srsran_dci_format_string(dci->format), (int)grant0.tx_scheme, grant0.tb[0].rv, grant0.tb[0].mcs_idx,
+          grant0.tb[0].tbs, grant0.nof_prb, grant0.nof_layers, grant0.nof_tb, res0[0].evm, mask);
+  pthread_mutex_unlock(&pdsch_sweep_mutex);
 }
 
 /* Can srsRAN predecode this scheme on this cell, with this many receive antennas?
@@ -419,20 +562,24 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
       const bool cfg_alt  = cfg->cfg.pdsch.use_tbs_index_alt;
       bool       used_alt = cfg_alt;
 
+      int nof_zero = 0;
       int r = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[d], data, pdsch_res,
-                                      cfg_alt);
+                                      cfg_alt, &nof_zero);
       /* Retry only a genuine CRC failure. r == -2 is a predecoding failure, upstream of rate
        * matching, so the other MCS->TBS table cannot rescue it -- retrying was pure work. */
       if (r == 0 && sec_rf_idx_ok(rf_idx) && qam_retry_enabled[rf_idx]) {
         ngscope_sec_count_tb_retry(rf_idx);
         const int r2 = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[d], data,
-                                               pdsch_res, !cfg_alt);
+                                               pdsch_res, !cfg_alt, &nof_zero);
         if (r2 >= 0) {
           r        = r2;
           used_alt = !cfg_alt;
         }
       }
       cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
+      if (nof_zero > 0) {
+        ngscope_sec_count_tb_zero(rf_idx, nof_zero);
+      }
 
       if (r == -1) {
         continue;   /* no buildable grant: not an attempt */
@@ -469,6 +616,10 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
           if (outcome == NGSCOPE_SEC_GRANT_CRC_PASS || outcome == NGSCOPE_SEC_GRANT_CRC_FAIL) {
               ngscope_sec_count_codebook_idx(rf_idx, outcome, pdsch_cfg->grant.pmi);
           }
+      }
+      if (outcome == NGSCOPE_SEC_GRANT_CRC_FAIL || outcome == NGSCOPE_SEC_GRANT_CRC_PASS) {
+        pdsch_sweep(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[d], data, pdsch_res, rf_idx, tti, rnti, cfg_alt,
+                    outcome == NGSCOPE_SEC_GRANT_CRC_PASS ? 1 : 0);
       }
       ngscope_sec_count_grant(rf_idx, (int)dci_dl[d].format, (int)scheme, outcome, tm);
 
@@ -616,6 +767,7 @@ typedef struct {
   uint64_t no_dci[2];   /* targeted search found nothing for this RNTI */
   uint64_t crc_fail[2]; /* DCI found, transport block did not decode */
   uint64_t crc_pass[2]; /* decoded -- the (RNTI, grant) pair is real */
+  uint64_t zero_tb[2];  /* matched its CRC but decoded to all zeros -- rejected, not real */
   uint64_t bytes[2];    /* payload bytes recovered, passing blocks only */
 } blind_probe_t;
 
@@ -718,14 +870,15 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       pdsch_cfg->rnti = rnti;
       srsran_pdsch_res_t pdsch_res[SRSRAN_MAX_CODEWORDS];
 
+      int nof_zero = 0;
       int r = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[0], data, pdsch_res,
-                                      cfg_alt);
+                                      cfg_alt, &nof_zero);
       if (r == 0 && qam_retry_enabled[rf_idx]) {
         /* Same reasoning as the security scan: altCQI-Table-r12 is per-UE state a sniffer
          * cannot see, so a failure on one table is not evidence until the other is tried.
          * Without this the blind population would look worse than it is. */
         r = decode_grant_with_table(ue_dl, sf, cfg, pdsch_cfg, &dci_dl[0], data, pdsch_res,
-                                    !cfg_alt);
+                                    !cfg_alt, &nof_zero);
       }
       cfg->cfg.pdsch.use_tbs_index_alt = cfg_alt;
 
@@ -740,13 +893,25 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
           break;
         }
       }
+      /* A zero_tb row describes the codeword that was rejected, not TB0 by default: on a
+       * two-codeword grant it is usually TB1, a high-MCS rv=2 retransmission, and reporting
+       * TB0's rv/mcs/tbs instead made 9 of 39 rejections look like rv=0/1/3 blocks. */
+      for (int tb = 0; r != 1 && nof_zero > 0 && tb < SRSRAN_MAX_CODEWORDS; tb++) {
+        if (pdsch_cfg->grant.tb[tb].enabled && pdsch_cfg->grant.tb[tb].tbs > 0 &&
+            tb_all_zero(pdsch_res[tb].payload, (uint32_t)pdsch_cfg->grant.tb[tb].tbs / 8)) {
+          tb_sel = tb;
+          break;
+        }
+      }
 
       tbs     = (uint32_t)(pdsch_cfg->grant.tb[tb_sel].tbs > 0 ? pdsch_cfg->grant.tb[tb_sel].tbs : 0);
       mcs     = pdsch_cfg->grant.tb[tb_sel].mcs_idx;
       prb     = pdsch_cfg->grant.nof_prb;
       rv      = pdsch_cfg->grant.tb[tb_sel].rv;
       fmt     = (int)dci_dl[0].format;
-      outcome = (r == 1) ? "crc_pass" : "crc_fail";
+      /* zero_tb is its own outcome, not crc_fail: the block DID match its CRC, and only the
+       * all-zero rule rejected it. Folding it in would hide how often this cell produces them. */
+      outcome = (r == 1) ? "crc_pass" : (nof_zero > 0 ? "zero_tb" : "crc_fail");
       nof_tb  = pdsch_cfg->grant.nof_tb;
       nof_layers = pdsch_cfg->grant.nof_layers;
 
@@ -793,6 +958,8 @@ int ngscope_sec_probe_blind(srsran_ue_dl_t*        ue_dl,
       q->no_dci[ok]++;
     } else if (outcome[4] == 'p') { /* crc_pass */
       q->crc_pass[ok]++;
+    } else if (outcome[0] == 'z') { /* zero_tb */
+      q->zero_tb[ok]++;
     } else {
       q->crc_fail[ok]++;
     }
@@ -828,6 +995,8 @@ void ngscope_sec_probe_blind_report(int rf_idx)
          (unsigned long long)q->no_dci[0]);
   printf("  %-22s %14llu %14llu\n", "  found, CRC failed", (unsigned long long)q->crc_fail[1],
          (unsigned long long)q->crc_fail[0]);
+  printf("  %-22s %14llu %14llu\n", "  all-zero, rejected", (unsigned long long)q->zero_tb[1],
+         (unsigned long long)q->zero_tb[0]);
   printf("  %-22s %14llu %14llu\n", "  CRC PASSED (real)", (unsigned long long)q->crc_pass[1],
          (unsigned long long)q->crc_pass[0]);
   for (int ok = 1; ok >= 0; ok--) {

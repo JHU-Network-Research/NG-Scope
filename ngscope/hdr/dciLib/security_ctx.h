@@ -80,6 +80,9 @@ void ngscope_sec_count_prefilter(int rf_idx, int nof_tracked, int nof_skipped, i
 void ngscope_sec_add_pdcch_cache(int rf_idx, uint64_t hits, uint64_t misses, uint64_t verified);
 /* One decoder thread's FFT + channel-estimation totals (srsran_ue_dl_set_fft_reuse). */
 void ngscope_sec_add_fft_reuse(int rf_idx, uint64_t computed, uint64_t reused, uint64_t verified);
+/* n decoded codewords were rejected because they were all zeros: they match a zero-initialised
+ * CRC without carrying anything, so they must never be counted or written as decoded blocks. */
+void ngscope_sec_count_tb_zero(int rf_idx, int n);
 
 /* A retry was actually attempted. Counted separately so the report can tell "tested, and the
  * configured table fits" from "never tested" -- with qam_retry off the two are otherwise

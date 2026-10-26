@@ -195,6 +195,206 @@ int ue_mib_decode_sfn(srsran_ue_mib_t*   ue_mib,
     return SRSRAN_SUCCESS;
 }
 
+/* Re-acquisition after a loss of sync.
+ *
+ * In FIND, ue_sync rotates every subframe by cfo_current_value before looking for the PSS,
+ * and ue_sync_init_imp() sets cfo_is_copied, so a fresh lock never re-estimates it -- only
+ * the PSS loop moves it, and that runs in TRACK. If it walks off while tracking, FIND is
+ * searching through the wrong correction and nothing ever brings it back. Measured on
+ * ny_87_broadway/buffer/earfcn-9820/2026_10_11_13_21_02: it walked -479 Hz -> -9,023 Hz
+ * during the startup sample-gap bursts, the last loss came at 38.1 s, and the PSS peak sat at
+ * 1.0-2.1 in FIND (4-5.6 at a real lock) for the remaining 145 s while the cell was plainly
+ * there. The true residual was within ~1 kHz of the cell-search estimate.
+ *
+ * So every TRACK -> FIND transition re-seeds the correction from the cell search, and a
+ * watchdog does the same if FIND stalls with the correction far from it. Both are counted. */
+/* Reference-signal CFO feedback.
+ *
+ * The PSS loop ignores errors under cfo_pss_min (400 Hz, "typical bias of PSS estimation"),
+ * so on its own it leaves up to 400 Hz of residual CFO in every subframe. Upstream closes that
+ * with the channel estimator's reference-signal estimate, fed back once per frame
+ * (pdsch_ue.c: srsran_ue_sync_set_cfo_ref(&ue_sync, ue_dl.chest_res.cfo) at sf_idx 5). ngscope
+ * never did, in any mode. Measured on 4x2/tmobile-5035 with NGSCOPE_PDSCH_SWEEP: correcting a
+ * further +100 Hz rescued 276 failed tracked-UE blocks (mostly spatial multiplexing at MCS
+ * 10-16), -100 Hz only 9 -- a systematic residual, not noise.
+ *
+ * Decoder threads publish; the scheduler thread applies, so ue_sync is only ever touched by
+ * its owner. A decoder can lag the synchronizer by a few subframes; at one update per frame
+ * with srsRAN's 0.08 loop gain that lag is harmless. */
+static pthread_mutex_t cfo_ref_mutex = PTHREAD_MUTEX_INITIALIZER;
+static float           cfo_ref_value[MAX_NOF_RF_DEV];
+static uint64_t        cfo_ref_seq[MAX_NOF_RF_DEV];
+
+void ngscope_sync_publish_cfo_ref(int rf_idx, float cfo)
+{
+    if (rf_idx < 0 || rf_idx >= MAX_NOF_RF_DEV || !isfinite(cfo)) {
+        return;
+    }
+    pthread_mutex_lock(&cfo_ref_mutex);
+    cfo_ref_value[rf_idx] = cfo;
+    cfo_ref_seq[rf_idx]++;
+    pthread_mutex_unlock(&cfo_ref_mutex);
+}
+
+typedef struct {
+    float    seed;              /* cell-search CFO, in subcarriers (cfo_current_value units) */
+    uint64_t nof_losses;        /* TRACK -> FIND */
+    uint64_t nof_reseeds;       /* re-seeds on loss whose correction had actually moved */
+    uint64_t nof_watchdog;      /* re-seeds by the FIND watchdog */
+    double   max_drift_hz;      /* largest |correction - seed| found at a re-seed */
+    uint64_t find_reads;        /* reads in the current FIND stretch */
+    uint64_t longest_find_reads;
+    /* Reference-signal CFO feedback */
+    uint64_t cfo_ref_seen;      /* last published sequence number consumed */
+    uint64_t nof_cfo_ref_applied;
+    uint64_t nof_cfo_ref_unstable;  /* arrived while the PSS loop was not yet stable */
+    double   cfo_ref_abs_first;     /* sum |residual| Hz, first CFO_REF_WINDOW applied */
+    double   cfo_ref_abs_last;      /* EMA of |residual| Hz over the run */
+    /* Coarse-loop hold-off once the reference-signal loop has locked */
+    float    pss_min_default;       /* ue_sync's cfo_pss_min as configured (Hz) */
+    uint32_t ref_good_run;          /* consecutive applied updates with a small residual */
+    bool     ref_locked;
+    uint64_t nof_ref_locks;
+    uint64_t nof_ref_unlocks;
+    uint64_t track_reads;           /* TRACK reads */
+    uint64_t locked_reads;          /* ... of which with the reference loop locked */
+    uint64_t held_off_reads;        /* ... and the PSS estimate in the band it no longer acts on */
+} sync_supervisor_t;
+
+#define CFO_REF_WINDOW 100
+
+/* Coarse-loop hold-off.
+ *
+ * The PSS loop acts on any estimate above cfo_pss_min (400 Hz). On a cell where the PSS
+ * estimate is biased for a while, it walks the correction off the true frequency, and the
+ * reference-signal estimate cannot pull it back past ~1 kHz: it wraps there (a -1.1 kHz error
+ * reads as +950 Hz), so beyond that the feedback pushes the wrong way. Measured on
+ * ny_87_broadway/buffer/earfcn-650/2026_10_11_12_10_02 at 155-162 s: the reference estimate
+ * held steady while the PSS loop drove the correction ~650 Hz off without feedback and
+ * ~1.8 kHz off with it; decoded blocks in that second fell 30 -> 7, and two UEs lost their
+ * SecurityModeCommand.
+ *
+ * So once the reference loop has locked (CFO_REF_LOCK_RUN consecutive residuals under
+ * CFO_REF_LOCK_HZ), the PSS loop is only allowed to act on errors the reference estimate
+ * cannot see -- above CFO_PSS_MIN_LOCKED_HZ. Any loss of sync restores the default, since
+ * the reference loop has no lock to refer to after it. */
+#define CFO_REF_LOCK_RUN 20          /* ~0.2 s at one update per frame */
+#define CFO_REF_LOCK_HZ 150.0
+#define CFO_PSS_MIN_LOCKED_HZ 1000.0f
+
+#define SYNC_WATCHDOG_READS 1000     /* FIND reads one subframe each: ~1 s */
+#define SYNC_WATCHDOG_DRIFT_HZ 1000.0
+
+static void sync_reseed(srsran_ue_sync_t* q, sync_supervisor_t* s)
+{
+    const double drift = 15000.0 * fabs((double)(q->cfo_current_value - s->seed));
+    if (drift > s->max_drift_hz) {
+        s->max_drift_hz = drift;
+    }
+    q->cfo_current_value = s->seed;
+    srsran_sync_cfo_reset(&q->strack, 0.0f);
+    srsran_sync_cfo_reset(&q->sfind, 0.0f);
+}
+
+static void sync_ref_unlock(srsran_ue_sync_t* q, sync_supervisor_t* s)
+{
+    if (s->ref_locked) {
+        s->nof_ref_unlocks++;
+    }
+    s->ref_locked   = false;
+    s->ref_good_run = 0;
+    q->cfo_pss_min  = s->pss_min_default;
+}
+
+static void sync_supervise(srsran_ue_sync_t* q, srsran_ue_sync_state_t prev, sync_supervisor_t* s)
+{
+    if (q->state == SF_FIND) {
+        s->find_reads++;
+        if (s->find_reads > s->longest_find_reads) {
+            s->longest_find_reads = s->find_reads;
+        }
+    } else {
+        s->find_reads = 0;
+        s->track_reads++;
+        if (s->ref_locked) {
+            s->locked_reads++;
+            const float pss_hz = 15000.0f * fabsf(srsran_sync_get_cfo(&q->strack));
+            if (pss_hz > s->pss_min_default && pss_hz <= q->cfo_pss_min) {
+                s->held_off_reads++;
+            }
+        }
+    }
+
+    if (prev == SF_TRACK && q->state == SF_FIND) {
+        sync_ref_unlock(q, s);
+        s->nof_losses++;
+        if (q->cfo_current_value != s->seed) {
+            s->nof_reseeds++;
+        }
+        sync_reseed(q, s);
+    } else if (q->state == SF_FIND && s->find_reads % SYNC_WATCHDOG_READS == 0 &&
+               15000.0 * fabs((double)(q->cfo_current_value - s->seed)) > SYNC_WATCHDOG_DRIFT_HZ) {
+        s->nof_watchdog++;
+        sync_reseed(q, s);
+    }
+}
+
+/* Apply the newest published reference-signal CFO residual, if there is one. TRACK only:
+ * in FIND there is no lock for the residual to refer to. */
+static void sync_apply_cfo_ref(srsran_ue_sync_t* q, sync_supervisor_t* s, int rf_idx)
+{
+    if (q->state != SF_TRACK || rf_idx < 0 || rf_idx >= MAX_NOF_RF_DEV) {
+        return;
+    }
+    pthread_mutex_lock(&cfo_ref_mutex);
+    const uint64_t seq = cfo_ref_seq[rf_idx];
+    const float    v   = cfo_ref_value[rf_idx];
+    pthread_mutex_unlock(&cfo_ref_mutex);
+    if (seq == s->cfo_ref_seen) {
+        return;
+    }
+    s->cfo_ref_seen = seq;
+    if (!q->pss_is_stable) {
+        s->nof_cfo_ref_unstable++;   /* srsran_ue_sync_set_cfo_ref() would ignore it too */
+        return;
+    }
+    srsran_ue_sync_set_cfo_ref(q, v);
+    const double hz = 15000.0 * fabs((double)v);
+    if (s->nof_cfo_ref_applied < CFO_REF_WINDOW) {
+        s->cfo_ref_abs_first += hz;
+    }
+    s->cfo_ref_abs_last = s->nof_cfo_ref_applied == 0 ? hz : 0.98 * s->cfo_ref_abs_last + 0.02 * hz;
+    s->nof_cfo_ref_applied++;
+
+    s->ref_good_run = hz < CFO_REF_LOCK_HZ ? s->ref_good_run + 1 : 0;
+    if (!s->ref_locked && s->ref_good_run >= CFO_REF_LOCK_RUN) {
+        s->ref_locked  = true;
+        s->nof_ref_locks++;
+        q->cfo_pss_min = CFO_PSS_MIN_LOCKED_HZ;
+    }
+}
+
+static void sync_supervise_report(int rf_idx, const sync_supervisor_t* s)
+{
+    printf("SYNC (cell %d): %llu losses of sync, %llu CFO re-seeds to the cell-search %.1f Hz "
+           "(largest drift %.1f Hz), %llu watchdog re-seeds, longest FIND stretch %llu reads "
+           "(~%.1f s)\n",
+           rf_idx, (unsigned long long)s->nof_losses, (unsigned long long)s->nof_reseeds,
+           15000.0 * s->seed, s->max_drift_hz, (unsigned long long)s->nof_watchdog,
+           (unsigned long long)s->longest_find_reads, (double)s->longest_find_reads / 1000.0);
+    const uint64_t n_first = s->nof_cfo_ref_applied < CFO_REF_WINDOW ? s->nof_cfo_ref_applied : CFO_REF_WINDOW;
+    printf("SYNC (cell %d): reference-signal CFO feedback applied %llu times (%llu skipped while the PSS "
+           "loop was unstable); mean |residual| %.1f Hz over the first %llu, %.1f Hz at the end\n",
+           rf_idx, (unsigned long long)s->nof_cfo_ref_applied, (unsigned long long)s->nof_cfo_ref_unstable,
+           n_first ? s->cfo_ref_abs_first / (double)n_first : 0.0, (unsigned long long)n_first,
+           s->cfo_ref_abs_last);
+    printf("SYNC (cell %d): reference loop locked %llu times (%llu released by a loss of sync), "
+           "%.1f%% of tracking time; PSS loop held off %.1f s (estimate %.0f-%.0f Hz, ignored while locked)\n",
+           rf_idx, (unsigned long long)s->nof_ref_locks, (unsigned long long)s->nof_ref_unlocks,
+           s->track_reads ? 100.0 * (double)s->locked_reads / (double)s->track_reads : 0.0,
+           (double)s->held_off_reads / 1000.0, (double)s->pss_min_default, (double)CFO_PSS_MIN_LOCKED_HZ);
+}
+
 // Initialize UE sync
 int ue_sync_init_imp(srsran_ue_sync_t*      ue_sync,
                         srsran_rf_t*        rf,
@@ -831,6 +1031,10 @@ void* task_scheduler_thread(void* p){
 
     bool found_sync = false;
     int desync_count = 0;
+    sync_supervisor_t sync_sup;
+    memset(&sync_sup, 0, sizeof(sync_sup));
+    sync_sup.seed = task_scheduler->ue_sync.cfo_current_value; /* set from the cell search */
+    sync_sup.pss_min_default = task_scheduler->ue_sync.cfo_pss_min;
 	//uint64_t t1=0, t2=0, t3=0;
 	//uint64_t t1_sf_idx =0, t2_sf_idx=0;
     while(!go_exit && (sf_cnt < task_scheduler->prog_args.nof_subframes || task_scheduler->prog_args.nof_subframes == -1)) {
@@ -838,7 +1042,10 @@ void* task_scheduler_thread(void* p){
 
     	/*  Get the subframe data and put it into the buffer */
         //t1 = timestamp_us();
+        const srsran_ue_sync_state_t sync_prev = task_scheduler->ue_sync.state;
         ret = srsran_ue_sync_zerocopy(&(task_scheduler->ue_sync), buffers, max_num_samples);
+        sync_supervise(&task_scheduler->ue_sync, sync_prev, &sync_sup);
+        sync_apply_cfo_ref(&task_scheduler->ue_sync, &sync_sup, task_scheduler->prog_args.rf_index);
         readctr++;
         // fprintf(nreadslog, "TTI=%d, total # sample reads=%d, result=%d\n", tti, readctr, ret);
         if (ret == 0 && found_sync) {
@@ -1037,6 +1244,9 @@ void* task_scheduler_thread(void* p){
     if(task_scheduler->prog_args.mark_security_phase){
         ngscope_sec_report(rf_idx);
     }
+    if(task_scheduler->prog_args.decode_RAR){
+        ngscope_rar_report(rf_idx);
+    }
     if(task_scheduler->prog_args.probe_blind_dci){
         ngscope_sec_probe_blind_report(rf_idx);
         ngscope_sec_probe_blind_close(rf_idx);
@@ -1077,6 +1287,8 @@ void* task_scheduler_thread(void* p){
 //        }
 //    }
 //
+
+    sync_supervise_report(rf_idx, &sync_sup);
 
     if (mode == RECORD){
         record_hdr.desynced_frames = nof_desync;

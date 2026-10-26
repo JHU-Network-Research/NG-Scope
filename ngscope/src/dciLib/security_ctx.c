@@ -105,6 +105,12 @@ typedef struct {
     uint64_t   nof_fft_computed;
     uint64_t   nof_fft_reused;
     uint64_t   nof_fft_verified;
+    /* Codewords that matched their CRC but decoded to all zeros, and were rejected. A
+     * retransmission carrying no systematic bits decodes to zeros standalone, which satisfies
+     * the zero-initialised CRC (see decode_grant_with_table), so these would otherwise reach
+     * the pcap as phantom RRCConnectionReestablishments. Counted on the targeted scan; the blind probe
+     * counts its own in blind_probe-<rf>.csv and its teardown table. */
+    uint64_t   nof_tb_zero;
 
     /* What the targeted search actually looked at. nof_scan_no_dci was a bare `continue`
      * before there was anywhere to count it. */
@@ -661,6 +667,16 @@ void ngscope_sec_count_tb_second(int rf_idx)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+void ngscope_sec_count_tb_zero(int rf_idx, int n)
+{
+    if (!rf_idx_valid(rf_idx) || n <= 0) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_tb_zero += (uint64_t)n;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 void ngscope_sec_count_tb_retry(int rf_idx)
 {
     if (!rf_idx_valid(rf_idx)) {
@@ -863,6 +879,10 @@ void ngscope_sec_report(int rf_idx)
                    (unsigned long long)q->nof_pf_verified);
         }
     }
+    /* Printed even at zero, so a clean run says so rather than leaving it to be assumed. */
+    printf("SECURITY (cell %d): %llu decoded codewords rejected as all-zero (CRC matched, "
+           "never a real MAC PDU)\n",
+           rf_idx, (unsigned long long)q->nof_tb_zero);
 
     /* How much of the cell the targeted search actually looked at.
      *

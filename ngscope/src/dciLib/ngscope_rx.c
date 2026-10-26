@@ -36,7 +36,6 @@ record_ring_buffer_t record_buf;
  * for, which is 3 * SRSRAN_SF_LEN_PRB(cell.nof_prb) (see task_scheduler.c:506). Sizing this
  * for a single 100-PRB subframe used to overflow it on the first oversized frame. */
 #define REPLAY_BUF_NOF_SAMPLES (3 * SRSRAN_SF_LEN_MAX)
-static uint8_t replay_buf[REPLAY_BUF_NOF_SAMPLES * sizeof(cf_t)];
 
 pthread_t flush_thread;
 
@@ -218,6 +217,8 @@ static bool replay_ends_with(const char* s, const char* suffix)
     return ls >= lx && strcasecmp(s + ls - lx, suffix) == 0;
 }
 
+static bool replay_stream_init(void);
+
 bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
 {
     replay_path     = path;
@@ -366,8 +367,7 @@ bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
         }
     }
 
-
-    return true;
+    return replay_stream_init();
 }
 
 /* Forward skip over a payload the caller has decided not to use. fseek() cannot do this on
@@ -394,16 +394,277 @@ static void replay_skip(long nbytes)
     }
 }
 
+/* ===================================================================== continuous replay
+ *
+ * Replay serves the recording as ONE continuous sample stream, cut to whatever size the
+ * synchronizer asks for -- not in the chunks the recorder happened to read.
+ *
+ * It used to hand back recorded chunks verbatim and skip any chunk whose size differed from
+ * the request. Every step of re-acquiring a cell needs an odd-sized read (the realign after a
+ * PSS is found, each timing correction), so a replay could never re-sync where the recorder
+ * had not: it inherited every recording-time sync failure. Measured on
+ * ny_87_broadway/buffer/earfcn-9820/2026_10_11_13_21_02: PSS present in all 180 s, the
+ * recorder lost sync at 38.1 s for good, and the replay decoded 3 s of it.
+ *
+ * The recorder writes every read with its radio timestamp, so the file is the radio's sample
+ * stream minus whatever the radio itself dropped -- and the timestamps say exactly where:
+ *
+ * Radio timestamps are exact sample ticks, so anything beyond half a sample is real.
+ *
+ *   gap       the next chunk starts later than this one ends. Zero-filled for its duration,
+ *             so timing stays continuous and tracking can survive it (a splice would shift the
+ *             timing by an arbitrary amount). Capped at REPLAY_GAP_CAP_S per gap.
+ *   overlap   the next chunk starts before this one ends. The overlap is dropped.
+ *   rate      the cell search runs at 1.92 Msps and the cell at its own rate, so the stream
+ *             changes rate once. Recognised as chunk spacing that matches a different standard
+ *             LTE rate exactly; allowed once, and only upward. It is only visible once the
+ *             chunk after the switch arrives, so reads inside the first cell-rate chunk are
+ *             timestamped at the old rate -- about 1 ms, while the synchronizer is still in
+ *             FIND and nothing is decoded.
+ *
+ * Every one of these is counted and reported by stop_replay(). */
+
+#define REPLAY_GAP_CAP_S 2.0
+
+static cf_t*              rs_buf[SRSRAN_MAX_PORTS]; /* one recorded chunk, per channel */
+static uint64_t           rs_chunk_n   = 0;
+static uint64_t           rs_pos       = 0;
+static srsran_timestamp_t rs_chunk_ts;
+static bool               rs_have_chunk = false;
+static double             rs_rate      = 0.0;      /* samples/s; 0 until the 2nd chunk */
+static uint64_t           rs_zero_left = 0;        /* zero-fill pending before rs_pos */
+static srsran_timestamp_t rs_zero_ts;
+static bool               rs_eof       = false;
+
+static uint64_t rs_nof_chunks = 0, rs_nof_reads = 0, rs_nof_spanning = 0;
+static uint64_t rs_nof_gaps = 0, rs_gap_samples = 0, rs_nof_capped = 0;
+static double   rs_gap_max_s = 0.0, rs_gap_total_s = 0.0;
+static uint64_t rs_nof_overlaps = 0, rs_overlap_samples = 0;
+static uint64_t rs_nof_rate_changes = 0, rs_nof_oversized = 0;
+static double   rs_rate_first = 0.0;
+
+static const double LTE_RATES[] = {1.92e6, 3.84e6, 5.76e6, 11.52e6, 15.36e6, 23.04e6, 30.72e6};
+
+/* The standard LTE rate within `tol` (relative) of r, or 0. */
+static double rs_std_rate(double r, double tol)
+{
+    for (size_t i = 0; i < sizeof(LTE_RATES) / sizeof(LTE_RATES[0]); i++) {
+        if (fabs(r - LTE_RATES[i]) <= tol * LTE_RATES[i]) {
+            return LTE_RATES[i];
+        }
+    }
+    return 0.0;
+}
+
+static double rs_ts_diff(const srsran_timestamp_t* a, const srsran_timestamp_t* b)
+{
+    return (double)(a->full_secs - b->full_secs) + (a->frac_secs - b->frac_secs);
+}
+
+/* Rate used to place samples in time. Before it is known (inside the very first chunk) the
+ * stream can only be the cell search, which srsRAN always runs at 1.92 Msps. */
+static double rs_rate_or_default(void)
+{
+    return rs_rate > 0 ? rs_rate : 1.92e6;
+}
+
+static bool replay_stream_init(void)
+{
+    for (uint32_t i = 0; i < SRSRAN_MAX_PORTS; i++) {
+        rs_buf[i] = NULL;
+    }
+    for (uint32_t i = 0; i < sdr_nof_ports && i < SRSRAN_MAX_PORTS; i++) {
+        rs_buf[i] = srsran_vec_cf_malloc(REPLAY_BUF_NOF_SAMPLES);
+        if (rs_buf[i] == NULL) {
+            fprintf(stderr, "REPLAY: ERROR: cannot allocate the replay stream buffer\n");
+            return false;
+        }
+    }
+    rs_chunk_n = rs_pos = rs_zero_left = 0;
+    rs_have_chunk = rs_eof = false;
+    rs_rate = 0.0;
+    return true;
+}
+
+/* Load the next recorded chunk and decide how it joins the previous one. Returns false at
+ * end of stream. */
+static bool replay_stream_load(void)
+{
+    rx_frame_header_t hdr;
+    if (replay_fread(&hdr, sizeof(hdr), 1) != 1) {
+        return false;
+    }
+    nreplayed += sizeof(hdr);
+    srsran_timestamp_t ts;
+    srsran_timestamp_init(&ts, (time_t)hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
+
+    const bool oversized = hdr.nof_samples > REPLAY_BUF_NOF_SAMPLES;
+    if (oversized) {
+        /* Cannot be staged. Keep its duration as zeros so the timing after it is still right. */
+        rs_nof_oversized++;
+        replay_skip((long)(hdr.nof_samples * sizeof(cf_t) * sdr_nof_ports));
+    } else {
+        for (uint32_t i = 0; i < sdr_nof_ports; i++) {
+            const size_t got = replay_fread(rs_buf[i], sizeof(cf_t), hdr.nof_samples);
+            nreplayed += got * sizeof(cf_t);
+            if (got != hdr.nof_samples) {
+                return false; /* truncated final chunk: end of stream */
+            }
+        }
+    }
+    rs_nof_chunks++;
+
+    uint64_t drop = 0;
+    if (rs_have_chunk) {
+        const double span = rs_ts_diff(&ts, &rs_chunk_ts);
+        if (rs_rate == 0.0) {
+            /* First join: the spacing of the first two chunks gives the starting rate. */
+            rs_rate = rs_std_rate((double)rs_chunk_n / span, 0.03);
+            if (rs_rate == 0.0) {
+                rs_rate = 1.92e6;
+            }
+            rs_rate_first = rs_rate;
+        }
+        const double implied  = span > 0 ? (double)rs_chunk_n / span : 0.0;
+        const double std_impl = rs_std_rate(implied, 0.005);
+        const double dt       = span - (double)rs_chunk_n / rs_rate;
+
+        if (std_impl > rs_rate && rs_nof_rate_changes == 0) {
+            /* The chunk just finished ran at a higher standard rate: the switch from cell
+             * search to the cell's own rate. Its spacing says so exactly; no samples move. */
+            rs_rate = std_impl;
+            rs_nof_rate_changes++;
+        } else if (dt > 0.5 / rs_rate) {
+            double fill_s = dt;
+            if (fill_s > REPLAY_GAP_CAP_S) {
+                fill_s = REPLAY_GAP_CAP_S;
+                rs_nof_capped++;
+            }
+            rs_zero_left = (uint64_t)llround(fill_s * rs_rate);
+            rs_zero_ts   = rs_chunk_ts;
+            srsran_timestamp_add(&rs_zero_ts, 0, (double)rs_chunk_n / rs_rate);
+            rs_nof_gaps++;
+            rs_gap_samples += rs_zero_left;
+            rs_gap_total_s += dt;
+            if (dt > rs_gap_max_s) {
+                rs_gap_max_s = dt;
+            }
+        } else if (dt < -0.5 / rs_rate) {
+            drop = (uint64_t)llround(-dt * rs_rate);
+            rs_nof_overlaps++;
+            rs_overlap_samples += drop;
+        }
+    }
+
+    rs_chunk_ts   = ts;
+    rs_chunk_n    = hdr.nof_samples;
+    rs_have_chunk = true;
+    if (oversized) {
+        /* Its whole duration becomes zeros, served after any gap fill already pending. */
+        rs_zero_left += rs_chunk_n;
+        if (rs_zero_left == rs_chunk_n) {
+            rs_zero_ts = ts;
+        }
+        rs_pos = rs_chunk_n;
+    } else {
+        rs_pos = drop < rs_chunk_n ? drop : rs_chunk_n;
+    }
+    return true;
+}
+
+/* Fill ptr[] with exactly nsamples from the stream, timestamped at the first sample.
+ * Returns the number served; fewer only at end of stream. */
+static int replay_stream_read(void* ptr[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
+{
+    const uint32_t nof_copy = sdr_nof_ports < rx_nof_rx_ant ? sdr_nof_ports : rx_nof_rx_ant;
+    uint32_t served = 0;
+    int      pieces = 0;
+
+    while (served < nsamples) {
+        if (rs_zero_left > 0) {
+            const uint32_t k = (uint32_t)((uint64_t)(nsamples - served) < rs_zero_left
+                                              ? (uint64_t)(nsamples - served) : rs_zero_left);
+            if (served == 0) {
+                *t = rs_zero_ts;
+            }
+            for (uint32_t i = 0; i < rx_nof_rx_ant; i++) {
+                memset((cf_t*)ptr[i] + served, 0, (size_t)k * sizeof(cf_t));
+            }
+            srsran_timestamp_add(&rs_zero_ts, 0, (double)k / rs_rate_or_default());
+            rs_zero_left -= k;
+            served += k;
+            pieces++;
+            continue;
+        }
+        if (rs_pos >= rs_chunk_n) {
+            if (rs_eof || !replay_stream_load()) {
+                rs_eof = true;
+                break;
+            }
+            continue;
+        }
+        const uint32_t k = (uint32_t)((uint64_t)(nsamples - served) < rs_chunk_n - rs_pos
+                                          ? (uint64_t)(nsamples - served) : rs_chunk_n - rs_pos);
+        if (served == 0) {
+            *t = rs_chunk_ts;
+            srsran_timestamp_add(t, 0, (double)rs_pos / rs_rate_or_default());
+        }
+        for (uint32_t i = 0; i < nof_copy; i++) {
+            memcpy((cf_t*)ptr[i] + served, rs_buf[i] + rs_pos, (size_t)k * sizeof(cf_t));
+        }
+        /* Fewer channels in the file than the decoder expects: zero the rest. A zero channel
+         * estimate contributes zero to both sides of every MRC sum, so the result is exactly
+         * the lower-antenna one -- a missing antenna, not a corrupt one. */
+        for (uint32_t i = nof_copy; i < rx_nof_rx_ant; i++) {
+            memset((cf_t*)ptr[i] + served, 0, (size_t)k * sizeof(cf_t));
+        }
+        rs_pos += k;
+        served += k;
+        pieces++;
+    }
+
+    rs_nof_reads++;
+    if (pieces > 1) {
+        rs_nof_spanning++;
+    }
+    if (served < nsamples) {
+        for (uint32_t i = 0; i < rx_nof_rx_ant; i++) {
+            memset((cf_t*)ptr[i] + served, 0, (size_t)(nsamples - served) * sizeof(cf_t));
+        }
+    }
+    return (int)served;
+}
+
+static void replay_stream_report(void)
+{
+    printf("REPLAY STREAM: %llu recorded chunks served as %llu reads (%llu spanned more than one "
+           "piece); starting rate %.2f Msps, %llu rate change%s (cell search -> cell)\n",
+           (unsigned long long)rs_nof_chunks, (unsigned long long)rs_nof_reads,
+           (unsigned long long)rs_nof_spanning, rs_rate_first / 1e6,
+           (unsigned long long)rs_nof_rate_changes, rs_nof_rate_changes == 1 ? "" : "s");
+    printf("REPLAY STREAM: %llu gap%s the radio dropped, %.3f s in total (largest %.3f s), "
+           "zero-filled as %llu samples; %llu capped at %.0f s; %llu overlap%s (%llu samples "
+           "dropped); %llu oversized chunk%s zero-filled\n",
+           (unsigned long long)rs_nof_gaps, rs_nof_gaps == 1 ? "" : "s", rs_gap_total_s,
+           rs_gap_max_s, (unsigned long long)rs_gap_samples, (unsigned long long)rs_nof_capped,
+           REPLAY_GAP_CAP_S, (unsigned long long)rs_nof_overlaps,
+           rs_nof_overlaps == 1 ? "" : "s", (unsigned long long)rs_overlap_samples,
+           (unsigned long long)rs_nof_oversized, rs_nof_oversized == 1 ? "" : "s");
+}
+
 // int srsran_rf_recv_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
 int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t){
 
     // int nof_channels = 1;
     if (debug)
         printf("DEBUG: ngscope_rx receive %d samples\n", nsamples);
+    /* ue_sync passes NULL for its discard reads -- the positive timing-offset correction
+     * (ue_sync.c track_peak_ok) and the FIND no-space realign. These used to return 0 without
+     * reading, so those corrections were never applied, live or recorded: the samples they
+     * were meant to discard stayed in the stream. Read them into a local timestamp instead. */
+    srsran_timestamp_t t_discard;
     if (!t){
-        if(debug)
-            printf("DEBUG: Error, timestamp passed to recv samples is NULL\n");
-        return 0;
+        t = &t_discard;
     }
 
     // fprintf(stdout, "[AGC] retrieving normal sample\n");
@@ -438,13 +699,15 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
                 fprintf(stderr, "Error retrieving samples: recv returned %d\n", n);
             return n;
         }
-        if (mode == RECORD){
+        if (mode == RECORD && n > 0){
             if (debug)
                 printf("DEBUG: Recording %d samples\n", n);
 
             rx_frame_header_t hdr;
             memset(&hdr,0,sizeof(rx_frame_header_t));
-            hdr.nof_samples         = nsamples;
+            /* n, not nsamples: the payload written below is n samples, and a header that
+             * claimed more would misalign every later chunk in the file. */
+            hdr.nof_samples         = (uint64_t)n;
             hdr.timestamp_full_secs = (uint64_t) t->full_secs;
             hdr.timestamp_frac_secs = t->frac_secs;
             if (debug)
@@ -467,12 +730,13 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
                 printf("Done recording %d samples\n", n);
         }
     }else if (mode == REPLAY){
-
         if (!replay_fh){
             fprintf(stderr, "ERROR: replay file is not open. Please ensure the file exists and is readable\n");
+            return 0;
         }
 
-        if (feof(replay_fh)){
+        n = replay_stream_read(ptr, nsamples, t);
+        if (n == 0) {
             if (debug)
                 printf("REPLAY: reached end of replay file\n");
             sleep(1); // let decoding finish
@@ -480,129 +744,24 @@ int ngscope_recv_samples_wrapper(void* h, cf_t* data_[SRSRAN_MAX_PORTS], uint32_
             return 0;
         }
 
-        if (debug)
-            printf("REPLAY: Replaying samples\n");
-        rx_frame_header_t hdr;
-        n = fread(&hdr, sizeof(rx_frame_header_t), 1, replay_fh);
-        if (n != 1){
-            if (debug)
-                printf("REPLAY: error: short read loading header, read %d items instead of 1\n", n);
-        }
-        if (n <= 0){
-            if (debug)
-                printf("REPLAY: replay returned %d when reading header\n", n);
-            if (feof(replay_fh)){
-                if (debug)
-                    printf("REPLAY: reached end of replay file\n");
-                sleep(1); // let decoding finish
-                raise(SIGINT);
-                return 0;
-            }
-        }
-
-        nreplayed += (n*sizeof(rx_frame_header_t));
-
-        srsran_timestamp_init(t, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
-
-
-        if (debug)
-            printf("REPLAY: read header: nof_samples=%ld, sec=%ld, nsec=%f\n", hdr.nof_samples, hdr.timestamp_full_secs, hdr.timestamp_frac_secs);
-
-        /* Both bail-outs below have already consumed the frame header, so the payload has to
-         * be skipped as well -- otherwise the next header read lands in the middle of the IQ
-         * samples and the stream never recovers. */
-        if (hdr.nof_samples != nsamples){
-            if (debug)
-                fprintf(stderr,"REPLAY: ERROR: mismatch in number of samples, requested %d but file has %ld\n", nsamples, hdr.nof_samples);
-            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
-            return 0;
-        }
-
-        if (hdr.nof_samples > REPLAY_BUF_NOF_SAMPLES){
-            fprintf(stderr, "REPLAY: ERROR: frame of %ld samples exceeds the %d sample replay buffer, skipping\n",
-                    hdr.nof_samples, REPLAY_BUF_NOF_SAMPLES);
-            replay_skip((long)(hdr.nof_samples * sizeof(cf_t)));
-            return 0;
-        }
-
+        /* Pace to the recording: never deliver faster than the radio did. Driven by each
+         * read's own timestamp, so a zero-filled gap costs its real duration too. */
         if (last_replay_return.tv_sec == 0){
-            struct timespec current;
-            clock_gettime(CLOCK_MONOTONIC, &current);
-            last_replay_return.tv_sec = current.tv_sec;
-            last_replay_return.tv_nsec = current.tv_nsec;
+            clock_gettime(CLOCK_MONOTONIC, &last_replay_return);
         }
-
-        double recorded_delta = (double)(hdr.timestamp_full_secs - last_replay_ts_full)+ (hdr.timestamp_frac_secs - last_replay_ts_frac);
+        const double recorded_delta = (double)((uint64_t)t->full_secs - last_replay_ts_full)
+                                      + (t->frac_secs - last_replay_ts_frac);
         struct timespec spin_now;
         double system_elapsed;
-
-        if (debug)
-            printf("REPLAY: last_replay_return: %ld.%ld, delta: %.3f\n", last_replay_return.tv_sec, last_replay_return.tv_nsec, recorded_delta);
-
         do {
           clock_gettime(CLOCK_MONOTONIC, &spin_now);
           system_elapsed = (spin_now.tv_sec  - last_replay_return.tv_sec)
                          + (spin_now.tv_nsec - last_replay_return.tv_nsec) * 1e-9;
-        } while (system_elapsed < recorded_delta);
+        } while (last_replay_ts_full != 0 && system_elapsed < recorded_delta);
 
-        if (debug)
-            printf("REPLAY: Done waiting\n");
+        last_replay_ts_full = (uint64_t)t->full_secs;
+        last_replay_ts_frac = t->frac_secs;
 
-
-        last_replay_ts_full  = hdr.timestamp_full_secs;
-        last_replay_ts_frac  = hdr.timestamp_frac_secs;
-
-
-        t->full_secs = hdr.timestamp_full_secs;
-        t->frac_secs = hdr.timestamp_frac_secs;
-
-        /* Read every channel the file holds, but only keep the ones the decoder has a buffer
-         * for. A surplus channel still has to be read to stay aligned with the stream; it is
-         * simply dropped. */
-        for (uint32_t i = 0; i < sdr_nof_ports; i++){
-
-            if (debug)
-                printf("REPLAY: Reading %ld samples from file\n", hdr.nof_samples);
-            n = replay_fread(replay_buf, sizeof(cf_t), hdr.nof_samples);
-            nreplayed += (n*sizeof(cf_t));
-            if (debug)
-                printf("Read %ld bytes from file!\n", nreplayed);
-            if (n <= 0){
-                if (debug)
-                    printf("REPLAY: replay returned %d when reading header, EOF=%d\n", n, feof(replay_fh));
-                if (feof(replay_fh)){
-                    if (debug)
-                        printf("REPLAY: reached end of replay file\n");
-                    sleep(1); // let decoding finish
-                    raise(SIGINT);
-                    return 0;
-                }
-            }
-
-            if (n != hdr.nof_samples)
-                printf("REPLAY: ERROR: Read %d samples but expected %ld\n", n, hdr.nof_samples);
-            else
-                if (debug)
-                    printf("REPLAY: read %d samples (expected %ld)\n", n, hdr.nof_samples);
-            if (i < rx_nof_rx_ant) {
-                memcpy(ptr[i], replay_buf, n*sizeof(cf_t));
-                if (debug)
-                    printf("REPLAY: Copied %d samples to ptr channel %d\n", n, i);
-            } else if (debug) {
-                printf("REPLAY: dropped channel %d (file has %u, decoder wants %u)\n",
-                       i, sdr_nof_ports, rx_nof_rx_ant);
-            }
-            memset(replay_buf, 0, sizeof(replay_buf));
-        }
-
-        /* Fewer channels in the file than the decoder expects. Zero the rest rather than
-         * leaving them: they come from malloc, and uninitialised memory reaching the channel
-         * estimator is silently wrong rather than obviously wrong. A zero channel estimate
-         * contributes zero to both sides of every MRC sum, so the result is exactly the
-         * lower-antenna one -- a missing antenna, not a corrupt one. */
-        for (uint32_t i = sdr_nof_ports; i < rx_nof_rx_ant; i++) {
-            memset(ptr[i], 0, (size_t)n * sizeof(cf_t));
-        }
         if (sdr_nof_ports < rx_nof_rx_ant && !warned_short_stream) {
             warned_short_stream = true;
             printf("REPLAY: recording holds %u channel%s but nof_rx_ant is %u; the missing "
@@ -676,6 +835,13 @@ int stop_replay(){
                    (wall > 0 && blocked / wall > 0.25)
                        ? "The decompressor was the limiter -- a parallel one (lbzip2) would be faster."
                        : "Decompression kept up: the decoder, not the source, set the pace.");
+        }
+    }
+    replay_stream_report();
+    for (uint32_t i = 0; i < SRSRAN_MAX_PORTS; i++) {
+        if (rs_buf[i]) {
+            free(rs_buf[i]);
+            rs_buf[i] = NULL;
         }
     }
     printf("DEBUG: file read %ld times\n", frame_count);

@@ -654,7 +654,14 @@ static void chest_interpolate_noise_est(srsran_chest_dl_t*     q,
   uint32_t    sf_idx     = sf->tti % 10;
   srsran_sf_t ch_mode    = sf->sf_type;
 
-  if (cfg->cfo_estimate_enable && ((1 << sf_idx) & cfg->cfo_estimate_sf_mask) && ch_mode != SRSRAN_SF_MBSFN) {
+  /* Port 0 only. chest_estimate_cfo() indexes q->pilot_estimates with port 0's layout (four
+   * pilot symbols, compared slot to slot), but this runs once per port, so q->cfo used to end
+   * up as the LAST port's estimate. On a 4-port cell that is port 3, which has two pilot
+   * symbols per subframe: the indexing then compares the wrong pilots and the estimate is
+   * biased -- measured -330..-360 Hz on 4x2/tmobile-5035 against a true residual of about
+   * +100 Hz, so feeding it back drove the CFO the wrong way. (ngscope change.) */
+  if (port_id == 0 && cfg->cfo_estimate_enable && ((1 << sf_idx) & cfg->cfo_estimate_sf_mask) &&
+      ch_mode != SRSRAN_SF_MBSFN) {
     q->cfo = chest_estimate_cfo(q);
   }
 
