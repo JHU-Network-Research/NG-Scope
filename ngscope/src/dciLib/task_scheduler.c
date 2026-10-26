@@ -292,13 +292,38 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
             * recording has to stop the run, not corrupt it. */
 
         if (prog_args.use_replay_hdr){
-            printf("Using replay header!\n");
             // rx_record_header_t replay_hdr;
             if (!init_replay(prog_args.input_file_name, &record_hdr, 0)) {
                 fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
                         prog_args.input_file_name);
                 exit(EXIT_FAILURE);
             }
+
+            char hdrpath[1024];
+            sprintf(hdrpath,"%sreplay_hdr_%d.json", task_scheduler->prog_args.out_path,task_scheduler->prog_args.rf_index);
+            FILE* hdrfile = NULL;
+            hdrfile = fopen(hdrpath, "w");
+            fprintf(hdrfile,"{\n");
+            fprintf(hdrfile,"\tnof_rx_antenna:%d\n",record_hdr.nof_rx_antenna);
+            fprintf(hdrfile,"\trf_freq:%f\n",record_hdr.rf_freq);
+            fprintf(hdrfile,"\trecord_start_ns:%ld\n",record_hdr.record_start_ns);
+            fprintf(hdrfile,"\trecord_duration_ns:%ld\n",record_hdr.record_duration_ns);
+            fprintf(hdrfile,"\tlocation:%s\n",record_hdr.location);
+            fprintf(hdrfile,"\tcomment:%s\n",record_hdr.comment);
+            fprintf(hdrfile,"\tmax_gain_db:%f\n",record_hdr.max_gain_db);
+            fprintf(hdrfile,"\tmin_gain_db:%f\n",record_hdr.min_gain_db);
+            fprintf(hdrfile,"\tinit_gain_db:%f\n",record_hdr.init_gain_db);
+            fprintf(hdrfile,"\tcp: %d\n",record_hdr.cp);
+            fprintf(hdrfile,"\tphich_length:%d\n",record_hdr.phich_length);
+            fprintf(hdrfile,"\tphich_resources:%d\n",record_hdr.phich_resources);
+            fprintf(hdrfile,"\tframe_type:%d\n",record_hdr.frame_type);
+            fprintf(hdrfile,"\tdecoded_frames:%d\n",record_hdr.decoded_frames);
+            fprintf(hdrfile,"\tdesynced_frames:%d\n",record_hdr.desynced_frames);
+            fprintf(hdrfile,"\tskipped_frames:%d\n",record_hdr.skipped_frames);
+            fprintf(hdrfile,"\tfirst_sync_frame:%d\n",record_hdr.first_sync_frame);
+            fprintf(hdrfile,"}");
+            fclose(hdrfile);
+
             /* rf_freq is taken from the recording because downconversion removed it and
              * nothing else on disk carries it. nof_rx_ant is NOT: the header says how many
              * channels the file holds, which is a different question from how many the
@@ -314,7 +339,7 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
                        prog_args.rf_nof_rx_ant, prog_args.rf_nof_rx_ant);
             }
         }else{
-            printf("Ignoring replay header!\n");
+
             if (!init_replay(prog_args.input_file_name, NULL, prog_args.rf_nof_rx_ant)) {
                 fprintf(stderr, "REPLAY: cannot start replay of %s -- aborting\n",
                         prog_args.input_file_name);

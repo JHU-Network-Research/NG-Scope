@@ -370,40 +370,40 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	// Random access: decode the RARs (Msg2) of this subframe, so we can record the
 	// Temporary C-RNTIs handed out during RACH alongside the DCI logs.
-// 	if (decode_RAR) {
-// 		ngscope_rar_t rars[NGSCOPE_MAX_RAR_PER_SF];
-// 		int nof_rar = srsran_ue_dl_find_and_decode_rar(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-// 									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars, \
-// 									rf_idx, dci_per_sub->timestamp, dci_per_sub->collection_time);
-// 		for (int i = 0; i < nof_rar; i++) {
-// 		    // printf("Found RAR at tti=%d!\n", tti);
-// 			ngscope_rar_log_write(dci_decoder->prog_args.out_path, rf_idx, tti, \
-// 									dci_per_sub->timestamp, dci_per_sub->collection_time, &rars[i]);
-//
-// 			// Remember the RNTI regardless of whether the filter is on, so that turning it
-// 			// on costs nothing extra and the set is always available.
-// 			ngscope_rach_filter_add(rf_idx, rars[i].temp_crnti, tti, NGSCOPE_RACH_ANCHOR_RAR);
-//
-// 			// Anchor the security-phase tracker on the same RAR. Unlike the filter above
-// 			// this re-arms on every sighting, because an RNTI handed out again later is a
-// 			// different UE with a different boundary.
-// 			if (dci_decoder->prog_args.mark_security_phase) {
-// 				ngscope_sec_note_rar(rf_idx, rars[i].temp_crnti, tti, dci_per_sub->timestamp,
-// 									 dci_per_sub->collection_time);
-// 			}
-// 		}
-//
-// 		// Feed the RACH-assigned RNTIs back into the UE tracker, so the next genuine
-// 		// sighting of one promotes it instead of needing two sightings of its own.
-// 		// This is the only part of the RAR path that can influence the DCI output.
-// 		if (dci_decoder->prog_args.rar_seed_tracker && nof_rar > 0) {
-// 			pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
-// 			for (int i = 0; i < nof_rar; i++) {
-// 				ngscope_ue_tracker_seed_rach_rnti(&ue_tracker[rf_idx], tti, rars[i].temp_crnti);
-// 			}
-// 			pthread_mutex_unlock(&ue_tracker_mutex[rf_idx]);
-// 		}
-// 	}
+	if (decode_RAR) {
+		ngscope_rar_t rars[NGSCOPE_MAX_RAR_PER_SF];
+		int nof_rar = srsran_ue_dl_find_and_decode_rar(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars, \
+									rf_idx, dci_per_sub->timestamp, dci_per_sub->collection_time);
+		for (int i = 0; i < nof_rar; i++) {
+		    // printf("Found RAR at tti=%d!\n", tti);
+			ngscope_rar_log_write(dci_decoder->prog_args.out_path, rf_idx, tti, \
+									dci_per_sub->timestamp, dci_per_sub->collection_time, &rars[i]);
+
+			// Remember the RNTI regardless of whether the filter is on, so that turning it
+			// on costs nothing extra and the set is always available.
+			ngscope_rach_filter_add(rf_idx, rars[i].temp_crnti, tti, NGSCOPE_RACH_ANCHOR_RAR);
+
+			// Anchor the security-phase tracker on the same RAR. Unlike the filter above
+			// this re-arms on every sighting, because an RNTI handed out again later is a
+			// different UE with a different boundary.
+			if (dci_decoder->prog_args.mark_security_phase) {
+				ngscope_sec_note_rar(rf_idx, rars[i].temp_crnti, tti, dci_per_sub->timestamp,
+									 dci_per_sub->collection_time);
+			}
+		}
+
+		// Feed the RACH-assigned RNTIs back into the UE tracker, so the next genuine
+		// sighting of one promotes it instead of needing two sightings of its own.
+		// This is the only part of the RAR path that can influence the DCI output.
+		if (dci_decoder->prog_args.rar_seed_tracker && nof_rar > 0) {
+			pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
+			for (int i = 0; i < nof_rar; i++) {
+				ngscope_ue_tracker_seed_rach_rnti(&ue_tracker[rf_idx], tti, rars[i].temp_crnti);
+			}
+			pthread_mutex_unlock(&ue_tracker_mutex[rf_idx]);
+		}
+	}
 
 	pthread_mutex_lock(&token_mutex[0]);
 	char rsrppath[1024];
