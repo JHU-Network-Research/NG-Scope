@@ -64,6 +64,10 @@ typedef struct{
 	 * NGSCOPE_TRACKED_SEARCH_* value ngscope_config_finalize() parses it into. */
 	char 				tracked_search[16];
 	int 				tracked_search_mode;
+	/* Antenna combining, any mode. The string as configured, and the NGSCOPE_RX_COMBINE_*
+	 * value ngscope_config_finalize() parses it into. */
+	char 				rx_combine[16];
+	int 				rx_combine_mode;
 	/* Replay-only measurement instrument: probe every blind-search DCI against the DL-SCH
 	 * CRC and record whether it is real, split by RACH confirmation. See security_rrc.h. */
 	int 				probe_blind_dci;
@@ -114,6 +118,7 @@ typedef struct{
     X(INT,    "pcap_max_mb",       pcap_max_mb,        0,      false)                      \
     X(BOOL,   "qam_retry",         qam_retry,          true,   false)                      \
     X(STRBUF, "tracked_search",    tracked_search,     "solve_first", false)               \
+    X(STRBUF, "rx_combine",        rx_combine,         "irc",  false)                      \
     X(BOOL,   "probe_blind_dci",   probe_blind_dci,    false,  false)                      \
     X(INT,    "exit_on_desync",    exit_on_desync,     0,      false)                      \
 

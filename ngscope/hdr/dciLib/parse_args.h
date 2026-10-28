@@ -64,6 +64,7 @@ typedef struct {
   int 	   pcap_max_mb;
   int 	   qam_retry;
   int 	   tracked_search; /* NGSCOPE_TRACKED_SEARCH_* */
+  int 	   rx_combine;     /* NGSCOPE_RX_COMBINE_* */
 
   float    rf_gain;
   int      net_port;

@@ -110,6 +110,18 @@ typedef struct SRSRAN_API {
   srsran_dci_location_t allocated_locations[SRSRAN_MAX_DCI_MSG];
   uint32_t              nof_allocated_locations;
 
+  /* PCFICH correlation of the last CFI decode (estimate_pdcch_pcfich). Diagnostic. */
+  float cfi_corr;
+
+  /* Per-antenna noise weighting (srsran_ue_dl_set_rx_noise_weighting). rx_weight holds the
+   * amplitude weights applied to the last subframe, 1.0 on the quietest antenna. */
+  bool  rx_noise_weight_en;
+  float rx_weight[SRSRAN_MAX_PORTS];
+
+  /* Interference-rejection combining (srsran_ue_dl_set_rx_irc); takes precedence over noise
+   * weighting when both are on. */
+  bool rx_irc_en;
+
   /* Solve-first index (srsran_ue_dl_solve_first): every candidate decoded this subframe,
    * chained by the RNTI it decoded to. solved_gen is the PDCCH dec_gen it was built for; the
    * index is only trusted while that still matches, i.e. on the same LLRs. */
@@ -206,6 +218,23 @@ SRSRAN_API void srsran_ue_dl_set_mi_auto(srsran_ue_dl_t* q);
  * srsran_ue_dl_decode_fft_estimate() calls. Exact for every estimator except wiener (which
  * keeps state across calls and therefore always recomputes). */
 SRSRAN_API void srsran_ue_dl_set_fft_reuse(srsran_ue_dl_t* q, bool enable);
+
+/* Weight each receive antenna by its own noise estimate before anything is demodulated.
+ * srsRAN's combiners (sum h*y / sum |h|^2) weight antennas by channel gain only, so a receive
+ * chain with far more noise or interference than the others drags the combined SINR below
+ * that of the clean antenna alone. Scaling antenna i's symbols and channel estimates by
+ * sqrt(n_min / n_i) makes every combiner downstream noise-weighted MRC -- PCFICH, PDCCH and
+ * PDSCH alike -- with weights of 1 when the antennas are equally noisy. */
+SRSRAN_API void srsran_ue_dl_set_rx_noise_weighting(srsran_ue_dl_t* q, bool enable);
+
+/* Interference-rejection combining for two receive antennas. Per region of RX_IRC_PRB PRBs
+ * over the subframe, the 2x2 covariance R of the CRS residuals (received pilot minus the
+ * channel estimate, interference plus noise) is estimated and every RE of the region --
+ * symbols and channel estimates alike -- is whitened by L^-1, R = L L^H. srsRAN's combiners
+ * then compute h^H R^-1 y / h^H R^-1 h, which is IRC: an interferer correlated across the
+ * antennas is cancelled rather than merely down-weighted. Reduces to noise weighting when R
+ * is diagonal. */
+SRSRAN_API void srsran_ue_dl_set_rx_irc(srsran_ue_dl_t* q, bool enable);
 
 /* New IQ is in the input buffer: nothing computed so far may be reused. */
 SRSRAN_API void srsran_ue_dl_new_subframe(srsran_ue_dl_t* q);

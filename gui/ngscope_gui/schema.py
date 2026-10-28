@@ -198,6 +198,24 @@ TOP_LEVEL = [
         no_record=True,
     ),
     _f(
+        "rx_combine",
+        "choice",
+        "irc",
+        "Antenna combining",
+        "How the decoder combines the receive antennas, in every mode; nothing changes with one "
+        "antenna. srsRAN weights each antenna by its channel gain alone, so an antenna carrying "
+        "interference is trusted as much as a clean one. Noise weighting scales each antenna by "
+        "its noise estimate. Interference rejection estimates how the noise on the two antennas "
+        "is correlated, per 6 PRBs, and suppresses it -- two antennas only, noise weighting "
+        "otherwise. On a capture with one antenna interfered, PDSCH CRC pass went 95.0% -> "
+        "96.3% -> 97.8%. Not yet measured on a 4-port cell.",
+        options=[
+            {"value": "irc", "label": "Interference rejection"},
+            {"value": "weight", "label": "Noise weighting"},
+            {"value": "off", "label": "srsRAN (gain only)"},
+        ],
+    ),
+    _f(
         "probe_blind_dci",
         "bool",
         False,

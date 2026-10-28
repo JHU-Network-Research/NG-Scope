@@ -107,6 +107,16 @@ int decoder_idx
      * mode -- see ue_dl.c. dci_decoder_decode() marks each new subframe. */
     srsran_ue_dl_set_fft_reuse(&dci_decoder->ue_dl, true);
 
+    /* Interference-aware antenna combining (ue_dl.h). Measured on replay-test/flashcatch-08:
+     * from 181 s to 213 s antenna 0 alone took up to 21 dB of in-band interference while
+     * antenna 1 stayed clean, and srsRAN's gain-only combining let it wreck the PCFICH and
+     * PDCCH -- 9 of the 23 UEs that RACHed then never had their RRCConnectionSetup found.
+     * IRC (two antennas) by default; per-antenna noise weighting otherwise, or when IRC does
+     * not apply to a subframe. */
+    /* The rx_combine config key (docs/configuration.md). */
+    srsran_ue_dl_set_rx_noise_weighting(&dci_decoder->ue_dl, prog_args.rx_combine != NGSCOPE_RX_COMBINE_OFF);
+    srsran_ue_dl_set_rx_irc(&dci_decoder->ue_dl, prog_args.rx_combine == NGSCOPE_RX_COMBINE_IRC);
+
     /* Both counts, together, decide which transmission schemes are decodable at all, so the
      * security report can state that rather than leave it to be inferred from the cell type
      * file. Idempotent across decoder threads: they all share one cell. */

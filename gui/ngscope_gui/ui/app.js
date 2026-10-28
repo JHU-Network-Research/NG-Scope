@@ -18,6 +18,8 @@ const FIELD_GROUPS = {
   cellPrimary: ['mode', 'rf_freq', 'rf_args', 'N_id_2', 'nof_thread', 'comment', 'location','nof_rx_ant'],
   cellToggles: ['decode_pdcch', 'log_dl', 'log_ul', 'log_phich', 'disable_plot', 'debug', 'silent', 'use_replay_hdr'],
   topNumbers: [],
+  /* Shown in the Decoding card itself: it changes what every mode can decode. */
+  topChoices: ['rx_combine'],
   /* Promoted out of the Decoding list into their own card: these two decide what reaches
      the logs at all, and rach_filter_only silently forces decode_RAR on. */
   rachPrimary: ['decode_RAR', 'rach_filter_only','decode_pdsch'],
@@ -277,7 +279,11 @@ function segmentedField(field, value, onChange, options) {
     const button = el('button', null, opt.label);
     button.type = 'button';
     button.setAttribute('aria-pressed', String(opt.value === value));
-    button.addEventListener('click', () => onChange(opt.value));
+    /* Mark the selection here rather than relying on the caller to re-render the card. */
+    button.addEventListener('click', () => {
+      group.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === button)));
+      onChange(opt.value);
+    });
     group.appendChild(button);
   });
   wrap.appendChild(group);
@@ -732,7 +738,7 @@ function renderTopLevel() {
     scheduleSave();
   };
 
-  FIELD_GROUPS.topNumbers.forEach((key) => {
+  [...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topChoices].forEach((key) => {
     const field = fieldByKey(SCHEMA.top_level, key);
     if (field) body.appendChild(renderField(field, top[key], set(key), `top.${key}`));
   });
@@ -747,7 +753,7 @@ function renderTopLevel() {
   /* The RACH keys live in their own card, so exclude them here or they would show up a
      second time under "More options". */
   const { rest } = orderedFields(SCHEMA.top_level, [
-    ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topToggles,
+    ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topChoices, ...FIELD_GROUPS.topToggles,
     ...FIELD_GROUPS.rachPrimary, ...FIELD_GROUPS.rachDependent,
     ...FIELD_GROUPS.securityPrimary, ...FIELD_GROUPS.securityReplay,
   ]);
