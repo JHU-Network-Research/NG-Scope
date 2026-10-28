@@ -514,6 +514,55 @@ static bool replay_stream_load(void)
     }
     rs_nof_chunks++;
 
+    /* NGSCOPE_REPLAY_LEVELS=<csv path>: per second of recording time, per antenna, the RMS,
+     * the peak and the fraction of I/Q components at or above 0.99 of full scale. Says
+     * whether a stretch of bad decoding is clipping in the recording. Diagnostic. */
+    if (!oversized) {
+        static int    lv_state = -1;
+        static FILE*  lv_fd    = NULL;
+        static double lv_t0 = -1, lv_sec = -1;
+        static double lv_pow[SRSRAN_MAX_PORTS], lv_peak[SRSRAN_MAX_PORTS];
+        static uint64_t lv_clip[SRSRAN_MAX_PORTS], lv_n;
+        if (lv_state < 0) {
+            const char* p = getenv("NGSCOPE_REPLAY_LEVELS");
+            lv_state      = 0;
+            if (p && *p && (lv_fd = fopen(p, "w"))) {
+                fprintf(lv_fd, "sec,ant,rms_db,peak,clip_frac\n");
+                lv_state = 1;
+            }
+        }
+        if (lv_state == 1) {
+            const double t = (double)hdr.timestamp_full_secs + hdr.timestamp_frac_secs;
+            if (lv_t0 < 0) {
+                lv_t0 = t;
+            }
+            const double sec = floor(t - lv_t0);
+            if (sec != lv_sec && lv_n > 0) {
+                for (uint32_t i = 0; i < sdr_nof_ports; i++) {
+                    fprintf(lv_fd, "%.0f,%u,%.2f,%.3f,%.3e\n", lv_sec, i, 10 * log10(lv_pow[i] / lv_n + 1e-30),
+                            lv_peak[i], (double)lv_clip[i] / (2.0 * lv_n));
+                    lv_pow[i] = lv_peak[i] = 0;
+                    lv_clip[i]             = 0;
+                }
+                lv_n = 0;
+                fflush(lv_fd);
+            }
+            lv_sec = sec;
+            for (uint32_t i = 0; i < sdr_nof_ports; i++) {
+                const float* f = (const float*)rs_buf[i];
+                for (uint32_t k = 0; k < 2 * hdr.nof_samples; k++) {
+                    const float a = fabsf(f[k]);
+                    lv_pow[i] += (double)a * a;
+                    if (a > lv_peak[i]) {
+                        lv_peak[i] = a;
+                    }
+                    lv_clip[i] += a >= 0.99f;
+                }
+            }
+            lv_n += hdr.nof_samples;
+        }
+    }
+
     uint64_t drop = 0;
     if (rs_have_chunk) {
         const double span = rs_ts_diff(&ts, &rs_chunk_ts);

@@ -438,6 +438,30 @@ int ngscope_sec_scan_subframe(srsran_ue_dl_t*     ue_dl,
   uint16_t  rntis[SEC_MAX_SCAN_RNTI];
   const int cap = (scan_cap > 0 && scan_cap < SEC_MAX_SCAN_RNTI) ? scan_cap : SEC_MAX_SCAN_RNTI;
   int       nof_rnti = ngscope_sec_tracked(rf_idx, dci_per_sub->collection_time, rntis, cap);
+
+  /* NGSCOPE_SF_METRICS=<csv path>: one row per subframe with the PCFICH correlation and the
+   * channel-estimation figures the PDCCH was demodulated with. Diagnostic. */
+  {
+    static FILE* sf_fd    = NULL;
+    static int   sf_state = -1;
+    pthread_mutex_lock(&pdsch_sweep_mutex);
+    if (sf_state < 0) {
+      const char* path = getenv("NGSCOPE_SF_METRICS");
+      sf_state         = 0;
+      if (path && *path && (sf_fd = fopen(path, "w"))) {
+        fprintf(sf_fd, "tti,ct,cfi,cfi_corr,snr_db,noise,rsrp_dbm,rssi_dbm,cfo,sync_error,w0,w1\n");
+        sf_state = 1;
+      }
+    }
+    if (sf_state == 1) {
+      const srsran_chest_dl_res_t* c = &ue_dl->chest_res;
+      fprintf(sf_fd, "%u,%llu,%u,%.3f,%.2f,%.3e,%.2f,%.2f,%.1f,%.3f,%.3f,%.3f\n", tti,
+              (unsigned long long)dci_per_sub->collection_time, sf->cfi, ue_dl->cfi_corr, c->snr_db,
+              c->noise_estimate, c->rsrp_dbm, c->rssi_dbm, c->cfo, c->sync_error, ue_dl->rx_weight[0],
+              ue_dl->rx_weight[1]);
+    }
+    pthread_mutex_unlock(&pdsch_sweep_mutex);
+  }
   if (nof_rnti <= 0) {
     return 0;
   }

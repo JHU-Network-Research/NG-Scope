@@ -431,6 +431,21 @@ void ngscope_config_finalize(ngscope_config_t* config, const char* path)
         }
     }
 
+    /* rx_combine: parse once here, like tracked_search. Not replay-only -- the decoder
+     * applies it in every mode, and with one antenna there is nothing to combine. */
+    if (strcmp(config->rx_combine, "off") == 0) {
+        config->rx_combine_mode = NGSCOPE_RX_COMBINE_OFF;
+    } else if (strcmp(config->rx_combine, "weight") == 0) {
+        config->rx_combine_mode = NGSCOPE_RX_COMBINE_WEIGHT;
+    } else if (strcmp(config->rx_combine, "irc") == 0) {
+        config->rx_combine_mode = NGSCOPE_RX_COMBINE_IRC;
+    } else {
+        printf("config: ERROR: rx_combine = \"%s\" -- must be irc, weight or off\n",
+               config->rx_combine);
+        config->rx_combine_mode = NGSCOPE_RX_COMBINE_OFF;
+        nof_missing_required++;
+    }
+
     /* qam_retry is replay-only by construction (task_scheduler.c ANDs it with
      * mode == REPLAY), so say so rather than letting a live run look as though it had it.
      * Not an error: it defaults on, so every live config would otherwise trip it. */
