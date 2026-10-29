@@ -729,13 +729,11 @@ static bool find_dci(srsran_dci_msg_t* dci_msg, uint32_t nof_dci_msg, srsran_dci
 static bool dci_location_is_allocated(srsran_ue_dl_t* q, srsran_dci_location_t new_loc)
 {
   for (uint32_t i = 0; i < q->nof_allocated_locations; i++) {
-    uint32_t L    = 1 << q->allocated_locations[i].L; // bit shift to translate from aggregation level to # CCEs
-    uint32_t new_L = 1 << new_loc.L;
+    uint32_t L    = q->allocated_locations[i].L; // bit shift to translate from aggregation level to # CCEs
     uint32_t ncce = q->allocated_locations[i].ncce;
-    // fprintf(stderr, "Checking [ncce=%d,L=%d] against allocated location [ncce=%d,L=%d]\n", new_loc.ncce, new_L, ncce, L);
     if ((ncce <= new_loc.ncce && new_loc.ncce < ncce + L) || // if new location starts in within an existing allocation
         (new_loc.ncce <= ncce &&
-         ncce < new_loc.ncce + new_L)) { // or an existing allocation starts within the new location
+         ncce < new_loc.ncce + new_loc.L)) { // or an existing allocation starts within the new location
       return true;
     }
   }
