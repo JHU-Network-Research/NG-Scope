@@ -317,22 +317,21 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 							uint8_t*                data[SRSRAN_MAX_CODEWORDS],
                             //ngscope_dci_msg_t       dci_array[][MAX_CANDIDATES_ALL],
                             //srsran_dci_location_t   dci_location[MAX_CANDIDATES_ALL],
-                            ngscope_dci_per_sub_t*  dci_per_sub,
-							uint16_t				decoder_idx)
+                            ngscope_dci_per_sub_t*  dci_per_sub)
 {
     uint32_t tti = sfn * 10 + sf_idx;
 
     bool decode_pdsch = false;
 
-    /* New IQ in this thread's buffer: no estimate from the previous subframe may be reused. */
-    srsran_ue_dl_new_subframe(&dci_decoder->ue_dl);
-
+	bool decode_single_ue 	= false; //dci_decoder->prog_args.decode_single_ue;
 	bool decode_SIB 		= dci_decoder->prog_args.decode_SIB;
-	bool decode_RAR 		= dci_decoder->prog_args.decode_RAR;
+    uint16_t targetRNTI 	= -1; //dci_decoder->prog_args.rnti;
 
 	int rf_idx 				= dci_decoder->prog_args.rf_index;
 	bool acks[SRSRAN_MAX_CODEWORDS] = {false};
 	int ret = 0;
+
+	uint16_t rnti = 9185;
 
     // for (int i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
     //     data[i] = srsran_vec_u8_malloc(2000 * 8);
@@ -344,7 +343,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	//First, we decode SIB1 and SIB2
 	srsran_chest_dl_cfg_t chest_pdsch_cfg = {};
-    chest_pdsch_cfg.cfo_estimate_enable   = true; /* see dci_decoder_init */
+    chest_pdsch_cfg.cfo_estimate_enable   = dci_decoder->prog_args.enable_cfo_ref;
     chest_pdsch_cfg.cfo_estimate_sf_mask  = 1023;
     chest_pdsch_cfg.estimator_alg         = srsran_chest_dl_str2estimator_alg(dci_decoder->prog_args.estimator_alg);
     chest_pdsch_cfg.sync_error_enable     = true;
@@ -356,166 +355,60 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 	dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = false;
 	dci_decoder->ue_dl_cfg.cfg.dci.multiple_csi_request_enabled = false;
 	dci_decoder->ue_dl_cfg.chest_cfg = chest_pdsch_cfg;
-	bool decoded_sib = false;
-
-	srsran_dci_location_t sib_loc;
-
-	if (decode_SIB){
-		if ((sf_idx == 5 && (sfn % 2) == 0)) {
-			ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
-			if (ret > 0) {
-				if (debug)
-					printf("CELL: Successfully decoded SIB1 with code %d!\n", ret);
-				decoded_sib=true;
-			}
-		} else { //SIB2
-			ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-										&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks, &sib_loc);
-			if (ret > 0) {
-				if (debug)
-					printf("CELL: Successfully decoded SIB2 with code %d!\n", ret);
-				decoded_sib = true;
-			}
+	if ((sf_idx == 5 && (sfn % 2) == 0)) {
+		ret = 0;
+        ret = srsran_ue_dl_find_and_decode_sib1(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks);
+		if (ret > 0) {
+			printf("Successfully decoded SIB1!\n");
 		}
-	}
-
-	// Random access: decode the RARs (Msg2) of this subframe, so we can record the
-	// Temporary C-RNTIs handed out during RACH alongside the DCI logs.
-	if (decode_RAR) {
-		ngscope_rar_t rars[NGSCOPE_MAX_RAR_PER_SF];
-		int nof_rar = srsran_ue_dl_find_and_decode_rar(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, rars, \
-									rf_idx, dci_per_sub->timestamp, dci_per_sub->collection_time);
-		for (int i = 0; i < nof_rar; i++) {
-		    // printf("Found RAR at tti=%d!\n", tti);
-			ngscope_rar_log_write(dci_decoder->prog_args.out_path, rf_idx, tti, \
-									dci_per_sub->timestamp, dci_per_sub->collection_time, &rars[i]);
-
-			// Remember the RNTI regardless of whether the filter is on, so that turning it
-			// on costs nothing extra and the set is always available.
-			ngscope_rach_filter_add(rf_idx, rars[i].temp_crnti, tti, NGSCOPE_RACH_ANCHOR_RAR);
-
-			// Anchor the security-phase tracker on the same RAR. Unlike the filter above
-			// this re-arms on every sighting, because an RNTI handed out again later is a
-			// different UE with a different boundary.
-			if (dci_decoder->prog_args.mark_security_phase) {
-				ngscope_sec_note_rar(rf_idx, rars[i].temp_crnti, tti, dci_per_sub->timestamp,
-									 dci_per_sub->collection_time);
-			}
+    } else { //SIB2
+	    ret = 0;
+		// have_sib2 = true;
+        ret = srsran_ue_dl_find_and_decode_sib2(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data, acks);
+		if (ret > 0) {
+			printf("Successfully decoded SIB2!\n");
 		}
-
-		// Feed the RACH-assigned RNTIs back into the UE tracker, so the next genuine
-		// sighting of one promotes it instead of needing two sightings of its own.
-		// This is the only part of the RAR path that can influence the DCI output.
-		if (dci_decoder->prog_args.rar_seed_tracker && nof_rar > 0) {
-			pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
-			for (int i = 0; i < nof_rar; i++) {
-				ngscope_ue_tracker_seed_rach_rnti(&ue_tracker[rf_idx], tti, rars[i].temp_crnti);
-			}
-			pthread_mutex_unlock(&ue_tracker_mutex[rf_idx]);
-		}
-	}
+    }
 
 	pthread_mutex_lock(&token_mutex[0]);
-	char rsrppath[1024];
-	sprintf(rsrppath, "%srsrp.txt", dci_decoder->prog_args.out_path);
-	FILE* rsrpoutfile = fopen(rsrppath, "a");
+	FILE* rsrpoutfile = fopen("rsrp.txt", "a");
 	fprintf(rsrpoutfile, "reference_signal_received_power: %4fdBm\n", dci_decoder->ue_dl.chest_res.rsrp_dbm);
 	fclose(rsrpoutfile);
 	pthread_mutex_unlock(&token_mutex[0]);
 
-    /* Shall we decode the PDSCH of the current subframe?
-     *
-     * This used to be gated on the configured target RNTI differing from SRSRAN_SIRNTI,
-     * which every shipped config satisfied, so the blind search ran unconditionally in
-     * practice. With no target RNTI the gate has nothing left to test and the TDD uplink
-     * subframe exclusion is the only real condition. */
-	decode_pdsch = true;
-	if (dci_decoder->cell.frame_type == SRSRAN_TDD) {
-		if (srsran_sfidx_tdd_type(dci_decoder->dl_sf.tdd_config, sf_idx) == SRSRAN_TDD_SF_U) {
-			decode_pdsch = false;
+    // Shall we decode the PDSCH of the current subframe?
+    if (rnti != SRSRAN_SIRNTI) {
+		dci_decoder->pdsch_cfg.rnti = rnti;
+        decode_pdsch = true;
+        if (dci_decoder->cell.frame_type == SRSRAN_TDD) {
+			if (srsran_sfidx_tdd_type(dci_decoder->dl_sf.tdd_config, sf_idx) == SRSRAN_TDD_SF_U) {
+				decode_pdsch = false;
+			} else {
+				decode_pdsch = true;
+			}
 		}
 	}
 
     int n = 0;
 
-	/* Clear the per-subframe PDCCH bookkeeping before the blind search.
-	 *
-	 * dci_location_is_allocated() (ue_dl.c) makes the blind search skip any candidate
-	 * overlapping a location already claimed this subframe. nof_allocated_locations is reset
-	 * only inside srsran_ue_dl_find_dl_dci() and srsran_ue_dl_find_dl_dci_sirnti(), i.e. on
-	 * the SIB and RAR paths -- so with decode_RAR on, the RA-RNTI sweep above leaves up to
-	 * SRSRAN_MAX_DCI_MSG locations marked claimed and the blind search below silently skips
-	 * every candidate that overlaps them, for the rest of this subframe. Since
-	 * rach_filter_only forces decode_RAR on, that is the common configuration.
-	 *
-	 * Both fields are subframe-scoped, so clearing them here is the correct lifetime. */
-	dci_decoder->ue_dl.pending_ul_dci_count    = 0;
-	dci_decoder->ue_dl.nof_allocated_locations = 0;
-
         // Now decode the PDSCH
-	if(decode_pdsch) {
-
-        /* SRSRAN_TM1 == 0, so the historical `tm = 3` here is TM4, not TM3.
-         *
-         * It has no effect on the blind search's own grants -- those go through
-         * srsran_ra_dl_dci_to_grant_wo_mimo_yx(), whose config_mimo() call is commented out,
-         * so tx_scheme/pmi/nof_layers are left zero. But it is the value still in
-         * ue_dl_cfg when the targeted PDSCH paths run later in this function, and there it
-         * decides both the format set of srsran_ue_dl_find_dl_dci() and the transmission
-         * scheme config_mimo_type() picks.
-         *
-         * On a single-port cell TM4 with one transport block and pinfo == 0 resolves to
-         * DIVERSITY with nof_layers = nof_ports = 1, which srsran_predecoding_diversity_multi()
-         * cannot do -- so every single-TB decode on a 1-port cell failed. TM1 gives PORT0
-         * there, which is correct. On a multi-port cell TM4 stays the right choice: Format
-         * 1/1A/1C leave pinfo at zero, so they resolve to DIVERSITY exactly as before, and
-         * Format2 keeps access to SPATIALMUX. */
-        srsran_tm_t tm = (dci_decoder->cell.nof_ports == 1) ? SRSRAN_TM1 : SRSRAN_TM4;
+    if(decode_pdsch){
+        uint32_t tm = 3;
 
         dci_decoder->dl_sf.tti                             = tti;
         dci_decoder->dl_sf.sf_type                         = SRSRAN_SF_NORM; //Ingore the MBSFN
-        dci_decoder->ue_dl_cfg.cfg.tm                      = tm;
-        /* 256QAM table selection. 36.213 only permits it when the cell configures
-         * altCQI-Table-r12, which is per-UE RRC state a downlink sniffer cannot see, so this
-         * is a guess either way and it is now an explicit one.
-         *
-         * It is not only a decode parameter: dl_dci_compute_tb() uses it to pick the MCS->TBS
-         * mapping, so it sets the tbs values reported in the .dciLog files. Guessing wrong
-         * gives wrong throughput figures AND, once DL-SCH decoding is on, a transport block
-         * CRC that can never pass. srsRAN forces it off for Format1A and non-user RNTIs
-         * (ra_dl.c), which is why SIB, RAR and paging are unaffected either way.
-         *
-         * Default stays true, matching the previous hardcoded value, so existing DCI output
-         * does not change silently. */
-        dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = dci_decoder->prog_args.enable_256qam;
+        dci_decoder->ue_dl_cfg.cfg.tm                      = (srsran_tm_t)tm;
+        dci_decoder->ue_dl_cfg.cfg.pdsch.use_tbs_index_alt = true;
 
-		/* The single-UE path (srsran_ngscope_decode_dci_singleUE_yx) used to be selected here
-		 * by decode_single_ue. It decoded only the configured target RNTI; with no target
-		 * there is nothing for it to decode, so the blind search is the only path. The
-		 * function itself is still in lib/src/phy/ue/ngscope.c -- see the note there. */
-		{
+		if(decode_single_ue){
+			n = srsran_ngscope_decode_dci_singleUE_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, targetRNTI);
+		}else{
     		ngscope_tree_t tree;
-
-          ngscope_decode_args_t decode_args;
-          decode_args.timestamp = dci_per_sub->timestamp;
-          decode_args.collection_time = dci_per_sub->collection_time;
-          decode_args.rf_idx = rf_idx;
-          decode_args.out_path = dci_decoder->prog_args.out_path;
-          decode_args.decode_rar = dci_decoder->prog_args.decode_RAR;
-          decode_args.decode_pdsch = dci_decoder->prog_args.decode_pdsch;
-          decode_args.mark_security_phase = dci_decoder->prog_args.mark_security_phase;
-
-			/* 0 == no preferred RNTI. The tree search treats a non-zero value as exempt from
-			 * the child-parent agreement check that every other candidate must pass; passing
-			 * 0 disables that shortcut. See srsran_ngscope_tree_CP_match(). */
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL, &decode_args);
-			/* Once per frame, as upstream pdsch_ue does: the estimate the search just made. */
-			if (sf_idx == 5) {
-				ngscope_sync_publish_cfo_ref(rf_idx, dci_decoder->ue_dl.chest_res.cfo);
-			}
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, targetRNTI);
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
 			// filter the dci
@@ -534,161 +427,12 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 			/*********************   Print decoding result  **********************/
 
-			if (dci_decoder->prog_args.mode != RECORD){
-    			FILE *decodelog;
-    			char fname[1024];
-    			memset(fname,0,1024);
-    			sprintf(fname,"%sdci-decode-debug-%d.csv",dci_decoder->prog_args.out_path,decoder_idx);
-    			decodelog=fopen(fname,"a");
+			// int nof_node = srsran_ngscope_tree_non_empty_nodes(&tree);
+			// printf("decoder: TTI:%d left %d non-empty nodes found:%d dl_dci %d ul_dci!\n", tti, nof_node, \
+			// 			dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci);
+			// srsran_ngscope_print_dci_per_sub(dci_per_sub);
+			// printf("\n");
 
-    			for(int idx = 0; idx < dci_per_sub->nof_dl_dci; idx++){
-    				ngscope_dci_msg_t dl_msg = dci_per_sub->dl_msg[idx];
-
-    				ngscope_dci_tb_t tb1;
-    				memset(&tb1, 0, sizeof(ngscope_dci_tb_t));
-    				ngscope_dci_tb_t tb2;
-    				memset(&tb2, 0, sizeof(ngscope_dci_tb_t));
-
-    				if (dl_msg.nof_tb > 0){
-    					tb1 = dl_msg.tb[0];
-    				}
-    				if (dl_msg.nof_tb == 2){
-    					tb2 = dl_msg.tb[1];
-    				}
-
-
-    				if(decodelog){
-    					// ngscope_dci_msg_t *msg = &tree->dci_array[format_idx][loc_idx];
-    					fprintf(decodelog,
-    						"%lu,%lu, normal,%d,%d,%d,%d,%d,%d,%d,%s,%.3f,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-    						dci_per_sub->timestamp,
-    						dci_per_sub->collection_time,
-    						tti,
-    						dl_msg.rnti,
-    						dl_msg.prb,
-    						dl_msg.dl,
-    						dl_msg.harq,
-    						dl_msg.loc.ncce,
-    						dl_msg.loc.L,
-    						srsran_dci_format_string(dl_msg.format),
-    						dl_msg.loc.mean_llr,
-    						dl_msg.nof_tb,
-    						dl_msg.decode_prob,
-    						dl_msg.corr,
-    						// dl_msg.nof_bits,
-    						// K_w,
-    						// dl_msg.agreement,
-    						// dl_msg.repeat_corr,
-    						tb1.mcs,
-    						tb1.tbs,
-    						tb1.rv,
-    						tb1.ndi,
-    						tb2.mcs,
-    						tb2.tbs,
-    						tb2.rv,
-    						tb2.ndi,
-    						// whether this RNTI would survive rach_filter_only; recorded even when
-    						// the filter is off so a single run shows what it would have dropped
-    						ngscope_rach_filter_pass(rf_idx, dl_msg.rnti) ? 1 : 0
-    						);
-    					}
-    				if(debug)
-    					printf("\tDEBUG: final DCIs for tti=%d, rnti=%d, prb=%d, dl=%d, harq=%d, ncce=%d, L=%d, format=%s, llr=%.3f, nof_tb=%d, decode prob=%.3f, corr=%.3f, mcs1=%d, tbs1=%d, rv1=%d, ndi1=%d, mcs2=%d, tbs2=%d, rv2=%d, ndi2=%d\n",
-    						tti,
-    						dl_msg.rnti,
-    						dl_msg.prb,
-    						dl_msg.dl,
-    						dl_msg.harq,
-    						dl_msg.loc.ncce,
-    						dl_msg.loc.L,
-    						srsran_dci_format_string(dl_msg.format),
-    						dl_msg.loc.mean_llr,
-    						dl_msg.nof_tb,
-    						dl_msg.decode_prob,
-    						dl_msg.corr,
-    						// dl_msg.nof_bits,
-    						// K_w,
-    						// dl_msg.agreement,
-    						// dl_msg.repeat_corr,
-    						tb1.mcs,
-    						tb1.tbs,
-    						tb1.rv,
-    						tb1.ndi,
-    						tb2.mcs,
-    						tb2.tbs,
-    						tb2.rv,
-    						tb2.ndi
-    						);
-    			}
-    			fclose(decodelog);
-			}
-
-			int nof_node = srsran_ngscope_tree_non_empty_nodes(&tree);
-			if (debug)
-				printf("DEBUG: TTI=%d left %d non-empty nodes found:%d dl_dci %d ul_dci!\n", tti, nof_node, \
-							dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci);
-			srsran_ngscope_print_dci_per_sub(dci_per_sub);
-			if (!silent)
-				printf("\n");
-
-		}
-
-		/* Blind-DCI probe. Runs BEFORE the RACH filter below, deliberately: the population
-		 * being measured is what the blind search reported, and the filter is the thing
-		 * whose necessity this is testing. Confirming DCIs after filtering them would only
-		 * ever confirm the filter's own output.
-		 *
-		 * And before the tracked scan: a UE it confirms is anchored in time for this
-		 * subframe's scan, which then decodes and writes the block like any other. */
-		if (dci_decoder->prog_args.probe_blind_dci) {
-			ngscope_sec_probe_blind(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
-									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
-									dci_per_sub, rf_idx, tti, dci_per_sub->timestamp,
-									dci_per_sub->collection_time);
-		}
-
-		/* Everything that creates an anchor -- the RAR above, the probe's CRC confirmation --
-		 * is done for this subframe. In replay, wait for every earlier subframe to reach the
-		 * same point before scanning, so the tracked set this scan sees is the same however
-		 * the decoder threads happened to be scheduled. The anchor steps never wait, so this
-		 * cannot deadlock, and they come early in a subframe, so the wait is short. */
-		ngscope_sec_anchor_done(rf_idx, dci_decoder->cur_seq);
-		dci_decoder->cur_anchor_marked = true;
-		if (dci_decoder->prog_args.mode == REPLAY && dci_decoder->prog_args.mark_security_phase) {
-			ngscope_sec_anchor_wait(rf_idx, dci_decoder->cur_seq);
-		}
-
-		// Look for the SecurityModeCommand in the still-unciphered RRC of UEs that are
-		// mid-setup, which is what puts a real boundary under the pre/post labelling. Runs
-		// before the filter below so it is unaffected by what that drops.
-		if (dci_decoder->prog_args.mark_security_phase) {
-			/* Replay blocks on a busy decoder rather than discarding the subframe, so it
-			 * stays lossless however slow it runs -- which makes it the right place to
-			 * spend CPU on coverage. Live capture drops instead, so it keeps the lower cap. */
-			const int sec_scan_cap = (dci_decoder->prog_args.mode == REPLAY)
-			                             ? NGSCOPE_SEC_SCAN_CAP_REPLAY
-			                             : NGSCOPE_SEC_SCAN_CAP_LIVE;
-			ngscope_sec_scan_subframe(&dci_decoder->ue_dl, &dci_decoder->dl_sf,
-									&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, data,
-									rf_idx, tti, dci_per_sub,
-									sec_scan_cap);
-		}
-
-		// sec_phase is no longer stamped here. Nothing in this process knows a UE's
-		// security state any more, so every record leaves as NGSCOPE_SEC_UNKNOWN (0) and
-		// tools/security_phase_join.py fills it in from the offline scan. The field stays
-		// in ngscope_dci_msg_t because it is part of the remote-sink wire struct.
-
-		// Restrict the reported DCIs to RNTIs that were seen completing RACH. Applied after
-		// the debug CSV is written, so that file stays a complete record of what the decoder
-		// found and its rach_ok column shows exactly what this drops. Everything downstream
-		// -- the .dciLog files, cell_status and the remote sink -- reads the filtered result.
-		if (dci_decoder->prog_args.rach_filter_only) {
-			int dropped = ngscope_rach_filter_apply(rf_idx, dci_per_sub);
-			if (debug && dropped > 0) {
-				printf("DEBUG: TTI=%d RACH filter dropped %d DCIs, %d dl / %d ul remain\n",
-						tti, dropped, dci_per_sub->nof_dl_dci, dci_per_sub->nof_ul_dci);
-			}
 		}
 	}
     return SRSRAN_SUCCESS;
@@ -758,9 +502,10 @@ int decode_channel_for_plot(ngscope_dci_decoder_t*       dci_decoder,
     decode_args.decode_pdsch = dci_decoder->prog_args.decode_pdsch;
     decode_args.mark_security_phase = dci_decoder->prog_args.mark_security_phase;
 
+    uint16_t rnti = 9185;
     ngscope_tree_t tree;
     srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
-								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL, &decode_args);
+								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree, rnti);
     return SRSRAN_SUCCESS;
 }
 
@@ -993,7 +738,7 @@ void* dci_decoder_thread(void* p){
             dci_per_sub.collection_time = collection_time;
 			// if (dci_decoder->prog_args.mode != RECORD){
  			uint64_t t1 = timestamp_us();
- 			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub, decoder_idx);
+ 			dci_decoder_decode(dci_decoder, sf_idx,  sfn, data, &dci_per_sub);
 			/* Every exit from the decode -- including the early ones -- must release later
 			 * subframes waiting on this one's anchors. */
 			if (!dci_decoder->cur_anchor_marked) {

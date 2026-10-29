@@ -1141,11 +1141,7 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
                             srsran_dl_sf_cfg_t* sf,
                             dci_blind_search_t* search_space,
                             srsran_dci_cfg_t*   dci_cfg,
-                            srsran_pdsch_cfg_t* pdsch_cfg,
-                            srsran_ue_dl_cfg_t* ue_dl_cfg,
-                            srsran_dci_msg_t    dci_msg[MAX_NOF_FORMAT],
-                            srsran_dci_dl_t     dci_dl[MAX_NOF_FORMAT],
-                            ngscope_decode_args_t* decode_args)
+                            srsran_dci_msg_t    dci_msg[MAX_NOF_FORMAT])
 {
   uint32_t nof_dci = 0;
   int nof_cce = srsran_pdcch_get_nof_cce_yx(&q->pdcch, sf->cfi);
@@ -1156,15 +1152,7 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
       }
       if (dci_location_is_allocated(q, search_space->loc[l])) {
         INFO("Skipping location L=%d, ncce=%d. Already allocated", search_space->loc[l].L, search_space->loc[l].ncce);
-        if (debug)
-          printf("DEBUG: skipping location TTI=%d, L=%d, ncce=%d, ss_loc_idx=%d, mean_llr=%.3f. Already allocated\n", sf->tti,search_space->loc[l].L, search_space->loc[l].ncce, l, search_space->loc[l].mean_llr);
         continue;
-      }
-
-      uint8_t* data[SRSRAN_MAX_CODEWORDS];
-      for (int i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
-          data[i] = srsran_vec_u8_malloc(2000 * 8);
-          srsran_vec_u8_zero(data[i],2000 * 8);
       }
       for (uint32_t f = 0; f < search_space->nof_formats; f++) {
         INFO("Searching format %s in %d,%d (%d/%d)",
@@ -1173,16 +1161,6 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
              search_space->loc[l].L,
              l,
              search_space->nof_locations);
-        if (debug)
-          printf("DEBUG: TTI=%d, searching format=%s, ncce=%d, L=%d, ss_loc_idx=%d, nof_loc=%d, mean_llr=%.3f\n",
-            sf->tti,
-            srsran_dci_format_string(search_space->formats[f]),
-            search_space->loc[l].ncce,
-            search_space->loc[l].L,
-            l,
-            search_space->nof_locations,
-            search_space->loc[l].mean_llr
-          );
 
         // Try to decode a valid DCI msg
         dci_msg[nof_dci].location = search_space->loc[l];
@@ -1190,172 +1168,35 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         dci_msg[nof_dci].rnti     = 0;
 
         float decode_prob = 0;
+        //if (srsran_pdcch_decode_msg(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci])) {
         if (srsran_pdcch_decode_msg_yx(&q->pdcch, sf, dci_cfg, &dci_msg[nof_dci], &decode_prob)) {
           ERROR("Error decoding DCI msg");
           return SRSRAN_ERROR;
+        }else{
+            //printf("PROB:%f\n", decode_prob);
         }
-
-        // P/SI/RA-RNTIs must be format 1A or 1C
-        if (!SRSRAN_RNTI_ISUSER(dci_msg[nof_dci].rnti) && !SRSRAN_RNTI_ISMBSFN(dci_msg[nof_dci].rnti)){
-            if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT1A && dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT1C){
-                continue;
-            }
-        }
-
-        if (dci_msg[nof_dci].rnti == 2 && decode_args->decode_rar){
-            // printf("Found potential RACH in decoder %d using output path %s\n", decode_args->rf_idx, decode_args->out_path);
-            ngscope_rar_t rars[NGSCOPE_MAX_RAR_PER_SF];
-            int nof_rar = srsran_ue_dl_find_and_decode_rar(q, sf, ue_dl_cfg, pdsch_cfg, data, rars, \
-									0, decode_args->timestamp, decode_args->collection_time);
-            // printf("Solved for %d rars at tti=%d\n", nof_rar,sf->tti);
-            for (int i = 0; i < nof_rar; i++) {
-    		    // printf("Found RAR at tti=%d!\n", sf->tti);
-        			ngscope_rar_log_write(decode_args->out_path, decode_args->rf_idx, sf->tti, \
-        									decode_args->timestamp, decode_args->collection_time, &rars[i]);
-
-    			// Remember the RNTI regardless of whether the filter is on, so that turning it
-    			// on costs nothing extra and the set is always available.
-    			    ngscope_rach_filter_add(0, rars[i].temp_crnti, sf->tti, NGSCOPE_RACH_ANCHOR_RAR);
-
-    			// Anchor the security-phase tracker on the same RAR. Unlike the filter above
-    			// this re-arms on every sighting, because an RNTI handed out again later is a
-    			// different UE with a different boundary.
-    			if (decode_args->mark_security_phase) {
-    				ngscope_sec_note_rar(decode_args->rf_idx, rars[i].temp_crnti, sf->tti, decode_args->timestamp,
-    									 decode_args->collection_time);
-    			}
-            }
-        }
-        /* Thread-bound: uses the calling decoder thread's RF device, and only filters when
-         * that device set rach_filter_only. Previously this hardcoded rf_idx 0 and ran
-         * unconditionally, so cells 1..3 were filtered against cell 0's RNTI set and the
-         * blind search dropped unicast DCIs even with rach_filter_only off. */
-        if (!ngscope_rach_filter_pass_bound(dci_msg[nof_dci].rnti)){
-          if (dci_msg[nof_dci].format == SRSRAN_DCI_FORMAT0 || !dci_msg[nof_dci].rnti || !decode_args->decode_pdsch){
-              // format 0 is uplink and should never have a PDSCH message, therefore nothing to decode
-              continue;
-          }
-
-          // attempt PDSCH decode
-          pdsch_cfg->rnti = dci_msg[nof_dci].rnti;
-          bool acks[SRSRAN_MAX_CODEWORDS];
-          int pdsch_decoded = srsran_ue_dl_find_and_decode(q,sf, ue_dl_cfg, pdsch_cfg, data ,acks);
-          bool isvalid = false;
-          if(pdsch_decoded == 1){
-              for( int tb  = 0; tb < SRSRAN_MAX_CODEWORDS; tb++){
-                  if (pdsch_cfg->grant.tb[tb].enabled && acks[tb] && pdsch_cfg->grant.tb[tb].tbs > 0){
-                      printf("Success for rnti=%d,ack=%d,tb=%d,enabled=%d,tbs=%d\n",dci_msg[nof_dci].rnti,acks[tb],tb,pdsch_cfg->grant.tb[tb].enabled, pdsch_cfg->grant.tb[tb].tbs);
-                      isvalid = true;
-                  }
-              }
-          }
-
-          if (isvalid == 1){
-              ngscope_rach_filter_add(0, dci_msg[nof_dci].rnti, sf->tti, NGSCOPE_RACH_ANCHOR_CRC);
-              // printf("Adding RNTI from successful PDSCH decode: %d\n", dci_msg[nof_dci].rnti);
-          } else{
-              continue;
-          }
-        }
-
       	dci_msg[nof_dci].decode_prob = decode_prob;
         // Check if RNTI is matched
         //if ((dci_msg[nof_dci].nof_bits > 0) && decode_prob > 50 ) {
         if ((dci_msg[nof_dci].nof_bits > 0) ) {
-
-
-
-
-//
-//             // // Skip DCIs for unsupported formats
-//             // if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
-//             //     continue;
-//             // }
-//             printf("Decoding PDSCH for RNTI %d\n", dci_msg[nof_dci].rnti);
-//             // if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
-//             srsran_pdsch_res_t pdsch_res[SRSRAN_MAX_CODEWORDS];
-//             if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, dci_cfg, &dci_msg[nof_dci], &dci_dl[nof_dci])) {
-//                 continue;
-//             }
-//             int grant_ret = srsran_ue_dl_dci_to_pdsch_grant(q, sf, ue_dl_cfg, &dci_dl[nof_dci], &pdsch_cfg->grant);
-//             if (grant_ret != SRSRAN_SUCCESS){
-//                 continue;
-//             }
-//
-//             for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-//               if (pdsch_cfg->grant.tb[tb].enabled) {
-//                 if (pdsch_cfg->grant.tb[tb].rv < 0) {
-//                   pdsch_cfg->grant.tb[tb].rv = 0;
-//                 }
-//                 srsran_softbuffer_rx_reset_tbs(pdsch_cfg->softbuffers.rx[tb],
-//                                                (uint32_t)pdsch_cfg->grant.tb[tb].tbs);
-//               }
-//             }
-//             uint8_t* data[SRSRAN_MAX_CODEWORDS];
-//             memset(pdsch_res, 0, sizeof(srsran_pdsch_res_t) * SRSRAN_MAX_CODEWORDS);
-//             bool decode_enable = false;
-//             for (uint32_t tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-//               if (pdsch_cfg->grant.tb[tb].enabled) {
-//                 decode_enable         = true;
-//                 pdsch_res[tb].payload = data[tb];
-//                 pdsch_res[tb].crc     = false;
-//               }
-//             }
-//             if (!decode_enable) {
-//               continue;
-//             }
-//
-//             printf("Decoding PDSCH\n");
-//             if (srsran_ue_dl_decode_pdsch(q, sf, pdsch_cfg, pdsch_res) != SRSRAN_SUCCESS) {
-//                 printf("Done decoding\n");
-//                 continue;
-//             }
-//             printf("Done decoding\n");
-//             /* Any codeword, not just the first: a two-codeword grant whose TB0 the channel beat can
-//                 * still carry a good TB1, and judging the grant by TB0 alone threw that block away. */
-//             // We need to check that there is a valid CRC before accepting the DCI
-//             bool is_valid = false;
-//             for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-//                 if (pdsch_cfg->grant.tb[tb].enabled && pdsch_res[tb].crc && pdsch_cfg->grant.tb[tb].tbs > 0) {
-//                 is_valid = true;
-//                 }
-//             }
-//             if (!is_valid){
-//                 continue;
-//             }
-
-
-
-
           // Compute decoded message correlation to drastically reduce false alarm probability
           float corr = srsran_pdcch_msg_corr(&q->pdcch, &dci_msg[nof_dci]);
           dci_msg[nof_dci].corr = corr;
           //printf("corr:%f\n", corr);
-          if (debug)
-            printf("DEBUG: Decoded message with TTI=%d, format=%s, ncce=%d, L=%d, "
-        "ss_loc_idx=%d, nof_loc=%d, rnti=%d, mean_llr=%.3f, "
-        "decode_prob=%.3f, nof_bits=%d, corr=%.3f\n",
-      sf->tti, srsran_dci_format_string(search_space->formats[f]),
-      search_space->loc[l].ncce, search_space->loc[l].L,
-      l, search_space->nof_locations, dci_msg[nof_dci].rnti,
-      search_space->loc[l].mean_llr, decode_prob,
-      dci_msg[nof_dci].nof_bits, corr);
-
-
           // Skip candidate if the threshold is not reached
           // 0.5 is set from pdcch_test
-//           if (!isnormal(corr) || corr < 0.4f) { // JH: I found that 0.4 eliminated most spurious DCIs while pruning the fewest correct DCIs.
-//             //printf("Corr skip!\n");
-//             continue;
-//           }
+          if (!isnormal(corr) || corr < 0.4f) { // JH: I found that 0.4 eliminated most spurious DCIs while pruning the fewest correct DCIs.
+            //printf("Corr skip!\n");
+            continue;
+          }
 
-          // JH CORR_FILTER
-          // if (!isnormal(corr) || corr <= 0.5f) {
-          //   //printf("Corr skip!\n");
-          //   if (debug)
-          //     printf("DEBUG: Skipping message at TTI=%d, format=%s, ncce=%d, L=%d, rnti=%d, because corr=%.3f (< 0.5)\n",
-          //   sf->tti, srsran_dci_format_string(search_space->formats[f]), search_space->loc[l].ncce, search_space->loc[l].L, dci_msg[nof_dci].rnti, corr);
-          //   continue;
+          // When searching for format 1A, we also need to consider format 0
+          //if(search_space->formats[f]  == SRSRAN_DCI_FORMAT1A){
+          //    srsran_dci_format_t decoded_format = (dci_msg[nof_dci].payload[0] == 0) ? SRSRAN_DCI_FORMAT0 : SRSRAN_DCI_FORMAT1A;
+          //    //printf("dci_msg format:%d decode format:%d\n", dci_msg[nof_dci].format, decoded_format);
+          //    if ( dci_msg[nof_dci].format != decoded_format ){
+          //      dci_msg[nof_dci].format = decoded_format;
+          //    }
           // }
 
           int ue_specific = srsran_ngscope_ue_locations_ncce_check_ue_specific(nof_cce,
@@ -1389,14 +1230,11 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
           nof_dci++;
         }
       }
-
-      for (int i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
-          free(data[i]);
-      }
     }
 
   return nof_dci;
 }
+
 
 
 bool srsran_ngscope_space_match_yx(uint16_t rnti,
