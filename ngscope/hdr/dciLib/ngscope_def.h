@@ -30,6 +30,12 @@ extern "C" {
 #define NGSCOPE_TRACKED_SEARCH_CACHE       1 /* same search, candidate decodes memoized       */
 #define NGSCOPE_TRACKED_SEARCH_SOLVE_FIRST 2 /* decode all candidates once, search only RNTIs
                                                 that came out; implies CACHE                  */
+/* rx_combine: how the decoder combines receive antennas (srsran_ue_dl_set_rx_irc / _noise_weighting).
+ * Any mode; inert with one antenna. */
+#define NGSCOPE_RX_COMBINE_OFF    0 /* srsRAN's gain-only combining, unchanged          */
+#define NGSCOPE_RX_COMBINE_WEIGHT 1 /* per-antenna noise weighting (MRC)                */
+#define NGSCOPE_RX_COMBINE_IRC    2 /* interference-rejection combining, 2 antennas;
+                                       noise weighting where it does not apply          */
 #define NOF_LOG_SF 32
 
 //#define NOF_LOG_SUBF (NOF_LOG_SF * 10)

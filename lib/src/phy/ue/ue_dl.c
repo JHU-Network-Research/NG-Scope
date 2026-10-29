@@ -328,6 +328,182 @@ static void set_mi_value(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl
   }
 }
 
+void srsran_ue_dl_set_rx_noise_weighting(srsran_ue_dl_t* q, bool enable)
+{
+  if (q != NULL) {
+    q->rx_noise_weight_en = enable;
+  }
+}
+
+/* See srsran_ue_dl_set_rx_noise_weighting(). Runs after channel estimation, so the RSRP, SNR,
+ * CFO and timing figures in chest_res are those of the unweighted signal; only what is
+ * demodulated from here on sees the weights. noise_estimate is set to the quietest antenna's,
+ * which after weighting is every antenna's, for the MMSE PCFICH/PDCCH equalisers that read it.
+ *
+ * One weight per antenna per subframe, from srsRAN's own CRS noise estimate. Measured on
+ * replay-test/flashcatch-08 against two alternatives: per-OFDM-symbol weights from each CRS
+ * symbol alone were worse (one symbol's ~100 pilots give too noisy a weight), and an estimate
+ * that also covers CRS symbol 0 -- which srsRAN's time-domain comparison skips -- decoded
+ * exactly the same blocks. */
+static void apply_rx_noise_weighting(srsran_ue_dl_t* q)
+{
+  for (uint32_t a = 0; a < SRSRAN_MAX_PORTS; a++) {
+    q->rx_weight[a] = 1.0f;
+  }
+  if (!q->rx_noise_weight_en || q->nof_rx_antennas < 2) {
+    return;
+  }
+  float n[SRSRAN_MAX_PORTS];
+  float n_min = INFINITY;
+  for (uint32_t a = 0; a < q->nof_rx_antennas; a++) {
+    n[a] = 0.0f;
+    for (uint32_t p = 0; p < q->cell.nof_ports; p++) {
+      n[a] += q->chest.noise_estimate[a][p];
+    }
+    n[a] /= (float)q->cell.nof_ports;
+    if (!isnormal(n[a])) {
+      return; /* no usable estimate on some antenna: leave the subframe as it is */
+    }
+    n_min = SRSRAN_MIN(n_min, n[a]);
+  }
+  const uint32_t sf_len = SRSRAN_SF_LEN_RE(q->cell.nof_prb, q->cell.cp);
+  for (uint32_t a = 0; a < q->nof_rx_antennas; a++) {
+    const float w   = sqrtf(n_min / n[a]);
+    q->rx_weight[a] = w;
+    if (w == 1.0f) {
+      continue;
+    }
+    srsran_vec_sc_prod_cfc(q->sf_symbols[a], w, q->sf_symbols[a], sf_len);
+    for (uint32_t p = 0; p < q->cell.nof_ports; p++) {
+      srsran_vec_sc_prod_cfc(q->chest_res.ce[p][a], w, q->chest_res.ce[p][a], sf_len);
+    }
+  }
+  q->chest_res.noise_estimate = n_min;
+}
+
+void srsran_ue_dl_set_rx_irc(srsran_ue_dl_t* q, bool enable)
+{
+  if (q != NULL) {
+    q->rx_irc_en = enable;
+  }
+}
+
+#define RX_IRC_PRB 6
+
+/* From accumulated residual covariance (r00, r11 real, r10 = E[e1 e0*], n samples): with
+ * light diagonal loading, the whitener s * L^-1 = [[a 0],[b c]] for R = L L^H. False when the
+ * estimate is unusable. */
+static bool irc_whitener(double r00, double r11, cf_t r10, uint32_t n, float s, cf_t* a, cf_t* b, cf_t* c)
+{
+  if (n < 4) {
+    return false;
+  }
+  const float load = 1e-3f * (float)(r00 + r11) / (2.0f * n);
+  const float R00  = (float)(r00 / n) + load;
+  const float R11  = (float)(r11 / n) + load;
+  const cf_t  R10  = r10 / (float)n;
+  const float l00  = sqrtf(R00);
+  const cf_t  l10  = R10 / l00;
+  const float d    = R11 - (crealf(l10) * crealf(l10) + cimagf(l10) * cimagf(l10));
+  if (!isnormal(l00) || !(d > 0.0f)) {
+    return false;
+  }
+  const float l11 = sqrtf(d);
+  *a              = s / l00;
+  *b              = -s * l10 / (l00 * l11);
+  *c              = s / l11;
+  return true;
+}
+
+/* See srsran_ue_dl_set_rx_irc(). Runs where apply_rx_noise_weighting() does, with the same
+ * contract: chest_res measurements stay those of the raw signal, and noise_estimate is set to
+ * the level every antenna has after the transform (n_ref, the quietest antenna's srsRAN
+ * estimate), for the MMSE PCFICH/PDCCH equalisers that read it. Returns false, leaving the
+ * subframe untouched, when it does not apply. */
+/* Measured on replay-test/flashcatch-08 (antenna 0 alone interfered, up to 21 dB, 181-213 s),
+ * against per-antenna noise weighting: PDSCH CRC pass 96.3% -> 97.8%, RACHing UEs found 237 ->
+ * 240, RRCConnectionSetup 220 -> 222, PCFICH correlation 18.4 -> 24.5 in the interfered window
+ * and 20.5 -> 28.3 outside it. A second whitener for OFDM symbol 0 alone, from that symbol's
+ * pilots across the band, was worse: one symbol is too few pilots for a 2x2 covariance. */
+static bool apply_rx_irc(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf)
+{
+  if (!q->rx_irc_en || q->nof_rx_antennas != 2 || sf->sf_type != SRSRAN_SF_NORM) {
+    return false;
+  }
+  const uint32_t nprb    = q->cell.nof_prb;
+  const uint32_t nports  = q->cell.nof_ports;
+  const uint32_t ngroups = (nprb + RX_IRC_PRB - 1) / RX_IRC_PRB;
+
+  float n_ref = INFINITY;
+  for (uint32_t a = 0; a < 2; a++) {
+    float n = 0.0f;
+    for (uint32_t p = 0; p < nports; p++) {
+      n += q->chest.noise_estimate[a][p];
+    }
+    n /= (float)nports;
+    if (!isnormal(n)) {
+      return false;
+    }
+    n_ref = SRSRAN_MIN(n_ref, n);
+  }
+
+  /* Covariance accumulators per PRB group: r00, r11 real; r10 = E[e1 e0*]. */
+  double   r00[SRSRAN_MAX_PRB], r11[SRSRAN_MAX_PRB];
+  cf_t     r10[SRSRAN_MAX_PRB];
+  uint32_t cnt[SRSRAN_MAX_PRB];
+  for (uint32_t g = 0; g < ngroups; g++) {
+    r00[g] = r11[g] = 0;
+    r10[g]          = 0;
+    cnt[g]          = 0;
+  }
+  cf_t y[2][SRSRAN_REFSIGNAL_MAX_NUM_SF(SRSRAN_MAX_PRB)];
+  cf_t h[2][SRSRAN_REFSIGNAL_MAX_NUM_SF(SRSRAN_MAX_PRB)];
+  for (uint32_t p = 0; p < nports; p++) {
+    const uint32_t npilots = srsran_refsignal_cs_nof_re(&q->chest.csr_refs, sf, p);
+    const cf_t*    ref     = q->chest.csr_refs.pilots[p / 2][sf->tti % SRSRAN_NOF_SF_X_FRAME];
+    for (uint32_t a = 0; a < 2; a++) {
+      srsran_refsignal_cs_get_sf(&q->chest.csr_refs, sf, p, q->sf_symbols[a], y[a]);
+      srsran_refsignal_cs_get_sf(&q->chest.csr_refs, sf, p, q->chest_res.ce[p][a], h[a]);
+    }
+    for (uint32_t m = 0; m < npilots; m++) {
+      const uint32_t g  = ((m % (2 * nprb)) / 2) / RX_IRC_PRB; /* 2 pilots per PRB per symbol */
+      const cf_t     e0 = y[0][m] * conjf(ref[m]) - h[0][m];
+      const cf_t     e1 = y[1][m] * conjf(ref[m]) - h[1][m];
+      r00[g] += crealf(e0) * crealf(e0) + cimagf(e0) * cimagf(e0);
+      r11[g] += crealf(e1) * crealf(e1) + cimagf(e1) * cimagf(e1);
+      r10[g] += e1 * conjf(e0);
+      cnt[g]++;
+    }
+  }
+
+  const uint32_t nsymb   = SRSRAN_CP_NSYMB(q->cell.cp) * 2;
+  const uint32_t sym_len = nprb * SRSRAN_NRE;
+  const float    s       = sqrtf(n_ref);
+  for (uint32_t g = 0; g < ngroups; g++) {
+    cf_t ia, ib, ic;
+    if (!irc_whitener(r00[g], r11[g], r10[g], cnt[g], s, &ia, &ib, &ic)) {
+      continue;
+    }
+    const uint32_t k0 = g * RX_IRC_PRB * SRSRAN_NRE;
+    const uint32_t k1 = SRSRAN_MIN((g + 1) * RX_IRC_PRB, nprb) * SRSRAN_NRE;
+    for (uint32_t l = 0; l < nsymb; l++) {
+      for (uint32_t k = k0; k < k1; k++) {
+        const uint32_t i  = l * sym_len + k;
+        const cf_t     u0 = q->sf_symbols[0][i], u1 = q->sf_symbols[1][i];
+        q->sf_symbols[0][i] = ia * u0;
+        q->sf_symbols[1][i] = ib * u0 + ic * u1;
+        for (uint32_t p = 0; p < nports; p++) {
+          const cf_t c0 = q->chest_res.ce[p][0][i], c1 = q->chest_res.ce[p][1][i];
+          q->chest_res.ce[p][0][i] = ia * c0;
+          q->chest_res.ce[p][1][i] = ib * c0 + ic * c1;
+        }
+      }
+    }
+  }
+  q->chest_res.noise_estimate = n_ref;
+  return true;
+}
+
 static int estimate_pdcch_pcfich(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg)
 {
   if (q) {
@@ -337,12 +513,16 @@ static int estimate_pdcch_pcfich(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsr
 
     /* Get channel estimates for each port */
     srsran_chest_dl_estimate_cfg(&q->chest, sf, &cfg->chest_cfg, q->sf_symbols, &q->chest_res);
+    if (!apply_rx_irc(q, sf)) {
+      apply_rx_noise_weighting(q);
+    }
 
     /* First decode PCFICH and obtain CFI */
     if (srsran_pcfich_decode(&q->pcfich, sf, &q->chest_res, q->sf_symbols, &cfi_corr) < 0) {
       ERROR("Error decoding PCFICH");
       return SRSRAN_ERROR;
     }
+    q->cfi_corr = cfi_corr;
 
     if (q->cell.frame_type == SRSRAN_TDD && ((sf->tti % 10) == 1 || (sf->tti % 10) == 6) && sf->cfi == 3) {
       sf->cfi = 2;

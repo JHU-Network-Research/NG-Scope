@@ -161,6 +161,10 @@ void ngscope_sf_perturb(srsran_ue_dl_t* q, cf_t* const orig[SRSRAN_MAX_PORTS], i
       buf[n] = x;
     }
   }
+  /* New IQ in the input buffer. Without this the FFT reuse cache (srsran_ue_dl_set_fft_reuse)
+   * matched the subframe's key and returned the unperturbed estimate, so every ladder rung and
+   * sweep point decoded the original samples again; NGSCOPE_VERIFY_FFT_CACHE=1 aborts on it. */
+  srsran_ue_dl_new_subframe(q);
 }
 
 void ngscope_sf_snapshot(srsran_ue_dl_t* q, cf_t* orig[SRSRAN_MAX_PORTS])
@@ -184,6 +188,7 @@ void ngscope_sf_restore(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_
     free(orig[a]);
     orig[a] = NULL;
   }
+  srsran_ue_dl_new_subframe(q); /* the buffer changed again: recompute, never reuse */
   srsran_ue_dl_decode_fft_estimate(q, sf, cfg);
   sf->cfi = cfi0;
 }
@@ -239,6 +244,7 @@ static int rar_ladder(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cf
     memcpy(q->fft[a].cfg.in_buffer, orig[a], sizeof(cf_t) * sf_len);
     free(orig[a]);
   }
+  srsran_ue_dl_new_subframe(q); /* see ngscope_sf_perturb() */
   srsran_ue_dl_decode_fft_estimate(q, sf, cfg);
   sf->cfi = cfi0;
   if (won > 0) {
@@ -302,6 +308,7 @@ static void rar_sweep(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cf
   /* Fresh FFT + estimate on the untouched samples, twice: does recomputing alone change the
    * verdict? Marked shift=0 cfo=0 with cfi = 100 + pass number. */
   for (int pass = 1; pass <= 2; pass++) {
+    srsran_ue_dl_new_subframe(q); /* a fresh FFT is the point of this pass */
     srsran_ue_dl_decode_fft_estimate(q, sf, cfg);
     const uint32_t cfi_fresh = sf->cfi;
     sf->cfi = cfi0;
@@ -350,6 +357,7 @@ static void rar_sweep(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cf
     memcpy(buf[a], orig[a], sizeof(cf_t) * sf_len);
     free(orig[a]);
   }
+  srsran_ue_dl_new_subframe(q); /* see ngscope_sf_perturb() */
   srsran_ue_dl_decode_fft_estimate(q, sf, cfg);
   sf->cfi = cfi0;
 
