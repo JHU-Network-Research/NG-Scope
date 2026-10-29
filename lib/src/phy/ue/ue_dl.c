@@ -1204,6 +1204,11 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
             }
         }
 
+        // similarly, if the DCI has a C-RNTI it cannot be format 1C
+        if (SRSRAN_RNTI_ISUSER(dci_msg[nof_dci].rnti) && dci_msg[nof_dci].format == SRSRAN_DCI_FORMAT1C){
+          continue;
+        }
+
         if (dci_msg[nof_dci].rnti == 2 && decode_args->decode_rar){
             // printf("Found potential RACH in decoder %d using output path %s\n", decode_args->rf_idx, decode_args->out_path);
             ngscope_rar_t rars[NGSCOPE_MAX_RAR_PER_SF];
