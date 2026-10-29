@@ -358,9 +358,9 @@ void* cell_status_thread(void* arg){
         if(go_exit) break;
 
         pthread_mutex_lock(&cell_stat_ready.mutex);
-        // Use while in case some corner case conditional wake up
-        while(cell_stat_ready.nof_dci <=0){
-            pthread_cond_wait(&cell_stat_ready.cond, &cell_stat_ready.mutex);
+        if (!ngscope_dci_ready_wait(&cell_stat_ready, &go_exit)) {
+            pthread_mutex_unlock(&cell_stat_ready.mutex);
+            break;
         }
 		nof_dci 		= cell_stat_ready.nof_dci;
 

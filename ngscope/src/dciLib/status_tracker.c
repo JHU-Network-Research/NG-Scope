@@ -171,9 +171,9 @@ void* status_tracker_thread(void* p){
 		/* Data handling between DCI decoder and StatusTracker
 		 *  DCI-Decoder--> dci--> dci_buffer --> Status-Tracker */
         pthread_mutex_lock(&dci_ready.mutex);
-        // Use while in case some corner case conditional wake up
-        while(dci_ready.nof_dci <=0){
-            pthread_cond_wait(&dci_ready.cond, &dci_ready.mutex);
+        if (!ngscope_dci_ready_wait(&dci_ready, &go_exit)) {
+            pthread_mutex_unlock(&dci_ready.mutex);
+            break;
         }
         // copy data from the dci buffer
         nof_dci     = dci_ready.nof_dci;

@@ -57,6 +57,12 @@ typedef struct {
 
 bool init_record(const char* path, uint32_t buf_size_gb, uint32_t nof_ports, double rf_freq);
 bool init_replay(const char* path, rx_record_header_t*, uint32_t nof_ports);
+/* Replay only: abort with an explanation if the decoded cell's sample rate is not the rate the
+ * recording was made at (see ngscope_rx.c). Call once the cell is known. */
+void ngscope_replay_check_cell_rate(const srsran_cell_t* cell);
+/* Replay only: true once the stream has moved from the cell-search rate to the cell's. The MIB
+ * decoder stops there, since what follows is not cell-search samples (see rf_mib_decoder()). */
+bool ngscope_replay_past_cell_search(void);
 
 /* How many receive channels the decoder has buffers for. Must be set before the first
  * receive in EVERY mode -- live capture has no init of its own -- because it bounds every

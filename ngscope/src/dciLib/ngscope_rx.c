@@ -157,6 +157,7 @@ bool init_record(const char* path, uint32_t buf_size_gb, uint32_t nof_ports, dou
  * worth it for one being iterated on. */
 
 static bool     replay_is_pipe   = false;
+static uint32_t rs_hdr_prb       = 0;     /* the recording header's PRB, 0 if none */
 /* Time spent blocked reading the recording, against wall time. The question "is the
  * decompressor the bottleneck?" has no general answer -- it depends on the cell's sample
  * rate and on how much work the decode settings ask for -- so it is measured rather than
@@ -350,6 +351,7 @@ bool init_replay(const char* path, rx_record_header_t* hdr, uint32_t nof_ports)
 
 
         sdr_nof_ports = hdr->nof_rx_antenna;
+        rs_hdr_prb    = hdr->prb;
     }else{
         /* No header, so the file cannot say how many channels it holds -- and guessing the
          * configured nof_rx_ant, which is what this used to do, is the one guess that can
@@ -468,6 +470,72 @@ static double rs_rate_or_default(void)
     return rs_rate > 0 ? rs_rate : 1.92e6;
 }
 
+/* The cell's sample rate must match the rate the recording was made at, or nothing in it can be
+ * decoded. Replay never sets a rate: the stream is served exactly as recorded, so a cell the
+ * decoder believes is wider than the recording reads several recorded milliseconds per
+ * subframe, never synchronises, and used to run to the end of the file in silence -- then hang
+ * at shutdown, since no thread ever produced a DCI. Measured on
+ * replay-test/vzw-66636-recorded-samples.bin.bz2: the recorder decoded the MIB as 15 PRB and
+ * recorded at 3.84 Msps; the MIB in that same recording says 100 PRB (23.04 Msps here), and the
+ * spectrum is flat across the whole capture, i.e. it holds only the centre of a 20 MHz cell.
+ *
+ * The recording's cell rate is the one rate change the stream makes (cell search -> cell), so
+ * the check runs when both are known: at once if the change has already been seen, otherwise
+ * when it is. A 6-PRB cell runs at the cell-search rate, so for it any change is the mismatch. */
+static double   rs_expected_rate = 0.0; /* the decoded cell's rate; 0 until it is known */
+static uint32_t rs_expected_prb  = 0;
+
+static uint32_t rs_prb_for_rate(double rate)
+{
+    static const uint32_t PRBS[] = {6, 15, 25, 50, 75, 100};
+    for (size_t i = 0; i < sizeof(PRBS) / sizeof(PRBS[0]); i++) {
+        if (fabs((double)srsran_sampling_freq_hz(PRBS[i]) - rate) < 1.0) {
+            return PRBS[i];
+        }
+    }
+    return 0;
+}
+
+static void rs_check_rate(double recorded)
+{
+    if (rs_expected_rate <= 0.0 || fabs(recorded - rs_expected_rate) < 1.0) {
+        return;
+    }
+    const uint32_t rec_prb = rs_prb_for_rate(recorded);
+    fprintf(stderr,
+            "REPLAY: ERROR: the recording was made at %.2f Msps (the rate for %u PRB), but the "
+            "cell's MIB says %u PRB, which needs %.2f Msps. The recording cannot be decoded as "
+            "this cell: %s.",
+            recorded / 1e6, rec_prb, rs_expected_prb, rs_expected_rate / 1e6,
+            recorded < rs_expected_rate ? "it holds only the centre of the cell's band, and the control "
+                                          "channel spans all of it"
+                                        : "every subframe would be read at the wrong rate");
+    if (rs_hdr_prb != 0) {
+        fprintf(stderr, " The recording header says %u PRB%s.", rs_hdr_prb,
+                rs_hdr_prb == rec_prb ? ", so the recorder itself used the wrong cell configuration" : "");
+    }
+    fprintf(stderr, " Re-record this cell. Aborting.\n");
+    exit(EXIT_FAILURE);
+}
+
+void ngscope_replay_check_cell_rate(const srsran_cell_t* cell)
+{
+    const int rate = srsran_sampling_freq_hz(cell->nof_prb);
+    if (rate <= 0) {
+        return;
+    }
+    rs_expected_rate = (double)rate;
+    rs_expected_prb  = cell->nof_prb;
+    if (rs_nof_rate_changes > 0) {
+        rs_check_rate(rs_rate);
+    }
+}
+
+bool ngscope_replay_past_cell_search(void)
+{
+    return rs_nof_rate_changes > 0;
+}
+
 static bool replay_stream_init(void)
 {
     for (uint32_t i = 0; i < SRSRAN_MAX_PORTS; i++) {
@@ -583,6 +651,7 @@ static bool replay_stream_load(void)
              * search to the cell's own rate. Its spacing says so exactly; no samples move. */
             rs_rate = std_impl;
             rs_nof_rate_changes++;
+            rs_check_rate(rs_rate);
         } else if (dt > 0.5 / rs_rate) {
             double fill_s = dt;
             if (fill_s > REPLAY_GAP_CAP_S) {

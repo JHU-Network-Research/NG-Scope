@@ -66,8 +66,34 @@ typedef struct{
     pthread_mutex_t mutex;
     pthread_cond_t  cond;
     int             nof_dci;
-    int             header;   
+    int             header;
 }dci_ready_t;
+
+/* Wait, with q->mutex held, until q has DCIs or *exit_flag is set. True when there are DCIs to
+ * take; false means shutting down with nothing pending, and the caller should unlock and leave.
+ *
+ * The status tracker, cell status and DCI logger threads used to wait on the bare condition,
+ * which only a decoder producing a DCI ever signals. A run that never decoded a subframe -- a
+ * replay whose cell cannot synchronise, say -- left all three asleep after go_exit, and main's
+ * join on the tracker kept the process alive forever. The timed wait polls the flag instead
+ * of signalling from the SIGINT handler, where pthread calls are not async-signal-safe. */
+static inline bool ngscope_dci_ready_wait(dci_ready_t* q, const bool* exit_flag)
+{
+    while (q->nof_dci <= 0) {
+        if (*exit_flag) {
+            return false;
+        }
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_nsec += 100 * 1000 * 1000;
+        if (until.tv_nsec >= 1000000000L) {
+            until.tv_sec++;
+            until.tv_nsec -= 1000000000L;
+        }
+        pthread_cond_timedwait(&q->cond, &q->mutex, &until);
+    }
+    return true;
+}
 
 typedef struct {
     ngscope_dci_per_sub_t   dci_per_sub;
