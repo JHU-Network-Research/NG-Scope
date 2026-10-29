@@ -1205,7 +1205,7 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         }
 
         // similarly, if the DCI has a C-RNTI it cannot be format 1C
-        if (SRSRAN_RNTI_ISUSER(dci_msg[nof_dci].rnti) && dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT1C){
+        if (SRSRAN_RNTI_ISUSER(dci_msg[nof_dci].rnti) && dci_msg[nof_dci].format == SRSRAN_DCI_FORMAT1C){
           continue;
         }
 
