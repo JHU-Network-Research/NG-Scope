@@ -561,6 +561,10 @@ int task_scheduler_init(ngscope_task_scheduler_t* task_scheduler,
     printf("\n\nFinished copying to cell:%d prb:%d \n", prog_args.rf_index, cell_vec[prog_args.rf_index].nof_prb);
     pthread_mutex_unlock(&cell_mutex);
 
+    if (prog_args.mode == REPLAY) {
+        ngscope_replay_check_cell_rate(&task_scheduler->cell);
+    }
+
     if (debug)
         printf("DEBUG: SETTING UP UE SYNC\n");
     // Next, let's get the ue_sync ready

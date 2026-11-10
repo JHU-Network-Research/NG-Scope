@@ -702,9 +702,9 @@ void* dci_log_thread(void* p){
         if(go_exit) break;
 
         pthread_mutex_lock(&log_stat_ready.mutex);
-        // Use while in case some corner case conditional wake up
-        while(log_stat_ready.nof_dci <=0){
-            pthread_cond_wait(&log_stat_ready.cond, &log_stat_ready.mutex);
+        if (!ngscope_dci_ready_wait(&log_stat_ready, &go_exit)) {
+            pthread_mutex_unlock(&log_stat_ready.mutex);
+            break;
         }
 		int nof_dci 		= log_stat_ready.nof_dci;
 		//fprintf(fd, "%d\t%d\n", cell_stat_buffer[0].tti, nof_dci);
