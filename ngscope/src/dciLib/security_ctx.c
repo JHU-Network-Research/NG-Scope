@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "ngscope/hdr/dciLib/security_ctx.h"
+#include "ngscope/hdr/dciLib/security_rrc.h"
 #include "ngscope/hdr/dciLib/mac_pcap.h"
 #include "ngscope/hdr/dciLib/ngscope_def.h"
 #include "srsran/srsran.h"
@@ -50,8 +51,9 @@ typedef struct {
  *
  * Costs 2 bytes per slot per device and nothing per subframe: ngscope_sec_tracked() already
  * walks the whole list to prune it, and how many are actually scanned is capped separately
- * by the caller. Evictions are counted, so a cell that outgrows even this says so. */
-#define SEC_MAX_ACTIVE 512
+ * by the caller. Evictions are counted, so a cell that outgrows even this says so.
+ * Raised to 2048 because 512 was leading to evictions. */
+#define SEC_MAX_ACTIVE NGSCOPE_SEC_SCAN_CAP_REPLAY
 
 #define SEC_NOF_FORMATS NGSCOPE_SEC_NOF_FORMATS
 #define SEC_NOF_SCHEMES NGSCOPE_SEC_NOF_SCHEMES

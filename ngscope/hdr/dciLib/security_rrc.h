@@ -17,7 +17,7 @@ extern "C" {
  * instead and stays lossless however slow it runs, so it can afford full coverage.
  * The replay value matches SEC_MAX_ACTIVE, so nothing tracked goes unscanned. */
 #define NGSCOPE_SEC_SCAN_CAP_LIVE 128
-#define NGSCOPE_SEC_SCAN_CAP_REPLAY 512
+#define NGSCOPE_SEC_SCAN_CAP_REPLAY 2048
 
 
 /* When a transport block fails its CRC, rebuild the grant on the other MCS->TBS table and try

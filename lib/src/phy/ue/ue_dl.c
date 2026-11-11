@@ -1222,7 +1222,7 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
 
     			// Remember the RNTI regardless of whether the filter is on, so that turning it
     			// on costs nothing extra and the set is always available.
-    			    ngscope_rach_filter_add(0, rars[i].temp_crnti, sf->tti, NGSCOPE_RACH_ANCHOR_RAR);
+    			    ngscope_rach_filter_add(decode_args->rf_idx, rars[i].temp_crnti, sf->tti, NGSCOPE_RACH_ANCHOR_RAR);
 
     			// Anchor the security-phase tracker on the same RAR. Unlike the filter above
     			// this re-arms on every sighting, because an RNTI handed out again later is a
@@ -1258,7 +1258,11 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
           }
 
           if (isvalid == 1){
-              ngscope_rach_filter_add(0, dci_msg[nof_dci].rnti, sf->tti, NGSCOPE_RACH_ANCHOR_CRC);
+              ngscope_rach_filter_add(decode_args->rf_idx, dci_msg[nof_dci].rnti, sf->tti, NGSCOPE_RACH_ANCHOR_CRC);
+              if (decode_args->mark_security_phase) {
+                  ngscope_sec_note_crc_confirmed(decode_args->rf_idx, dci_msg[nof_dci].rnti, sf->tti,
+                                                 decode_args->timestamp, decode_args->collection_time);
+              }
               // printf("Adding RNTI from successful PDSCH decode: %d\n", dci_msg[nof_dci].rnti);
           } else{
               continue;
