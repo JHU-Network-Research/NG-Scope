@@ -20,7 +20,10 @@ extern bool debug;
  * This bounds *work*, not semantics: expiring an RNTI stops the decode attempts, it never
  * turns an UNKNOWN into a PRE or a POST. RRC setup plus security activation is a couple of
  * round trips to the core, so ten seconds is generous. */
-#define SEC_TRACK_WINDOW_US (10 * 1000000ULL)
+/* EXPERIMENT: effectively unlimited (one year of radio time) so every tracked UE is decoded
+ * for the whole capture. Was (10 * 1000000ULL). Kept finite so `window + grace` cannot
+ * overflow in the expiry test. Replay time grows with the number of tracked UEs. */
+#define SEC_TRACK_WINDOW_US (365ULL * 24 * 3600 * 1000000ULL)
 /* How long past its window an entry stays in active[], so threads a few subframes behind the
  * one that would expire it still find it. Far above the decoders in flight (milliseconds). */
 #define SEC_EXPIRY_GRACE_US (1 * 1000000ULL)
