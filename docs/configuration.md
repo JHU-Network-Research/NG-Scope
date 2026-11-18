@@ -131,6 +131,7 @@ Note also that `rf_freq` takes no `L` suffix in TOML, since its integers are alr
 | `pcap_max_mb` | int | `0` | Per-file cap in MB, `0` for unlimited. |
 | `qam_retry` | bool | `true` | **Replay only.** When a transport block fails its CRC, rebuild the grant on the other MCS→TBS table and decode again, keeping whichever passes. The CRC is ground truth, so this measures the table rather than trusting `enable_256qam`, per grant — the only way to be right, since `altCQI-Table-r12` is per-UE state. Costs a second PDSCH decode per failure, which is affordable exactly where the scheduler blocks instead of dropping subframes. On one capture it recovered 37 `SecurityModeCommand`s (33.8% → 39.2%) for 1 second in 65. |
 | `tracked_search` | string | `"solve_first"` | **Replay only** — live and record always use `per_rnti`. How the tracked-UE search (`mark_security_phase`) finds each UE's DCIs. `per_rnti`: srsRAN's search, run separately for every tracked RNTI (the original). `cache`: the same search, but each PDCCH candidate is decoded once per subframe and reused — a decode depends only on its location and payload size, and the RNTI is its *output* (the CRC remainder), so the bytes are identical. `solve_first`: decode every aligned candidate once, index the candidates by the RNTI each decodes to, and find each tracked UE by looking itself up — visiting only its own candidates and applying srsRAN's acceptance rules through the same code the per-RNTI search uses; implies `cache`, and the cost no longer grows with the tracked set. All three return the same DCIs and, since the anchor barrier, byte-identical pcaps. `NGSCOPE_VERIFY_PDCCH_CACHE=1` / `NGSCOPE_VERIFY_SOLVE_FIRST=1` in the environment re-check every cached decode / skipped search against a fresh one and abort on any difference; on the 4x2 capture that was 84.8 M decodes and 1.18 M skips, zero mismatches. The teardown says which mode ran and what it saved. |
+| `rx_combine` | string | `"irc"` | How the decoder combines receive antennas, in **every** mode; inert with `nof_rx_ant = 1`. `off`: srsRAN's combining, Σh\*y/Σ\|h\|², which weights each antenna by channel gain alone — an antenna carrying interference is trusted as much as a clean one. `weight`: scale each antenna's symbols and channel estimate by √(n_min/n_a) from its noise estimate, which turns srsRAN's combiner into noise-weighted MRC. `irc`: interference-rejection combining — per 6-PRB region per subframe, estimate the 2×2 covariance of the CRS residuals (all ports) and whiten both antennas by it, so srsRAN's unchanged combiner computes hᴴR⁻¹y / hᴴR⁻¹h; two antennas and normal subframes only, `weight` wherever it does not apply. The transform is applied to the symbols and every port's channel estimate alike, so PCFICH, PDCCH and every PDSCH predecoder see it. Measured on `replay-test/flashcatch-08` (antenna 0 alone interfered, up to +21 dB, 181–213 s): PDSCH CRC pass 95.0% → 96.3% → 97.8%, RACHing UEs 235 → 237 → 240, `RRCConnectionSetup` 216 → 220 → 222 for `off` → `weight` → `irc`. **Not yet measured on a 4-port cell**, where neighbour-cell CRS can make the residual covariance unrepresentative of the data REs; compare all three on the 4x2 capture before relying on the default there. `NGSCOPE_VERIFY_FFT_CACHE=1` covers it: the reuse check recomputes the combined result. |
 | `probe_blind_dci` | bool | `false` | **Replay only** — refused at config time otherwise. A measurement instrument, not part of a capture run: it decodes a transport block for every distinct RNTI the blind search reports and records whether the DL-SCH CRC passes, split by whether that RNTI was RACH-confirmed. Writes `blind_probe-<rf>.csv` and a teardown summary. Pair with `rach_filter_only = false`, or the unconfirmed column is empty by construction. See [Is a blind DCI real?](#is-a-blind-dci-real) below. |
 | `enable_256qam` | bool | `true` | Use the 256QAM MCS→TBS table for C-RNTI Format1/2 grants. Only correct when the cell configures `altCQI-Table-r12`, which is **per-UE** RRC state a downlink sniffer cannot observe — so it is a guess, and on a mixed cell no single value is right for every UE. It selects the MCS→TBS mapping, so it sets the transport block size: a wrong guess gives wrong `tbs` values in the `.dciLog` files *and* a transport block CRC that can never pass. srsRAN forces it off for Format1A and non-user RNTIs, so SIB, RAR and paging are unaffected. Every run prints a verdict at teardown; with `mark_security_phase` in replay, a failed block is retried on the other table, so the setting matters much less there. |
 
@@ -169,6 +170,75 @@ takes about 60 seconds to replay.
 
 Replay is a faithful re-run of the decode path, which makes it the right way to A/B a
 configuration change: run twice on the same file, changing one flag.
+
+#### Replay re-synchronises on its own
+
+Replay serves the file as one continuous sample stream, cut to whatever size the synchronizer
+asks for. It used to hand back the recorder's chunks verbatim and skip any whose size differed
+from the request, and since re-acquiring a cell needs odd-sized reads (the realign after a PSS
+is found, every timing correction), **a replay could never re-sync where the recorder had not**.
+Measured on `ny_87_broadway/buffer/earfcn-9820/2026_10_11_13_21_02`: PSS present in all 180 s,
+the recorder lost sync at 38.1 s for good, and the replay decoded 3 s.
+
+The recorder writes every read with its radio timestamp, so the file is the radio's stream
+minus what the radio itself dropped, and the timestamps say exactly where. A dropped stretch is
+**zero-filled** for its duration (capped at 2 s per gap) so timing stays continuous; an overlap
+is dropped; the one rate change (cell search at 1.92 Msps, then the cell's rate) is recognised
+from the chunk spacing. The teardown's `REPLAY STREAM:` lines count all of them. A zero-filled
+subframe decodes to all-zero transport blocks, which are rejected and counted (`zero_tb`).
+
+Two consequences:
+
+- **A replay is no longer a replica of the live run's sync decisions.** It re-acquires wherever
+  the samples allow, so on a recording that lost sync it decodes more than the live run did, and
+  replay numbers taken before this change are not directly comparable with new ones.
+- **Loss of sync now re-seeds the CFO correction** from the cell search, in every mode. The
+  synchronizer pre-rotates each FIND subframe by its running CFO estimate and never re-estimates
+  it on a fresh lock, so an estimate that walked off while tracking (-479 Hz to -9,023 Hz on the
+  capture above) locked FIND out for good. The teardown's `SYNC (cell N):` line reports losses,
+  re-seeds, the largest drift and the longest FIND stretch.
+
+**The synchronizer now uses the reference-signal CFO estimate, as upstream does.** The PSS
+loop ignores errors under 400 Hz (srsRAN's "typical bias of PSS estimation"); upstream
+`pdsch_ue` closes that gap by feeding the channel estimator's CFO back once per frame
+(`srsran_ue_sync_set_cfo_ref`), and ngscope never did, in any mode. Decoders now publish the
+subframe-5 estimate and the scheduler thread applies it. Measured with `NGSCOPE_PDSCH_SWEEP`
+(diagnostic: re-decodes tracked-UE blocks under timing/CFO perturbations, writes the CSV it
+names): before, correcting a further +100 Hz rescued 276 failed blocks and −100 Hz only 9 — a
+systematic residual. After: residual ~5 Hz on `4x2/tmobile-5035` (17 Hz on
+`ny_87_broadway/buffer/earfcn-650`), tracked-UE PDSCH decoded 66.8% → 69.6% (53.4% → 56.4%),
+RACHed-and-established 164 → 170 on the 650 capture. The teardown's second `SYNC (cell N):`
+line reports updates applied and the residual at the start and end.
+
+That needed **a fix inside srsRAN** (`lib/src/phy/ch_estimation/chest_dl.c`): the CFO
+estimator indexes the pilots with port 0's layout but ran once per port, so `chest_res.cfo` was
+the last port's estimate — on a 4-port cell port 3, with half the pilot symbols, biased to
+−330…−360 Hz. Fed back as-is it drove decoding *down* to 56.3%. It now runs on port 0 only.
+`enable_cfo_ref` (`-F`) no longer gates the estimate; the estimate is always made.
+
+**Once the reference loop locks, the PSS loop only acts on errors above 1 kHz.** The PSS
+estimate can be biased for seconds at a time, and the PSS loop then walks the correction off
+the true frequency. The reference estimate cannot pull it back past ~1 kHz, because it wraps
+there (a −1.1 kHz error reads as +950 Hz), so beyond that the feedback pushes the wrong way.
+Measured on the 650 capture at 155–162 s with a CFO trace: the reference estimate held steady
+while the PSS loop drove the correction ~650 Hz off without feedback and ~1.8 kHz off with it.
+Decoded blocks in that second fell 30 → 7, and UEs 21515 and 21529 lost their
+SecurityModeCommand. Now 20 consecutive reference residuals under 150 Hz (~0.2 s) raise
+`cfo_pss_min` from 400 Hz to 1 kHz, and any loss of sync restores it. On the 650 capture the
+PSS estimate sat in the 400–1000 Hz band for 38.6 s of tracking, all ignored. Result there:
+both UEs back, nothing lost, established 170 → 172 of 368 RARs, PDSCH decoded 5,047 → 5,363
+blocks. On `4x2/tmobile-5035` the PSS estimate never entered that band, so nothing changed:
+the same 82/115 established, 69.7% decoded. The teardown's third `SYNC (cell N):` line reports locks, the share of tracking time
+locked, and how long the PSS loop was held off.
+
+Also fixed on the way, and **live behaviour changes with it**: ue_sync's discard reads (the
+positive timing-offset correction and the FIND realign) pass a NULL timestamp, and the receive
+wrapper used to return without reading for those, so positive timing corrections were never
+applied live or in a recording. And the recorder now writes the number of samples actually
+received in each frame header, not the number requested.
+
+`decode_pdcch` has no effect on synchronisation: it only decides whether a synced subframe is
+handed to the decoders. Recording with it off loses nothing.
 
 #### Compressed recordings
 
@@ -244,16 +314,23 @@ CRC** as the oracle:
 
 So a transport block that passes CRC was descrambled with the right RNTI *and* rate-matched
 to the right size. The `(RNTI, grant)` pair is real, with a false-pass probability around
-2⁻²⁴. That is a much stronger test than asking whether the payload parses — and a real block
+2⁻²⁴ — **except for a block of all zeros**, which matches its CRC trivially (the CRCs start
+from zero) and is exactly what a standalone decode of an `rv=2` retransmission returns when
+that transmission carried none of the systematic bits (high MCS, so its window of the circular
+buffer never reaches them) — the true payload needs the earlier transmission, via HARQ.
+Those are rejected as `zero_tb`; before that rule, 38 of 59 pcap frames on
+`ny_87_broadway/buffer/earfcn-650` were such blocks, each promoting a fabricated RNTI that
+Wireshark then read as an `RRCConnectionReestablishment`. That is a much stronger test than asking whether the payload parses — and a real block
 often will *not* parse, because it is ciphered, or a DRB carrying IP, or an RLC segment.
 
 **The test is one-sided, and the output keeps that visible.** Every probe lands in one of
-three buckets, never collapsed into real-versus-spurious:
+four buckets, never collapsed into real-versus-spurious:
 
 | bucket | meaning |
 |---|---|
 | `no_dci` | a targeted search for that RNTI found no DCI at all |
 | `crc_fail` | DCI found, transport block did not decode — **inconclusive** |
+| `zero_tb` | the block matched its CRC but decoded to all zeros — **rejected**, not promoted; a real MAC PDU is never all zeros (padding is LCID 31) |
 | `crc_pass` | decoded: the DCI is real |
 
 `crc_fail` proves nothing on its own. 4-port spatial multiplexing above rank 2 cannot be
@@ -457,6 +534,31 @@ Each subframe is searched for RA-RNTI 1–10 in the common search space; a hit i
 and the MAC RAR PDU parsed. Both the PDCCH and PDSCH CRCs are checked against a known
 RA-RNTI, so false positives are very unlikely. Costs roughly **+25%** decode time per
 subframe. Does not affect DCI output.
+
+**Every attempt is logged, failures included**, in `rar_pdsch-<rf_idx>.csv` — one row per
+RA-RNTI DCI found: grant, CFI, `crc` (1 pass, 0 fail, 2 all-zero, -1 decode error), EVM, and
+the channel estimate's SNR, CFO and timing error. A RAR whose DCI decoded but whose block did
+not used to leave no trace, and a UE whose RAR fails is invisible to the RACH-anchored rate.
+The teardown's `RAR (cell N):` line totals them.
+
+**RAR decoding is marginal on at least one 4-port cell, independent of signal level.**
+Measured on `4x2/tmobile-5035` with `NGSCOPE_RAR_SWEEP=1` (diagnostic: re-decodes failed
+blocks under ±10-sample FFT-window shifts, ±1 kHz CFO offsets, forced CFI and estimator
+variants; writes `rar_sweep-<rf_idx>.csv`): 36 of 137 attempted blocks failed. 20 never pass
+under any variant — false-positive Format1C DCIs on RA-RNTIs 3–10, not UEs. The other 16 are
+genuine RARs that decode to one consistent payload under ~83% of variants, while passing RARs
+survive ~87% of them. So each RAR fails at roughly 1 in 7 sample alignments, which is why a
+change in sample alignment moves individual UEs between the RAR-anchored and CRC-anchored
+populations in both directions. No single estimator setting fixes it: each rescues 10–12 of
+the 16 and breaks 2–3 of 30 passes.
+
+**So a failed RAR block is re-decoded before it is given up** — the *RAR ladder*: up to three
+retries on slightly perturbed samples (+2-sample FFT window, +100 Hz, −4 samples/−500 Hz),
+accepting only a CRC pass with a non-zero payload, then restoring the subframe exactly. Three
+extra tries move the false-pass odds from ~2⁻²⁴ to ~2⁻²²·⁴ per DCI. On `4x2/tmobile-5035` it
+rescued all 16 genuine failures (RARs 100 → 116, a superset of the old reader's 81; RACHed and
+established 73 → 83). `rar_pdsch-<rf_idx>.csv` marks each rescue in `ladder` (the rung, `-1`
+if all failed), and the teardown's `RAR LADDER` line counts them per rung.
 
 RA-RNTI 11–60 (TDD with more than one PRACH frequency resource) is not supported; srsRAN's
 `SRSRAN_CRNTI_START` is `0x000B`, so those values are misclassified as UE RNTIs during DCI

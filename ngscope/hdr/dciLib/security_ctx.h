@@ -80,6 +80,9 @@ void ngscope_sec_count_prefilter(int rf_idx, int nof_tracked, int nof_skipped, i
 void ngscope_sec_add_pdcch_cache(int rf_idx, uint64_t hits, uint64_t misses, uint64_t verified);
 /* One decoder thread's FFT + channel-estimation totals (srsran_ue_dl_set_fft_reuse). */
 void ngscope_sec_add_fft_reuse(int rf_idx, uint64_t computed, uint64_t reused, uint64_t verified);
+/* n decoded codewords were rejected because they were all zeros: they match a zero-initialised
+ * CRC without carrying anything, so they must never be counted or written as decoded blocks. */
+void ngscope_sec_count_tb_zero(int rf_idx, int n);
 
 /* A retry was actually attempted. Counted separately so the report can tell "tested, and the
  * configured table fits" from "never tested" -- with qam_retry off the two are otherwise
@@ -102,7 +105,7 @@ void ngscope_sec_count_scan(int rf_idx, int nof_searched, int nof_without_dci);
 
 int initialize_snr_report(const char* path);
 void destroy_snr_report();
-int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome, int format);
+int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome, int format, int tti, uint64_t ct, uint16_t rnti);
 bool snr_report_enabled();
 
 /* One built grant, classified. `fmt` is an srsran_dci_format_t and `scheme` an

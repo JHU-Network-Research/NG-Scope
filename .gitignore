@@ -8,3 +8,4 @@ measurements/*
 !measurements/*.toml
 !measurements/README.md
 __pycache__/
+replay-test/
