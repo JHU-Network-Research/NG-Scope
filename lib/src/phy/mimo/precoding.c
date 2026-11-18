@@ -1456,9 +1456,6 @@ static int srsran_predecoding_ccd_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
     }
   }
   int check_n = (nof_symbols < 100) ? nof_symbols : 100;
-  // for (int p = 0; p < 4; p++) h_pwr[p] /= check_n;
-  // printf("[4x2 CDD] Port powers: P0=%.2f P1=%.2f P2=%.2f P3=%.2f\n",
-  //        h_pwr[0], h_pwr[1], h_pwr[2], h_pwr[3]);
 
   // Check received signal power
   float y_pwr[2] = {0};
@@ -1468,31 +1465,6 @@ static int srsran_predecoding_ccd_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
   }
   y_pwr[0] /= check_n;
   y_pwr[1] /= check_n;
-  // printf("[4x2 CDD] Received signal power: Y0=%.2f Y1=%.2f\n", y_pwr[0], y_pwr[1]);
-
-  // // Print first few channel estimates for inspection
-  // printf("[4x2 CDD] First 5 channel estimates h[port][rx][i]:\n");
-  // for (int i = 0; i < 5; i++) {
-  //   printf("  i=%d: h00=(%.2f,%.2f) h10=(%.2f,%.2f) h01=(%.2f,%.2f) h11=(%.2f,%.2f)\n",
-  //          i,
-  //          crealf(h[0][0][i]), cimagf(h[0][0][i]),
-  //          crealf(h[1][0][i]), cimagf(h[1][0][i]),
-  //          crealf(h[0][1][i]), cimagf(h[0][1][i]),
-  //          crealf(h[1][1][i]), cimagf(h[1][1][i]));
-  //   printf("       h20=(%.2f,%.2f) h30=(%.2f,%.2f) h21=(%.2f,%.2f) h31=(%.2f,%.2f)\n",
-  //          crealf(h[2][0][i]), cimagf(h[2][0][i]),
-  //          crealf(h[3][0][i]), cimagf(h[3][0][i]),
-  //          crealf(h[2][1][i]), cimagf(h[2][1][i]),
-  //          crealf(h[3][1][i]), cimagf(h[3][1][i]));
-  // }
-
-  // // Print first few received symbols
-  // printf("[4x2 CDD] First 5 received symbols:\n");
-  // for (int i = 0; i < 5; i++) {
-  //   printf("  i=%d: y0=(%.2f,%.2f) y1=(%.2f,%.2f)\n",
-  //          i, crealf(y[0][i]), cimagf(y[0][i]),
-  //          crealf(y[1][i]), cimagf(y[1][i]));
-  // }
 
   // Try simple MRC with just the strongest single channel (diagnostic)
   // Find which h[p][r] has most power
@@ -1511,22 +1483,6 @@ static int srsran_predecoding_ccd_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
       }
     }
   }
-  // printf("[4x2 CDD] Strongest channel: h[%d][%d] with power %.2f\n", best_p, best_r, best_pwr/check_n);
-
-  // // Try single-tap equalization with strongest channel as diagnostic
-  // printf("[4x2 CDD] Single-tap equalization test (using h[%d][%d] on y[%d]):\n", best_p, best_r, best_r);
-  // for (int i = 0; i < 10; i++) {
-  //   cf_t h_best = h[best_p][best_r][i];
-  //   cf_t y_best = y[best_r][i];
-  //   cf_t eq = y_best * conjf(h_best) / (cabsf(h_best)*cabsf(h_best) + 0.01f);
-  //   printf("  i=%d: h=(%.2f,%.2f) y=(%.2f,%.2f) eq=(%.2f,%.2f) |eq|=%.2f\n",
-  //          i, crealf(h_best), cimagf(h_best),
-  //          crealf(y_best), cimagf(y_best),
-  //          crealf(eq), cimagf(eq), cabsf(eq));
-  // }
-
-  // // Now try proper 2x2 MIMO with ports 0,1
-  // printf("[4x2 CDD] 2x2 MIMO equalization (ports 0,1):\n");
 
   int good_count = 0;
   for (int i = 0; i < nof_symbols; i++) {
@@ -1559,9 +1515,6 @@ static int srsran_predecoding_ccd_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
     if (csi[1]) csi[1][i] = cabsf(det);
   }
 
-  // printf("[4x2 CDD] ZF 2x2 (ports 0,1) QPSK-like: %d/%d (%.1f%%)\n",
-  //        good_count, nof_symbols, 100.0f*good_count/nof_symbols);
-
   // Also try with ports 2,3
   good_count = 0;
   for (int i = 0; i < nof_symbols; i++) {
@@ -1583,165 +1536,10 @@ static int srsran_predecoding_ccd_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
       good_count++;
     }
   }
-  // printf("[4x2 CDD] ZF 2x2 (ports 2,3) QPSK-like: %d/%d (%.1f%%)\n",
-  //        good_count, nof_symbols, 100.0f*good_count/nof_symbols);
 
-  // // Print first 10 equalized for inspection
-  // printf("[4x2 CDD] First 10 ZF equalized (ports 0,1):\n");
-  // for (int i = 0; i < 10; i++) {
-  //   printf("  (%.2f,%.2f) (%.2f,%.2f)\n",
-  //          crealf(x[0][i]), cimagf(x[0][i]),
-  //          crealf(x[1][i]), cimagf(x[1][i]));
-  // }
 
   return nof_symbols;
 }
-
-// int srsran_predecoding_ccd_4x2_mmse(cf_t* y[SRSRAN_MAX_PORTS],
-//                                     cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
-//                                     cf_t* x[SRSRAN_MAX_LAYERS],
-//                                     int    nof_symbols,
-//                                     float  scaling,
-//                                     float  noise_estimate)
-// {
-//   // 4-port CDD per TS 36.211 Table 6.3.4.2.3-1
-//   // W = (1/2) * [1  0;  1  0;  0  1;  0 -1] * D(i) * U
-//   // D(i) = diag([1, e^{-jπi/2}]) cycles {1, -j, -1, j}
-//   // U = (1/sqrt(2)) * [1  1;  1 -1]
-
-//   // Pre-compute phase factors
-//   const cf_t phase[4] = {1.0f, -_Complex_I, -1.0f, _Complex_I};
-
-//   for (int i = 0; i < nof_symbols; i++) {
-//     // Get delay phase for this subcarrier
-//     cf_t d = phase[i & 3];  // i mod 4
-
-//     // Effective channel for layer 0 (before U mixing):
-//     // h_eff_l0_rx = (h[0][rx] + h[1][rx]) / 2
-
-//     // Effective channel for layer 1 (before U mixing):
-//     // h_eff_l1_rx = (h[2][rx] - h[3][rx]) * d / 2
-
-//     // After U matrix multiplication:
-//     // h00 = (h_l0 + h_l1) / sqrt(2), h10 = (h_l0 - h_l1) / sqrt(2)
-
-//     cf_t h_l0 = 0.5f * (h[0][0][i] + h[1][0][i]);
-//     cf_t h_l1 = 0.5f * (h[2][0][i] - h[3][0][i]) * d;
-
-//     cf_t h00 = (h_l0 + h_l1) * M_SQRT1_2;
-//     cf_t h10 = (h_l0 - h_l1) * M_SQRT1_2;
-
-//     h_l0 = 0.5f * (h[0][1][i] + h[1][1][i]);
-//     h_l1 = 0.5f * (h[2][1][i] - h[3][1][i]) * d;
-
-//     cf_t h01 = (h_l0 + h_l1) * M_SQRT1_2;
-//     cf_t h11 = (h_l0 - h_l1) * M_SQRT1_2;
-
-//     // Standard 2x2 MMSE equalization
-//     cf_t h00_conj = conjf(h00);
-//     cf_t h01_conj = conjf(h01);
-//     cf_t h10_conj = conjf(h10);
-//     cf_t h11_conj = conjf(h11);
-
-//     float norm0 = crealf(h00) * crealf(h00) + cimagf(h00) * cimagf(h00) +
-//                   crealf(h01) * crealf(h01) + cimagf(h01) * cimagf(h01);
-//     float norm1 = crealf(h10) * crealf(h10) + cimagf(h10) * cimagf(h10) +
-//                   crealf(h11) * crealf(h11) + cimagf(h11) * cimagf(h11);
-
-//     cf_t cross = h00_conj * h10 + h01_conj * h11;
-
-//     // MMSE: (H^H * H + σ²I)^-1 * H^H
-//     float det_re = (norm0 + noise_estimate) * (norm1 + noise_estimate) -
-//                    (crealf(cross) * crealf(cross) + cimagf(cross) * cimagf(cross));
-
-//     if (fabsf(det_re) < 1e-10f) {
-//       x[0][i] = 0;
-//       x[1][i] = 0;
-//       continue;
-//     }
-
-//     float inv_det = scaling / det_re;
-
-//     cf_t w00 = ((norm1 + noise_estimate) * h00_conj - conjf(cross) * h10_conj) * inv_det;
-//     cf_t w01 = ((norm1 + noise_estimate) * h01_conj - conjf(cross) * h11_conj) * inv_det;
-//     cf_t w10 = ((norm0 + noise_estimate) * h10_conj - cross * h00_conj) * inv_det;
-//     cf_t w11 = ((norm0 + noise_estimate) * h11_conj - cross * h01_conj) * inv_det;
-
-//     x[0][i] = w00 * y[0][i] + w01 * y[1][i];
-//     x[1][i] = w10 * y[0][i] + w11 * y[1][i];
-//   }
-
-//   return nof_symbols;
-// }
-
-// // Simple 4x2 CDD - Direct extension of 2x2 pattern
-// int srsran_predecoding_ccd_4x2_mmse_csi(cf_t* y[SRSRAN_MAX_PORTS],
-//                                         cf_t* h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
-//                                         cf_t* x[SRSRAN_MAX_LAYERS],
-//                                         float* csi[SRSRAN_MAX_CODEWORDS],
-//                                         int    nof_symbols,
-//                                         float  scaling,
-//                                         float  noise_estimate)
-// {
-//   // 4-port CDD per TS 36.211 Table 6.3.4.2.3-1
-//   const cf_t phase[4] = {1.0f, -_Complex_I, -1.0f, _Complex_I};
-
-//   for (int i = 0; i < nof_symbols; i++) {
-//     cf_t d = phase[i & 3];
-
-//     cf_t h_l0 = 0.5f * (h[0][0][i] + h[1][0][i]);
-//     cf_t h_l1 = 0.5f * (h[2][0][i] - h[3][0][i]) * d;
-
-//     cf_t h00 = (h_l0 + h_l1) * M_SQRT1_2;
-//     cf_t h10 = (h_l0 - h_l1) * M_SQRT1_2;
-
-//     h_l0 = 0.5f * (h[0][1][i] + h[1][1][i]);
-//     h_l1 = 0.5f * (h[2][1][i] - h[3][1][i]) * d;
-
-//     cf_t h01 = (h_l0 + h_l1) * M_SQRT1_2;
-//     cf_t h11 = (h_l0 - h_l1) * M_SQRT1_2;
-
-//     cf_t h00_conj = conjf(h00);
-//     cf_t h01_conj = conjf(h01);
-//     cf_t h10_conj = conjf(h10);
-//     cf_t h11_conj = conjf(h11);
-
-//     float norm0 = crealf(h00) * crealf(h00) + cimagf(h00) * cimagf(h00) +
-//                   crealf(h01) * crealf(h01) + cimagf(h01) * cimagf(h01);
-//     float norm1 = crealf(h10) * crealf(h10) + cimagf(h10) * cimagf(h10) +
-//                   crealf(h11) * crealf(h11) + cimagf(h11) * cimagf(h11);
-
-//     cf_t cross = h00_conj * h10 + h01_conj * h11;
-
-//     float det_re = (norm0 + noise_estimate) * (norm1 + noise_estimate) -
-//                    (crealf(cross) * crealf(cross) + cimagf(cross) * cimagf(cross));
-
-//     if (fabsf(det_re) < 1e-10f) {
-//       x[0][i] = 0;
-//       x[1][i] = 0;
-//       csi[0][i] = 0;
-//       csi[1][i] = 0;
-//       continue;
-//     }
-
-//     float inv_det = scaling / det_re;
-
-//     cf_t w00 = ((norm1 + noise_estimate) * h00_conj - conjf(cross) * h10_conj) * inv_det;
-//     cf_t w01 = ((norm1 + noise_estimate) * h01_conj - conjf(cross) * h11_conj) * inv_det;
-//     cf_t w10 = ((norm0 + noise_estimate) * h10_conj - cross * h00_conj) * inv_det;
-//     cf_t w11 = ((norm0 + noise_estimate) * h11_conj - cross * h01_conj) * inv_det;
-
-//     x[0][i] = w00 * y[0][i] + w01 * y[1][i];
-//     x[1][i] = w10 * y[0][i] + w11 * y[1][i];
-
-//     csi[0][i] = (norm0 + noise_estimate) * inv_det;
-//     csi[1][i] = (norm1 + noise_estimate) * inv_det;
-//   }
-
-//   return nof_symbols;
-// }
-
-
 
 int srsran_predecoding_ccd_mmse(cf_t*  y[SRSRAN_MAX_PORTS],
                                 cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
@@ -3345,276 +3143,6 @@ static void test_all_codebook_indices(cf_t *y[SRSRAN_MAX_PORTS],
     }
 }
 
-static void analyze_channel_structure(cf_t *h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
-                                      cf_t *y[SRSRAN_MAX_PORTS],
-                                      int nof_symbols)
-{
-    printf("\n========== CHANNEL STRUCTURE ANALYSIS ==========\n");
-
-    // Check if channel varies smoothly (real channel) or randomly (wrong CE)
-    printf("Channel variation between adjacent REs (should be small for real channel):\n");
-    for (int p = 0; p < 4; p++) {
-        float total_diff = 0;
-        for (int i = 1; i < 100 && i < nof_symbols; i++) {
-            cf_t diff = h[p][0][i] - h[p][0][i-1];
-            total_diff += cabsf(diff);
-        }
-        float avg_diff = total_diff / 99.0f;
-        float avg_mag = 0;
-        for (int i = 0; i < 100 && i < nof_symbols; i++) {
-            avg_mag += cabsf(h[p][0][i]);
-        }
-        avg_mag /= 100.0f;
-        printf("  Port %d: avg_diff=%.3f, avg_mag=%.3f, ratio=%.3f\n",
-               p, avg_diff, avg_mag, avg_diff/avg_mag);
-    }
-
-    // Check if y varies more than H (data should vary, channel should be smooth)
-    printf("\nReceived signal y variation:\n");
-    float y_diff = 0;
-    float y_mag = 0;
-    for (int i = 1; i < 100 && i < nof_symbols; i++) {
-        y_diff += cabsf(y[0][i] - y[0][i-1]);
-        y_mag += cabsf(y[0][i]);
-    }
-    printf("  y[rx0]: avg_diff=%.3f, avg_mag=%.3f, ratio=%.3f\n",
-           y_diff/99.0f, y_mag/100.0f, (y_diff/99.0f)/(y_mag/100.0f));
-
-    // Check phase rotation across subcarriers (timing offset would cause linear phase)
-    printf("\nPhase progression check (linear = timing offset):\n");
-    for (int p = 0; p < 2; p++) {
-        printf("  Port %d phases: ", p);
-        for (int i = 0; i < 12 && i < nof_symbols; i++) {
-            float phase = cargf(h[p][0][i]) * 180.0f / M_PI;
-            printf("%.0f ", phase);
-        }
-        printf("\n");
-    }
-
-    // Try to detect if there's a constant phase offset between CE and data
-    // If y = H*W*x, and x is QPSK, then y/H should cluster around W*x values
-    printf("\nRaw y/h ratio (should show structure if CE is correct):\n");
-    for (int i = 0; i < 10 && i < nof_symbols; i++) {
-        cf_t ratio0 = y[0][i] / h[0][0][i];
-        cf_t ratio1 = y[0][i] / h[1][0][i];
-        printf("  RE[%d]: y/h0=(%.2f,%.2f) y/h1=(%.2f,%.2f)\n",
-               i, crealf(ratio0), cimagf(ratio0), crealf(ratio1), cimagf(ratio1));
-    }
-
-    printf("================================================\n");
-}
-
-// static int srsran_predecoding_multiplex_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
-//                                                      cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
-//                                                      cf_t*  x[SRSRAN_MAX_LAYERS],
-//                                                      float* csi[SRSRAN_MAX_CODEWORDS],
-//                                                      int    codebook_idx,
-//                                                      int    nof_symbols,
-//                                                      float  scaling,
-//                                                      float  noise_estimate)
-// {
-// printf("Processing 4x2 multiplexing MIMO using CSI with codebook_idx=%d, nof_symbols=%d, scaling=%.02f, noise_estimate=%.02f\n", codebook_idx, nof_symbols, scaling, noise_estimate);
-//   static int first_call = 0;
-//   if (first_call) {
-//     first_call = 0;
-
-//     printf("\n========== CHANNEL ESTIMATE ANALYSIS ==========\n");
-//     printf("codebook_idx=%d, nof_symbols=%d\n\n", codebook_idx, nof_symbols);
-
-//     // Check first 10 RE's channel estimates in detail
-//     printf("First 10 REs - Channel estimates h[port][rx]:\n");
-//     for (int i = 0; i < 10 && i < nof_symbols; i++) {
-//       printf("RE[%d]:\n", i);
-//       printf("  p0: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
-//              crealf(h[0][0][i]), cimagf(h[0][0][i]),
-//              crealf(h[0][1][i]), cimagf(h[0][1][i]));
-//       printf("  p1: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
-//              crealf(h[1][0][i]), cimagf(h[1][0][i]),
-//              crealf(h[1][1][i]), cimagf(h[1][1][i]));
-//       printf("  p2: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
-//              crealf(h[2][0][i]), cimagf(h[2][0][i]),
-//              crealf(h[2][1][i]), cimagf(h[2][1][i]));
-//       printf("  p3: rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
-//              crealf(h[3][0][i]), cimagf(h[3][0][i]),
-//              crealf(h[3][1][i]), cimagf(h[3][1][i]));
-//       printf("  y:  rx0=(%+6.3f,%+6.3f) rx1=(%+6.3f,%+6.3f)\n",
-//              crealf(y[0][i]), cimagf(y[0][i]),
-//              crealf(y[1][i]), cimagf(y[1][i]));
-//     }
-
-//     // Check for patterns - are ports 2,3 copies of 0,1?
-//     printf("\nCorrelation check - are ports 2,3 duplicates of 0,1?\n");
-//     cf_t corr_20 = 0, corr_31 = 0;
-//     float pwr_0 = 0, pwr_1 = 0, pwr_2 = 0, pwr_3 = 0;
-//     int n_check = (nof_symbols < 100) ? nof_symbols : 100;
-
-//     for (int i = 0; i < n_check; i++) {
-//       corr_20 += h[2][0][i] * conjf(h[0][0][i]);
-//       corr_31 += h[3][0][i] * conjf(h[1][0][i]);
-//       pwr_0 += cabsf(h[0][0][i]) * cabsf(h[0][0][i]);
-//       pwr_1 += cabsf(h[1][0][i]) * cabsf(h[1][0][i]);
-//       pwr_2 += cabsf(h[2][0][i]) * cabsf(h[2][0][i]);
-//       pwr_3 += cabsf(h[3][0][i]) * cabsf(h[3][0][i]);
-//     }
-
-//     float norm_corr_20 = cabsf(corr_20) / sqrtf(pwr_0 * pwr_2 + 1e-10f);
-//     float norm_corr_31 = cabsf(corr_31) / sqrtf(pwr_1 * pwr_3 + 1e-10f);
-
-//     printf("  Correlation p2 vs p0: %.3f (1.0 = identical)\n", norm_corr_20);
-//     printf("  Correlation p3 vs p1: %.3f (1.0 = identical)\n", norm_corr_31);
-
-//     // Check if ports 2,3 are all zeros
-//     int zero_count_2 = 0, zero_count_3 = 0;
-//     for (int i = 0; i < n_check; i++) {
-//       if (cabsf(h[2][0][i]) < 1e-6f && cabsf(h[2][1][i]) < 1e-6f) zero_count_2++;
-//       if (cabsf(h[3][0][i]) < 1e-6f && cabsf(h[3][1][i]) < 1e-6f) zero_count_3++;
-//     }
-//     printf("  Port 2 zero count: %d/%d\n", zero_count_2, n_check);
-//     printf("  Port 3 zero count: %d/%d\n", zero_count_3, n_check);
-
-//     // Try simple 2x2 with just ports 0,1 to see if that works at all
-//     printf("\nTest: Simple 2x2 ZF with ports 0,1 only (no codebook):\n");
-//     int qpsk_01 = 0;
-//     for (int i = 0; i < n_check; i++) {
-//       cf_t H00 = h[0][0][i];
-//       cf_t H01 = h[1][0][i];
-//       cf_t H10 = h[0][1][i];
-//       cf_t H11 = h[1][1][i];
-
-//       cf_t det = H00*H11 - H01*H10;
-//       float det_sq = crealf(det)*crealf(det) + cimagf(det)*cimagf(det);
-//       if (det_sq < 1e-12f) continue;
-
-//       cf_t inv_det = conjf(det) / det_sq;
-//       cf_t x0 = inv_det * (H11*y[0][i] - H01*y[1][i]);
-//       cf_t x1 = inv_det * (-H10*y[0][i] + H00*y[1][i]);
-
-//       if (cabsf(x0) > 0.5f && cabsf(x0) < 1.0f) qpsk_01++;
-//       if (cabsf(x1) > 0.5f && cabsf(x1) < 1.0f) qpsk_01++;
-//     }
-//     printf("  QPSK-like with p0,p1 direct: %.1f%%\n", 100.0f*qpsk_01/(2*n_check));
-
-//     // What if this is actually a 2-port transmission being decoded as 4-port?
-//     printf("\nTest: What if eNB is actually transmitting 2-port?\n");
-//     printf("  Try decoding as 2x2 TM4 codebook 0 (ports 0,1):\n");
-
-//     // 2-port codebook index 0: W = 1/sqrt(2) * [1, 1; 1, -1]
-//     int qpsk_2port = 0;
-//     for (int i = 0; i < n_check; i++) {
-//       // H_eff = H * W for 2-port
-//       cf_t H00 = 0.7071f * (h[0][0][i] + h[1][0][i]);
-//       cf_t H01 = 0.7071f * (h[0][0][i] - h[1][0][i]);
-//       cf_t H10 = 0.7071f * (h[0][1][i] + h[1][1][i]);
-//       cf_t H11 = 0.7071f * (h[0][1][i] - h[1][1][i]);
-
-//       cf_t det = H00*H11 - H01*H10;
-//       float det_sq = crealf(det)*crealf(det) + cimagf(det)*cimagf(det);
-//       if (det_sq < 1e-12f) continue;
-
-//       cf_t inv_det = conjf(det) / det_sq;
-//       cf_t x0 = inv_det * (H11*y[0][i] - H01*y[1][i]);
-//       cf_t x1 = inv_det * (-H10*y[0][i] + H00*y[1][i]);
-
-//       if (cabsf(x0) > 0.5f && cabsf(x0) < 1.0f) qpsk_2port++;
-//       if (cabsf(x1) > 0.5f && cabsf(x1) < 1.0f) qpsk_2port++;
-//     }
-//     printf("  QPSK-like with 2-port codebook 0: %.1f%%\n", 100.0f*qpsk_2port/(2*n_check));
-
-//     // Try all 2-port codebook indices
-//     printf("\nTest all 2-port codebook indices:\n");
-//     for (int cb = 0; cb < 4; cb++) {
-//       // 2-port rank-2 codebook (36.211 Table 6.3.4.2.3-1)
-//       cf_t W00, W01, W10, W11;
-//       float n2 = 0.7071f;  // 1/sqrt(2)
-
-//       switch(cb) {
-//         case 0: W00=n2; W01=n2;  W10=n2;  W11=-n2; break;  // [1,1;1,-1]/sqrt(2)
-//         case 1: W00=n2; W01=n2;  W10=n2*_Complex_I; W11=-n2*_Complex_I; break;
-//         case 2: W00=n2; W01=-n2; W10=n2;  W11=n2;  break;
-//         case 3: W00=n2; W01=-n2; W10=n2*_Complex_I; W11=n2*_Complex_I; break;
-//       }
-
-//       int qpsk_cb = 0;
-//       for (int i = 0; i < n_check; i++) {
-//         cf_t H00 = h[0][0][i]*W00 + h[1][0][i]*W10;
-//         cf_t H01 = h[0][0][i]*W01 + h[1][0][i]*W11;
-//         cf_t H10 = h[0][1][i]*W00 + h[1][1][i]*W10;
-//         cf_t H11 = h[0][1][i]*W01 + h[1][1][i]*W11;
-
-//         cf_t det = H00*H11 - H01*H10;
-//         float det_sq = crealf(det)*crealf(det) + cimagf(det)*cimagf(det);
-//         if (det_sq < 1e-12f) continue;
-
-//         cf_t inv_det = conjf(det) / det_sq;
-//         cf_t x0 = inv_det * (H11*y[0][i] - H01*y[1][i]);
-//         cf_t x1 = inv_det * (-H10*y[0][i] + H00*y[1][i]);
-
-//         if (cabsf(x0) > 0.5f && cabsf(x0) < 1.0f) qpsk_cb++;
-//         if (cabsf(x1) > 0.5f && cabsf(x1) < 1.0f) qpsk_cb++;
-//       }
-//       printf("  2-port CB%d: %.1f%%\n", cb, 100.0f*qpsk_cb/(2*n_check));
-//     }
-
-//     printf("==============================================\n\n");
-//   }
-
-//   // ... rest of function unchanged
-//   static const cf_t W[16][4][2] = {
-//     [0]  = {{1, 1}, {-1, 1}, {-1, 1}, {-1, 1}},
-//     [1]  = {{1, 1}, {-_Complex_I, _Complex_I}, {-1, 1}, {_Complex_I, -_Complex_I}},
-//     [2]  = {{1, 1}, {1, -1}, {-1, 1}, {1, -1}},
-//     [3]  = {{1, 1}, {_Complex_I, -_Complex_I}, {-1, 1}, {-_Complex_I, _Complex_I}},
-//     [4]  = {{1, 1}, {-1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}},
-//     [5]  = {{1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}, {-1, 1}},
-//     [6]  = {{1, 1}, {1, -1}, {-_Complex_I, _Complex_I}, {-1, 1}},
-//     [7]  = {{1, 1}, {_Complex_I, -_Complex_I}, {-_Complex_I, _Complex_I}, {1, -1}},
-//     [8]  = {{1, 1}, {-1, 1}, {1, -1}, {1, -1}},
-//     [9]  = {{1, 1}, {-_Complex_I, _Complex_I}, {1, -1}, {-_Complex_I, _Complex_I}},
-//     [10] = {{1, 1}, {1, -1}, {1, -1}, {-1, 1}},
-//     [11] = {{1, 1}, {_Complex_I, -_Complex_I}, {1, -1}, {_Complex_I, -_Complex_I}},
-//     [12] = {{1, 1}, {-1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}},
-//     [13] = {{1, 1}, {-_Complex_I, _Complex_I}, {_Complex_I, -_Complex_I}, {1, -1}},
-//     [14] = {{1, 1}, {1, -1}, {_Complex_I, -_Complex_I}, {1, -1}},
-//     [15] = {{1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}, {-1, 1}},
-//   };
-
-//   if (codebook_idx < 0 || codebook_idx > 15) {
-//     ERROR("Wrong codebook_idx=%d", codebook_idx);
-//     return SRSRAN_ERROR;
-//   }
-
-//   if (codebook_idx == 15){
-//       // test_codebook15_effective_channel(y,h,x,nof_symbols);
-//       // test_codebook15_swapped_layers(y,h,x,nof_symbols);
-//       analyze_channel_structure(h,y,nof_symbols);
-//       test_all_codebook_indices(y,h,x,nof_symbols);
-//       return SRSRAN_SUCCESS;
-//   }
-
-//   const cf_t (*Wn)[2] = W[codebook_idx];
-//   const float norm = 0.5f;
-
-//   if (noise_estimate < 1e-6f) {
-//     noise_estimate = 0.01f;
-//   }
-
-//   for (int i = 0; i < nof_symbols; i++) {
-//     cf_t hp0r0 = h[0][0][i], hp1r0 = h[1][0][i], hp2r0 = h[2][0][i], hp3r0 = h[3][0][i];
-//     cf_t hp0r1 = h[0][1][i], hp1r1 = h[1][1][i], hp2r1 = h[2][1][i], hp3r1 = h[3][1][i];
-
-//     cf_t H00 = norm*(hp0r0*Wn[0][0] + hp1r0*Wn[1][0] + hp2r0*Wn[2][0] + hp3r0*Wn[3][0]);
-//     cf_t H01 = norm*(hp0r0*Wn[0][1] + hp1r0*Wn[1][1] + hp2r0*Wn[2][1] + hp3r0*Wn[3][1]);
-//     cf_t H10 = norm*(hp0r1*Wn[0][0] + hp1r1*Wn[1][0] + hp2r1*Wn[2][0] + hp3r1*Wn[3][0]);
-//     cf_t H11 = norm*(hp0r1*Wn[0][1] + hp1r1*Wn[1][1] + hp2r1*Wn[2][1] + hp3r1*Wn[3][1]);
-
-//     srsran_mat_2x2_mmse_csi_gen(y[0][i], y[1][i], H00, H01, H10, H11,
-//                                 &x[0][i], &x[1][i], &csi[0][i], &csi[1][i],
-//                                 noise_estimate, 1.0f/scaling);
-//   }
-
-//   return SRSRAN_SUCCESS;
-// }
-
 static int srsran_predecoding_multiplex_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
                                                      cf_t*  h[SRSRAN_MAX_PORTS][SRSRAN_MAX_PORTS],
                                                      cf_t*  x[SRSRAN_MAX_LAYERS],
@@ -3627,62 +3155,12 @@ static int srsran_predecoding_multiplex_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
   float norm = (float) 0.5 / scaling;
   int i = 0;
   static int debug_count = 0;
-  // printf("Processing 4x2 multiplexing MIMO using CSI with codebook_idx=%d, nof_symbols=%d, scaling=%.02f, noise_estimate=%.02f\n", codebook_idx, nof_symbols, scaling, noise_estimate);
-
-  // switch (codebook_idx) {
-  //     case 0:
-  //       norm = (float)M_SQRT2 / scaling;
-  //       break;
-  //       case 1:
-  //       case 2:
-  //           norm = 2.0f / scaling;
-  //           break;
-  //       default:
-  //           ERROR("Wrong codebook_idx=%d", codebook_idx);
-  //           return SRSRAN_ERROR;
-  // }
 
   if (codebook_idx < 0 || codebook_idx > 15){
       ERROR("Wrong codebook_idx=%d", codebook_idx);
       return SRSRAN_ERROR;
   }
 
-
-
-//   static const cf_t W[16][4][2] = {
-//       // Index 0: [1,1; -1,1; -1,1; -1,1]
-//       [0] = {{1, 1}, {-1, 1}, {-1, 1}, {-1, 1}},
-//       // Index 1: [1,1; -j,j; -1,1; j,-j]
-//       [1] = {{1, 1}, {-_Complex_I, _Complex_I}, {-1, 1}, {_Complex_I, -_Complex_I}},
-//       // Index 2: [1,1; 1,-1; -1,1; 1,-1]
-//       [2] = {{1, 1}, {1, -1}, {-1, 1}, {1, -1}},
-//       // Index 3: [1,1; j,-j; -1,1; -j,j]
-//       [3] = {{1, 1}, {_Complex_I, -_Complex_I}, {-1, 1}, {-_Complex_I, _Complex_I}},
-//       // Index 4: [1,1; -1,1; -j,j; -j,j]
-//       [4] = {{1, 1}, {-1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}},
-//       // Index 5: [1,1; -j,j; -j,j; -1,1]
-//       [5] = {{1, 1}, {-_Complex_I, _Complex_I}, {-_Complex_I, _Complex_I}, {-1, 1}},
-//       // Index 6: [1,1; 1,-1; -j,j; -1,1]
-//       [6] = {{1, 1}, {1, -1}, {-_Complex_I, _Complex_I}, {-1, 1}},
-//       // Index 7: [1,1; j,-j; -j,j; 1,-1]
-//       [7] = {{1, 1}, {_Complex_I, -_Complex_I}, {-_Complex_I, _Complex_I}, {1, -1}},
-//       // Index 8: [1,1; -1,1; 1,-1; 1,-1]
-//       [8] = {{1, 1}, {-1, 1}, {1, -1}, {1, -1}},
-//       // Index 9: [1,1; -j,j; 1,-1; -j,j]
-//       [9] = {{1, 1}, {-_Complex_I, _Complex_I}, {1, -1}, {-_Complex_I, _Complex_I}},
-//       // Index 10: [1,1; 1,-1; 1,-1; -1,1]
-//       [10] = {{1, 1}, {1, -1}, {1, -1}, {-1, 1}},
-//       // Index 11: [1,1; j,-j; 1,-1; j,-j]
-//       [11] = {{1, 1}, {_Complex_I, -_Complex_I}, {1, -1}, {_Complex_I, -_Complex_I}},
-//       // Index 12: [1,1; -1,1; j,-j; j,-j]
-//       [12] = {{1, 1}, {-1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}},
-//       // Index 13: [1,1; -j,j; j,-j; 1,-1]
-//       [13] = {{1, 1}, {-_Complex_I, _Complex_I}, {_Complex_I, -_Complex_I}, {1, -1}},
-//       // Index 14: [1,1; 1,-1; j,-j; 1,-1]
-//       [14] = {{1, 1}, {1, -1}, {_Complex_I, -_Complex_I}, {1, -1}},
-//       // Index 15: [1,1; j,-j; j,-j; -1,1]
-//       [15] = {{1, 1}, {_Complex_I, -_Complex_I}, {_Complex_I, -_Complex_I}, {-1, 1}},
-// };
 #if SRSRAN_SIMD_CF_SIZE != 0
   for (; i < nof_symbols - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
     simd_cf_t h00i = srsran_simd_cfi_load(&h[0][0][i]);
@@ -3812,43 +3290,6 @@ static int srsran_predecoding_multiplex_4x2_mmse_csi(cf_t*  y[SRSRAN_MAX_PORTS],
     srsran_simd_f_store(&csi[1][i], csi1);
   }
 #endif
-
-
-// Debug: Check input signal power
-  // if (debug_count < 5) {
-  //   float y0_pwr = 0, y1_pwr = 0;
-  //   float h_pwr[4][2] = {{0}};
-
-  //   for (int i = 0; i < nof_symbols && i < 100; i++) {
-  //     y0_pwr += crealf(y[0][i]) * crealf(y[0][i]) + cimagf(y[0][i]) * cimagf(y[0][i]);
-  //     y1_pwr += crealf(y[1][i]) * crealf(y[1][i]) + cimagf(y[1][i]) * cimagf(y[1][i]);
-
-  //     for (int p = 0; p < 4; p++) {
-  //       for (int r = 0; r < 2; r++) {
-  //         h_pwr[p][r] += crealf(h[p][r][i]) * crealf(h[p][r][i]) +
-  //                        cimagf(h[p][r][i]) * cimagf(h[p][r][i]);
-  //       }
-  //     }
-  //   }
-
-  //   int n = (nof_symbols < 100) ? nof_symbols : 100;
-  //   printf("\n=== 4x2 TM4 Debug (codebook=%d, nsym=%d, scale=%.3f, noise=%.6f) ===\n",
-  //          codebook_idx, nof_symbols, scaling, noise_estimate);
-  //   printf("Y power: y0=%.2f, y1=%.2f\n", y0_pwr/n, y1_pwr/n);
-  //   printf("H power [port][rx]:\n");
-  //   printf("  Port0: rx0=%.3f rx1=%.3f\n", h_pwr[0][0]/n, h_pwr[0][1]/n);
-  //   printf("  Port1: rx0=%.3f rx1=%.3f\n", h_pwr[1][0]/n, h_pwr[1][1]/n);
-  //   printf("  Port2: rx0=%.3f rx1=%.3f\n", h_pwr[2][0]/n, h_pwr[2][1]/n);
-  //   printf("  Port3: rx0=%.3f rx1=%.3f\n", h_pwr[3][0]/n, h_pwr[3][1]/n);
-
-  //   // Check if ports 2,3 have valid data (non-zero)
-  //   if (h_pwr[2][0]/n < 0.001 && h_pwr[2][1]/n < 0.001) {
-  //     printf("WARNING: Port 2 has no power - CE may not be extracted!\n");
-  //   }
-  //   if (h_pwr[3][0]/n < 0.001 && h_pwr[3][1]/n < 0.001) {
-  //     printf("WARNING: Port 3 has no power - CE may not be extracted!\n");
-  //   }
-  // }
 
   // 4-port rank-2 codebook from 36.211 Table 6.3.4.2.3-2
   static const cf_t W[16][4][2] = {

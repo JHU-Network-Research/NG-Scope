@@ -7,11 +7,12 @@ the other five intervals.
 Usage: compile_worker.py <run_dir> <interval_s> <out_csv>
 """
 import importlib.util
+import os
 import sys
 import time
 from pathlib import Path
 
-SCRIPT = "/home/jhuddleston/IMSIGUARD/scripts/compile_replays.py"
+SCRIPT = str(Path(os.environ.get("IMSIGUARD_REPO", Path.home() / "IMSIGUARD")) / "scripts" / "compile_replays.py")
 
 
 def main():

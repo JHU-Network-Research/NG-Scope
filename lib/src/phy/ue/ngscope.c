@@ -195,7 +195,7 @@ int srsran_ngscope_search_all_space_array_yx(srsran_ue_dl_t*        q,
 
   if(q->cell.nof_ports == 1){
     // if the cell has only 1 antenna, it doesn't support MIMO
-    search_space.nof_formats = 5; // JH this is the same as the max number of formats?
+    search_space.nof_formats = 5;
   }else{
     search_space.nof_formats = MAX_NOF_FORMAT;
   }

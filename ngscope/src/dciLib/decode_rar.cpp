@@ -371,7 +371,6 @@ static void rar_sweep(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cf
 
 /* Decode every RAR carried by a single RA-RNTI in this subframe.
  * Appends to out[] and returns the number of records added. */
-// JH TODO go through args and confirm what is necessary
 static int decode_rar_for_rnti(srsran_ue_dl_t*     q,
                                srsran_dl_sf_cfg_t* sf,
                                srsran_ue_dl_cfg_t* cfg,
@@ -550,7 +549,6 @@ static int decode_rar_for_rnti(srsran_ue_dl_t*     q,
   return added;
 }
 
-// JH TODO go through args and confirm what is necessary
 int srsran_ue_dl_find_and_decode_rar(srsran_ue_dl_t*     q,
                                      srsran_dl_sf_cfg_t* sf,
                                      srsran_ue_dl_cfg_t* cfg,
@@ -606,7 +604,7 @@ int srsran_ue_dl_find_and_decode_rar(srsran_ue_dl_t*     q,
       break;
     }
 
-    for (uint16_t ra_rnti = NGSCOPE_RARNTI_START; ra_rnti <= NGSCOPE_RARNTI_END; ra_rnti++) { // JH TODO confirm RA-RNTI range in spec
+    for (uint16_t ra_rnti = NGSCOPE_RARNTI_START; ra_rnti <= NGSCOPE_RARNTI_END; ra_rnti++) {
       nof_out += decode_rar_for_rnti(q, sf, cfg, pdsch_cfg, data, ra_rnti, out, nof_out,
                                      rf_idx, ts_us, collection_time);
       if (nof_out >= NGSCOPE_MAX_RAR_PER_SF) {

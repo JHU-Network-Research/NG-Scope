@@ -605,8 +605,7 @@ LTESniffer waits for an `RRCConnectionSetup` to confirm it. NG-Scope's rule is l
 keeps UEs that attempted to attach and never got further -- which is precisely the population
 that distinguishes a fake base station from a real one.
 
-Note also that the re-encode correlation gate in the blind search (`ue_dl.c`, `JH
-CORR_FILTER`) is currently commented out, so with `rach_filter_only = false` there is no
+Note also that the re-encode correlation gate in the blind search (`ue_dl.c`, `CORR_FILTER`) is currently commented out, so with `rach_filter_only = false` there is no
 false-positive gate at all.
 
 ### `rach_filter_only`

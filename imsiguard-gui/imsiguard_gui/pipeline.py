@@ -7,6 +7,7 @@ rules.py. Recording config is generated here (record mode is sweep-only).
 
 import bz2
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ import pandas as pd
 
 from . import earfcn as earfcn_mod, rules as rules_mod
 
-COMPILE_SCRIPT = Path("/home/jhuddleston/IMSIGUARD/scripts/compile_replays.py")
+COMPILE_SCRIPT = Path(os.environ.get("IMSIGUARD_REPO", Path.home() / "IMSIGUARD")) / "scripts" / "compile_replays.py"
 TS_RE = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
 TS_ANY_RE = re.compile(r"\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}")
 WORKER = Path(__file__).with_name("compile_worker.py")

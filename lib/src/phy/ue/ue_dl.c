@@ -725,7 +725,6 @@ static bool find_dci(srsran_dci_msg_t* dci_msg, uint32_t nof_dci_msg, srsran_dci
 
   return found;
 }
-// JH modified for proper L checking?
 static bool dci_location_is_allocated(srsran_ue_dl_t* q, srsran_dci_location_t new_loc)
 {
   for (uint32_t i = 0; i < q->nof_allocated_locations; i++) {
@@ -1008,115 +1007,6 @@ uint32_t srsran_ngscope_ue_locations_ncce_check_common(uint32_t nof_cce, uint32_
     return 0;
 }
 
-static srsran_tm_t tm_for_format_jh(srsran_dci_format_t f, uint32_t nof_ports)
-{
-
-    if (nof_ports == 1){
-        return SRSRAN_TM1;
-    }
-  switch (f) {
-      case SRSRAN_DCI_FORMAT1:
-        // Format 1: Single codeword, could be TM1, TM2, or TM7
-        return SRSRAN_TM2;  // Assume transmit diversity
-      case SRSRAN_DCI_FORMAT1A:
-        // Format 1A: Compact, single codeword - typically TM2 fallback
-        return SRSRAN_TM2;
-
-      case SRSRAN_DCI_FORMAT1B:
-        // Format 1B: Closed-loop single rank (TM6)
-        return SRSRAN_TM6;
-      case SRSRAN_DCI_FORMAT1C:
-        // Format 1C: Very compact, single codeword
-        return SRSRAN_TM2;
-    case SRSRAN_DCI_FORMAT2:
-      return SRSRAN_TM4;
-    case SRSRAN_DCI_FORMAT2A:
-      return SRSRAN_TM3;
-    case SRSRAN_DCI_FORMAT2B:
-      // Format 2B: Dual-layer beamforming (TM8)
-      return SRSRAN_TM8;
-
-      // JH TODO: return error for unsupported TMs or formats?
-    case SRSRAN_DCI_FORMAT2C:
-      // Format 2C: Up to 8-layer transmission (TM9)
-      return SRSRAN_TM9;
-
-    case SRSRAN_DCI_FORMAT2D:
-      // Format 2D: Up to 8-layer transmission (TM10)
-      return SRSRAN_TM10;
-    default:
-      /* TM1 on a single-port cell gives PORT0; TM2 on a multi-port cell gives DIVERSITY,
-       * which is what every pre-security grant is carried by. */
-      return (nof_ports == 1) ? SRSRAN_TM1 : SRSRAN_TM2;
-  }
-}
-
-static int decode_grant_with_table_jh(srsran_ue_dl_t*     ue_dl,
-                                   srsran_dl_sf_cfg_t* sf,
-                                   srsran_ue_dl_cfg_t* cfg,
-                                   srsran_pdsch_cfg_t* pdsch_cfg,
-                                   srsran_dci_dl_t*    dci,
-                                   uint8_t*            data[SRSRAN_MAX_CODEWORDS],
-                                   srsran_pdsch_res_t* pdsch_res,
-                                   bool                use_alt)
-{
-  cfg->cfg.pdsch.use_tbs_index_alt = use_alt;
-
-  // const srsran_tm_t saved_tm = cfg->cfg.tm;
-  cfg->cfg.tm                = tm_for_format_jh(dci->format, ue_dl->cell.nof_ports);
-  const int grant_ret        = srsran_ue_dl_dci_to_pdsch_grant(ue_dl, sf, cfg, dci, &pdsch_cfg->grant);
-  // cfg->cfg.tm                = saved_tm;
-  if (grant_ret) {
-      // ERROR("GRANT RET");
-    return -1;
-  }
-
-  for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-    if (pdsch_cfg->grant.tb[tb].enabled) {
-      if (pdsch_cfg->grant.tb[tb].rv < 0) {
-        pdsch_cfg->grant.tb[tb].rv = 0;
-      }
-      srsran_softbuffer_rx_reset_tbs(pdsch_cfg->softbuffers.rx[tb],
-                                     (uint32_t)pdsch_cfg->grant.tb[tb].tbs);
-    }
-  }
-
-  memset(pdsch_res, 0, sizeof(srsran_pdsch_res_t) * SRSRAN_MAX_CODEWORDS);
-  bool decode_enable = false;
-  for (uint32_t tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-    if (pdsch_cfg->grant.tb[tb].enabled) {
-      decode_enable         = true;
-      pdsch_res[tb].payload = data[tb];
-      pdsch_res[tb].crc     = false;
-    }
-  }
-  if (!decode_enable) {
-      // ERROR("DECODE ENABLED");
-    return -3;
-  }
-  /* SRSRAN_ERROR here is not a CRC failure. srsran_pdsch_decode() returns it from the
-   * symbol/layer guards and the predecoder, all upstream of demodulation, while a genuine
-   * CRC failure comes back as SRSRAN_SUCCESS with crc == false. Collapsing the two -- which
-   * this did -- makes a grant srsRAN has no predecoder for indistinguishable from one the
-   * channel beat, and those are different claims about the cell. */
-  // if (pdsch_cfg->grant.nof_tb == 2 && ue_dl->cell.nof_ports == 4 && cfg->cfg.tm == 2)
-      // printf("Decoding DCI with format: %s, sf->tti=%d, lstart=%d\n", srsran_dci_format_string(dci->format),  sf->tti, SRSRAN_NOF_CTRL_SYMBOLS(ue_dl->cell, sf->cfi));
-  // printf("DEBUG: sf->tti=%d, lstart=%d\n", sf->tti, lstart);
-  if (srsran_ue_dl_decode_pdsch(ue_dl, sf, pdsch_cfg, pdsch_res) != SRSRAN_SUCCESS) {
-      ERROR("Decode failed");
-    return -2;
-  }
-  /* Any codeword, not just the first: a two-codeword grant whose TB0 the channel beat can
-   * still carry a good TB1, and judging the grant by TB0 alone threw that block away. */
-  for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-    if (pdsch_cfg->grant.tb[tb].enabled && pdsch_res[tb].crc && pdsch_cfg->grant.tb[tb].tbs > 0) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-
 // Decide the search space according to the format
 
 static uint32_t srsran_ngscope_is_common_space(srsran_dci_format_t format){
@@ -1274,70 +1164,6 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
         //if ((dci_msg[nof_dci].nof_bits > 0) && decode_prob > 50 ) {
         if ((dci_msg[nof_dci].nof_bits > 0) ) {
 
-
-
-
-//
-//             // // Skip DCIs for unsupported formats
-//             // if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
-//             //     continue;
-//             // }
-//             printf("Decoding PDSCH for RNTI %d\n", dci_msg[nof_dci].rnti);
-//             // if (dci_msg[nof_dci].format != SRSRAN_DCI_FORMAT0){
-//             srsran_pdsch_res_t pdsch_res[SRSRAN_MAX_CODEWORDS];
-//             if (srsran_dci_msg_unpack_pdsch(&q->cell, sf, dci_cfg, &dci_msg[nof_dci], &dci_dl[nof_dci])) {
-//                 continue;
-//             }
-//             int grant_ret = srsran_ue_dl_dci_to_pdsch_grant(q, sf, ue_dl_cfg, &dci_dl[nof_dci], &pdsch_cfg->grant);
-//             if (grant_ret != SRSRAN_SUCCESS){
-//                 continue;
-//             }
-//
-//             for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-//               if (pdsch_cfg->grant.tb[tb].enabled) {
-//                 if (pdsch_cfg->grant.tb[tb].rv < 0) {
-//                   pdsch_cfg->grant.tb[tb].rv = 0;
-//                 }
-//                 srsran_softbuffer_rx_reset_tbs(pdsch_cfg->softbuffers.rx[tb],
-//                                                (uint32_t)pdsch_cfg->grant.tb[tb].tbs);
-//               }
-//             }
-//             uint8_t* data[SRSRAN_MAX_CODEWORDS];
-//             memset(pdsch_res, 0, sizeof(srsran_pdsch_res_t) * SRSRAN_MAX_CODEWORDS);
-//             bool decode_enable = false;
-//             for (uint32_t tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-//               if (pdsch_cfg->grant.tb[tb].enabled) {
-//                 decode_enable         = true;
-//                 pdsch_res[tb].payload = data[tb];
-//                 pdsch_res[tb].crc     = false;
-//               }
-//             }
-//             if (!decode_enable) {
-//               continue;
-//             }
-//
-//             printf("Decoding PDSCH\n");
-//             if (srsran_ue_dl_decode_pdsch(q, sf, pdsch_cfg, pdsch_res) != SRSRAN_SUCCESS) {
-//                 printf("Done decoding\n");
-//                 continue;
-//             }
-//             printf("Done decoding\n");
-//             /* Any codeword, not just the first: a two-codeword grant whose TB0 the channel beat can
-//                 * still carry a good TB1, and judging the grant by TB0 alone threw that block away. */
-//             // We need to check that there is a valid CRC before accepting the DCI
-//             bool is_valid = false;
-//             for (int tb = 0; tb < SRSRAN_MAX_CODEWORDS; tb++) {
-//                 if (pdsch_cfg->grant.tb[tb].enabled && pdsch_res[tb].crc && pdsch_cfg->grant.tb[tb].tbs > 0) {
-//                 is_valid = true;
-//                 }
-//             }
-//             if (!is_valid){
-//                 continue;
-//             }
-
-
-
-
           // Compute decoded message correlation to drastically reduce false alarm probability
           float corr = srsran_pdcch_msg_corr(&q->pdcch, &dci_msg[nof_dci]);
           dci_msg[nof_dci].corr = corr;
@@ -1355,19 +1181,10 @@ int srsran_ngscope_search_in_space_yx(srsran_ue_dl_t*     q,
 
           // Skip candidate if the threshold is not reached
           // 0.5 is set from pdcch_test
-//           if (!isnormal(corr) || corr < 0.4f) { // JH: I found that 0.4 eliminated most spurious DCIs while pruning the fewest correct DCIs.
+//           if (!isnormal(corr) || corr < 0.4f) {
 //             //printf("Corr skip!\n");
 //             continue;
 //           }
-
-          // JH CORR_FILTER
-          // if (!isnormal(corr) || corr <= 0.5f) {
-          //   //printf("Corr skip!\n");
-          //   if (debug)
-          //     printf("DEBUG: Skipping message at TTI=%d, format=%s, ncce=%d, L=%d, rnti=%d, because corr=%.3f (< 0.5)\n",
-          //   sf->tti, srsran_dci_format_string(search_space->formats[f]), search_space->loc[l].ncce, search_space->loc[l].L, dci_msg[nof_dci].rnti, corr);
-          //   continue;
-          // }
 
           int ue_specific = srsran_ngscope_ue_locations_ncce_check_ue_specific(nof_cce,
                                         sf->tti % 10, dci_msg[nof_dci].rnti, dci_msg[nof_dci].location.ncce);

@@ -441,7 +441,7 @@ state.
   run. Not diagnosed further; it is one record per run.
 - **No HARQ soft combining anywhere in the tree**, including in the deleted LTESniffer port.
   Per-(RNTI, HARQ) buffers would cost ~483 KB each, ≈7.7 MB per tracked UE.
-- **The correlation gate is still commented out** (`ue_dl.c`, `JH CORR_FILTER`). `73db5f8`
+- **The correlation gate is still commented out** (`ue_dl.c`, `CORR_FILTER`). `73db5f8`
   replaced it with the RACH filter; now that the filter is optional, blind mode has no
   false-positive gate at all.
 - **NAS is never parsed**, and two signals sit unused behind that. Both are measured below and

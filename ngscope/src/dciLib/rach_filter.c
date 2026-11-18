@@ -112,8 +112,7 @@ void ngscope_rach_filter_add(int rf_idx, uint16_t rnti, uint32_t tti, int anchor
     if (!rf_idx_valid(rf_idx) || rnti == 0) {
         return;
     }
-    rach_filter_t* q = &rach_filter[rf_idx]; // JH Does this need to be per rf device?
-
+    rach_filter_t* q = &rach_filter[rf_idx];
     pthread_mutex_lock(&rach_filter_mutex[rf_idx]);
     if (!q->seen[rnti]) {
         q->seen[rnti]      = true;

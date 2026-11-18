@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 # gui/ngscope_gui/runner.py -> gui/ -> repo root
-REPO_ROOT = Path(os.environ.get("NGSCOPE_REPO", "/home/jhuddleston/NG-Scope-NETS"))
+REPO_ROOT = Path(os.environ.get("NGSCOPE_REPO", Path(__file__).resolve().parents[2]))
 
 FLUSH_INTERVAL = 0.05  # seconds between UI pushes; caps evaluate_js churn in debug mode
 MAX_LINE = 8192  # flush a partial line this long rather than buffering forever

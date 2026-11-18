@@ -180,14 +180,7 @@ int  srsran_ngscope_tree_prune_node(ngscope_tree_t* q,
             q->dci_array[format_vec[i]][root].decode_prob);
     }
 
-    // for(int i=0; i<nof_format; i++){
-    //         if( q->dci_array[format_vec[i]][root].rnti == 2){
-    //             *format_idx=format_vec[i];
-    //             return 1;
-    //     }
-    // }
-
-    cnt = 0; // JH TEST normally not set here
+    cnt = 0;
 
     if(cnt == 1){
         /* If there is only one dci with format 0 or 4, return it */

@@ -912,7 +912,7 @@ void* task_scheduler_thread(void* p){
 
 	// If we're recording, we don't want to enable any of these options
 	if (task_scheduler->prog_args.mode != RECORD) {
-        // JH open log file
+
         char decodepath[1024];
         sprintf(decodepath,"%sdci-decode-debug.csv",task_scheduler->prog_args.out_path);
     	FILE *decodelog;

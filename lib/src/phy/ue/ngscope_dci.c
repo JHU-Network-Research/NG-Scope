@@ -358,7 +358,6 @@ srsran_tm_t infer_tm_from_dci(srsran_cell_t* cell, srsran_dci_dl_t* dci)
       // Format 2B: Dual-layer beamforming (TM8)
       return SRSRAN_TM8;
 
-      // JH TODO: return error for unsupported TMs or formats?
     case SRSRAN_DCI_FORMAT2C:
       // Format 2C: Up to 8-layer transmission (TM9)
       return SRSRAN_TM9;

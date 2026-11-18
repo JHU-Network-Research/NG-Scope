@@ -59,20 +59,6 @@ typedef struct{
     ngscope_dci_phich_t phich;
 	srsran_dci_location_t loc;
 
-    // JH debug information
-    // int nof_bits;
-    // float agreement;
-    // float repeat_corr;
-    // uint32_t l_crb;
-    // uint32_t rb_start;
-
-    // srsran_ra_type_t alloc_type;
-    // union {
-    //     srsran_ra_type0_t type0_alloc;
-    //     srsran_ra_type1_t type1_alloc;
-    //     srsran_ra_type2_t type2_alloc;
-    // };
-
 }ngscope_dci_msg_t;
 
 
