@@ -82,6 +82,15 @@ EARFCN to a downlink frequency, and renders the PDCCH constellation and channel 
 in-window instead of in separate srsGUI windows. See
 **[gui/README.md](gui/README.md)** for details.
 
+## IMSI-Guard GUI
+
+To run IMSI-Guard, the authentication-based IMSI-Catcher detector, run:
+```bash
+./imsiguard-gui/imsiguard-gui
+```
+This will run NG-Scope and apply post-processing scripts to infer the presence of IMSI-Catchers. 
+
+
 ## NG-Scope Version 2.1 Release Notes
 
 We are excited to announce the release of NG-Scope 2.1, featuring significant updates and new functionalities. Let's explore what's new:
