@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>IMSIGuard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<header>
+  <h1>IMSIGuard</h1>
+  <div class="tabs" id="tabs">
+    <button data-mode="record">Record</button>
+    <button data-mode="replay">Replay</button>
+  </div>
+  <span id="status" class="status" data-state="idle"><i></i><span id="status-text">Idle</span></span>
+  <div class="spacer"></div>
+  <button class="btn primary" id="btn-start">Start</button>
+  <button class="btn" id="btn-stop" disabled>Stop</button>
+</header>
+
+<main>
+<section class="col left">
+  <div class="card" id="card-record">
+    <h2>Record <small>sweep mode · each channel is replayed and classified as soon as it finishes</small></h2>
+    <label>EARFCNs <input id="earfcns" placeholder="e.g. 2850, 5230-5240:5, 66636"></label>
+    <div class="hint" id="earfcn-hint"></div>
+    <label class="check"><input type="checkbox" id="pause_for_replay"> Pause sweep while the previous recording replays</label>
+    <p class="fixed">Records for the listen time (set under Classification) from cell lock · gives up after 20 s with no cell.</p>
+    <div class="row2">
+      <label>RX antennas <input id="nof_rx_ant" type="number" min="1" max="4"></label>
+      <label>Decoder threads <input value="5" disabled></label>
+    </div>
+    <label>RF args <input id="rf_args" placeholder='e.g. type=b200'></label>
+    <p class="fixed">Fixed for recording: RACH &amp; security-context settings off · UL + DL logging on ·
+      gain-only noise estimation · PDSCH decoded · plots shown.</p>
+  </div>
+
+  <div class="card" id="card-replay">
+    <h2>Replay <small>settings from replay-ngscope.py defaults</small></h2>
+    <div class="row-btn"><button class="btn" id="btn-add-files">Add recordings…</button>
+      <button class="btn ghost" id="btn-clear-files">Clear</button></div>
+    <ul id="file-list" class="files"></ul>
+    <label>Timeout per replay (s) <input id="timeout" type="number" min="10"></label>
+  </div>
+
+  <div class="card">
+    <h2>Classification <small>fraction of UEs observed to authenticate</small></h2>
+    <div class="row2">
+      <label>Listen time (s) <input id="listen" type="number" min="10"></label>
+      <label>Authenticated UEs ≥ (%) <input id="auth_threshold_pct" type="number" min="0" max="100" step="1"></label>
+    </div>
+    <p class="fixed">Listen time is how long a recording is made for, and the window the feature
+      vector is computed over. At or above the threshold the cell is <b>legitimate</b>, below it <b>unknown</b>.</p>
+    <div class="req"><label class="check"><input type="checkbox" id="min_ues_on"> Require at least</label>
+      <input id="min_ues" type="number" min="0"><span>UEs seen</span></div>
+    <div class="req"><label class="check"><input type="checkbox" id="min_dcis_on"> Require at least</label>
+      <input id="min_dcis_per_rnti" type="number" min="0"><span>DCIs per RNTI</span></div>
+    <div class="req"><label class="check"><input type="checkbox" id="min_tbs_on"> Require at least</label>
+      <input id="min_total_tbs" type="number" min="0"><span>total TBS</span></div>
+    <p class="fixed">If a requirement is on and not met, the result is <b>insufficient data</b> instead of a verdict.</p>
+  </div>
+
+  <div class="card">
+    <h2>Output</h2>
+    <label>Output directory
+      <span class="pathrow"><input id="out_dir"><button class="btn small" id="btn-out">…</button></span></label>
+    <details><summary>Advanced</summary>
+      <label>ngscope binary <input id="binary" placeholder="auto-detect"></label>
+      <div class="hint" id="binary-hint"></div>
+    </details>
+  </div>
+</section>
+
+<section class="col right">
+  <div class="card result" id="result">
+    <h2>Classifier result</h2>
+    <div id="result-body" class="empty">No result yet.</div>
+  </div>
+
+  <div class="card" id="plots-card">
+    <h2>Plots <small id="plots-note">Shown during recording and replay</small></h2>
+    <div class="plots">
+      <figure class="sq"><figcaption>PDCCH — Equalized Symbols</figcaption><canvas id="plot-pdcch-const"></canvas></figure>
+      <figure class="sq"><figcaption>PDSCH Layer 1</figcaption><canvas id="plot-pdsch-1-const"></canvas></figure>
+      <figure class="sq"><figcaption>PDSCH Layer 2</figcaption><canvas id="plot-pdsch-2-const"></canvas></figure>
+      <figure><figcaption>Signal to Noise Ratio</figcaption><canvas id="plot-snr"></canvas></figure>
+      <figure><figcaption>Channel Response — Magnitude</figcaption><canvas id="plot-csi"></canvas></figure>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Recordings <button class="btn ghost small" id="btn-clear-jobs">Clear finished</button></h2>
+    <table id="jobs"><thead><tr><th>Recording</th><th>Source</th><th>Status</th><th>Label</th><th>Auth.</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card console-card">
+    <h2>Console <label class="check inline"><input type="checkbox" id="follow" checked> follow</label>
+      <button class="btn ghost small" id="btn-clear-console">Clear</button></h2>
+    <pre id="console"></pre>
+  </div>
+</section>
+</main>
+<script src="app.js"></script>
+</body></html>
