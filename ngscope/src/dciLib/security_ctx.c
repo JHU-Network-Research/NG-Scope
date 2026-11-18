@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "ngscope/hdr/dciLib/security_ctx.h"
+#include "ngscope/hdr/dciLib/security_rrc.h"
 #include "ngscope/hdr/dciLib/mac_pcap.h"
 #include "ngscope/hdr/dciLib/ngscope_def.h"
 #include "srsran/srsran.h"
@@ -19,7 +20,10 @@ extern bool debug;
  * This bounds *work*, not semantics: expiring an RNTI stops the decode attempts, it never
  * turns an UNKNOWN into a PRE or a POST. RRC setup plus security activation is a couple of
  * round trips to the core, so ten seconds is generous. */
-#define SEC_TRACK_WINDOW_US (10 * 1000000ULL)
+/* EXPERIMENT: effectively unlimited (one year of radio time) so every tracked UE is decoded
+ * for the whole capture. Was (10 * 1000000ULL). Kept finite so `window + grace` cannot
+ * overflow in the expiry test. Replay time grows with the number of tracked UEs. */
+#define SEC_TRACK_WINDOW_US (365ULL * 24 * 3600 * 1000000ULL)
 /* How long past its window an entry stays in active[], so threads a few subframes behind the
  * one that would expire it still find it. Far above the decoders in flight (milliseconds). */
 #define SEC_EXPIRY_GRACE_US (1 * 1000000ULL)
@@ -50,8 +54,9 @@ typedef struct {
  *
  * Costs 2 bytes per slot per device and nothing per subframe: ngscope_sec_tracked() already
  * walks the whole list to prune it, and how many are actually scanned is capped separately
- * by the caller. Evictions are counted, so a cell that outgrows even this says so. */
-#define SEC_MAX_ACTIVE 512
+ * by the caller. Evictions are counted, so a cell that outgrows even this says so.
+ * Raised to 2048 because 512 was leading to evictions. */
+#define SEC_MAX_ACTIVE NGSCOPE_SEC_SCAN_CAP_REPLAY
 
 #define SEC_NOF_FORMATS NGSCOPE_SEC_NOF_FORMATS
 #define SEC_NOF_SCHEMES NGSCOPE_SEC_NOF_SCHEMES
@@ -105,6 +110,12 @@ typedef struct {
     uint64_t   nof_fft_computed;
     uint64_t   nof_fft_reused;
     uint64_t   nof_fft_verified;
+    /* Codewords that matched their CRC but decoded to all zeros, and were rejected. A
+     * retransmission carrying no systematic bits decodes to zeros standalone, which satisfies
+     * the zero-initialised CRC (see decode_grant_with_table), so these would otherwise reach
+     * the pcap as phantom RRCConnectionReestablishments. Counted on the targeted scan; the blind probe
+     * counts its own in blind_probe-<rf>.csv and its teardown table. */
+    uint64_t   nof_tb_zero;
 
     /* What the targeted search actually looked at. nof_scan_no_dci was a bare `continue`
      * before there was anywhere to count it. */
@@ -173,7 +184,7 @@ int initialize_snr_report(const char* path){
     if (!(snr_report.fd = fopen(path,"w"))){
         return -1;
     }
-    const char *hdr = "tb1_mod,tb2_mod,scheme,format,snr_rx0_port0,snr_rx0_port1,snr_rx0_port2,snr_rx0_port3,snr_rx1_port0,snr_rx1_port1,snr_rx1_port2,snr_rx1_port3,crc_result\n";
+    const char *hdr = "tti,ct,rnti,tb1_mod,tb2_mod,scheme,format,snr_rx0_port0,snr_rx0_port1,snr_rx0_port2,snr_rx0_port3,snr_rx1_port0,snr_rx1_port1,snr_rx1_port2,snr_rx1_port3,crc_result\n";
     if (fwrite(hdr,strlen(hdr),1,snr_report.fd) == 0){
         return -1;
     }
@@ -661,6 +672,16 @@ void ngscope_sec_count_tb_second(int rf_idx)
     pthread_mutex_unlock(&sec_mutex[rf_idx]);
 }
 
+void ngscope_sec_count_tb_zero(int rf_idx, int n)
+{
+    if (!rf_idx_valid(rf_idx) || n <= 0) {
+        return;
+    }
+    pthread_mutex_lock(&sec_mutex[rf_idx]);
+    sec_ctx[rf_idx].nof_tb_zero += (uint64_t)n;
+    pthread_mutex_unlock(&sec_mutex[rf_idx]);
+}
+
 void ngscope_sec_count_tb_retry(int rf_idx)
 {
     if (!rf_idx_valid(rf_idx)) {
@@ -694,7 +715,7 @@ bool snr_report_enabled(){
     return snr_report.enabled;
 }
 
-int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome, int format){
+int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int outcome, int format, int tti, uint64_t ct, uint16_t rnti){
 
         pthread_mutex_lock(&snr_report.mutex);
         // tb1 mod, tb2 mod, snr_rx0_tx0 - snr_rx1_tx3, crc_result
@@ -705,7 +726,7 @@ int write_snr_report(srsran_ue_dl_t *ue_dl, srsran_pdsch_cfg_t *pdsch_cfg, int o
             mod2 = pdsch_cfg->grant.tb[1].mod;
         }
         char data[1024];
-        sprintf(data,"%s,%s,%s,%s,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%d\n", srsran_mod_string(mod1), srsran_mod_string(mod2),srsran_mimotype2str(pdsch_cfg->grant.tx_scheme),srsran_dci_format_string(format),
+        sprintf(data,"%d,%ld,%u,%s,%s,%s,%s,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%.02f,%d\n", tti,ct,(unsigned)rnti,srsran_mod_string(mod1), srsran_mod_string(mod2),srsran_mimotype2str(pdsch_cfg->grant.tx_scheme),srsran_dci_format_string(format),
             ue_dl->chest_res.snr_ant_port_db[0][0],ue_dl->chest_res.snr_ant_port_db[0][1],ue_dl->chest_res.snr_ant_port_db[0][2],ue_dl->chest_res.snr_ant_port_db[0][3],
             ue_dl->chest_res.snr_ant_port_db[1][0],ue_dl->chest_res.snr_ant_port_db[1][1],ue_dl->chest_res.snr_ant_port_db[1][2],ue_dl->chest_res.snr_ant_port_db[1][3],outcome == NGSCOPE_SEC_GRANT_CRC_PASS);
         size_t res = fwrite(data,strlen(data),1,snr_report.fd);
@@ -863,6 +884,10 @@ void ngscope_sec_report(int rf_idx)
                    (unsigned long long)q->nof_pf_verified);
         }
     }
+    /* Printed even at zero, so a clean run says so rather than leaving it to be assumed. */
+    printf("SECURITY (cell %d): %llu decoded codewords rejected as all-zero (CRC matched, "
+           "never a real MAC PDU)\n",
+           rf_idx, (unsigned long long)q->nof_tb_zero);
 
     /* How much of the cell the targeted search actually looked at.
      *

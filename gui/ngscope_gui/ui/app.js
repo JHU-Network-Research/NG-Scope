@@ -18,6 +18,8 @@ const FIELD_GROUPS = {
   cellPrimary: ['mode', 'rf_freq', 'rf_args', 'N_id_2', 'nof_thread', 'comment', 'location','nof_rx_ant'],
   cellToggles: ['decode_pdcch', 'log_dl', 'log_ul', 'log_phich', 'disable_plot', 'debug', 'silent', 'use_replay_hdr'],
   topNumbers: [],
+  /* Shown in the Decoding card itself: it changes what every mode can decode. */
+  topChoices: ['rx_combine'],
   /* Promoted out of the Decoding list into their own card: these two decide what reaches
      the logs at all, and rach_filter_only silently forces decode_RAR on. */
   rachPrimary: ['decode_RAR', 'rach_filter_only','decode_pdsch'],
@@ -87,9 +89,25 @@ function recording() {
   return ((S && S.config && S.config.cells) || []).some((c) => c.mode === MODE_RECORD);
 }
 
+/* The run's effective mode is Record only when no cell replays: config_io.dumps() lets
+   Replay win, and emits no_record settings at their default only in the Record case. The
+   form has to follow the same precedence or it hides settings that will take effect. */
+function recordOnly() {
+  return recording() && !replaying();
+}
+
 function availableFields(fields) {
   const supported = fields.filter((f) => !f.unsupported);
-  return replaying() ? supported : supported.filter((f) => !f.replay_only);
+  return supported.filter((f) => !(f.replay_only && !replaying())
+    && !(f.no_record && recordOnly()));
+}
+
+/* The RACH, Security and top-level cards all depend on the set of cell modes, so anything
+   that changes that set -- a mode switch, adding or removing a cell -- re-renders them. */
+function renderModeDependent() {
+  renderRach();
+  renderSecurity();
+  renderTopLevel();
 }
 
 /* Per-cell version: a mode_locked field has exactly one valid value in this cell's mode, so
@@ -261,7 +279,11 @@ function segmentedField(field, value, onChange, options) {
     const button = el('button', null, opt.label);
     button.type = 'button';
     button.setAttribute('aria-pressed', String(opt.value === value));
-    button.addEventListener('click', () => onChange(opt.value));
+    /* Mark the selection here rather than relying on the caller to re-render the card. */
+    button.addEventListener('click', () => {
+      group.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === button)));
+      onChange(opt.value);
+    });
     group.appendChild(button);
   });
   wrap.appendChild(group);
@@ -414,6 +436,7 @@ function renderCellTabs() {
       S.config.cells.splice(S.active_cell, 1);
       S.active_cell = Math.max(0, S.active_cell - 1);
       renderCells();
+      renderModeDependent();
       scheduleSave();
     });
     tabs.appendChild(remove);
@@ -429,6 +452,7 @@ function renderCellTabs() {
       S.config.cells.push(fresh);
       S.active_cell = S.config.cells.length - 1;
       renderCells();
+      renderModeDependent();
       scheduleSave();
     });
     tabs.appendChild(add);
@@ -459,10 +483,7 @@ function renderCells() {
   body.appendChild(segmentedField(modeField, cell.mode, (value) => {
     cell.mode = value;
     renderCells();
-    /* Replay-only settings appear and disappear with this, in the Security card and in the
-       "More options" leftovers, so both have to re-render. */
-    renderSecurity();
-    renderTopLevel();
+    renderModeDependent();
     scheduleSave();
   }, SCHEMA.modes));
 
@@ -563,7 +584,7 @@ function renderRach() {
     renderTopLevel();
   };
 
-  if (recording()) {
+  if (recordOnly()) {
     /* When recording, we don't want to decode rach because it will add cpu load */
     const note = el('div', 'callout info');
     note.innerHTML = 'Normal or Replay only. Turn off <b>Record</b> to configure this &mdash; '
@@ -717,14 +738,14 @@ function renderTopLevel() {
     scheduleSave();
   };
 
-  FIELD_GROUPS.topNumbers.forEach((key) => {
+  [...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topChoices].forEach((key) => {
     const field = fieldByKey(SCHEMA.top_level, key);
     if (field) body.appendChild(renderField(field, top[key], set(key), `top.${key}`));
   });
 
   const toggles = el('div', 'toggles');
   FIELD_GROUPS.topToggles.forEach((key) => {
-    const field = fieldByKey(SCHEMA.top_level, key);
+    const field = fieldByKey(availableFields(SCHEMA.top_level), key);
     if (field) toggles.appendChild(toggleRow(field, top[key], set(key)));
   });
   body.appendChild(toggles);
@@ -732,7 +753,7 @@ function renderTopLevel() {
   /* The RACH keys live in their own card, so exclude them here or they would show up a
      second time under "More options". */
   const { rest } = orderedFields(SCHEMA.top_level, [
-    ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topToggles,
+    ...FIELD_GROUPS.topNumbers, ...FIELD_GROUPS.topChoices, ...FIELD_GROUPS.topToggles,
     ...FIELD_GROUPS.rachPrimary, ...FIELD_GROUPS.rachDependent,
     ...FIELD_GROUPS.securityPrimary, ...FIELD_GROUPS.securityReplay,
   ]);

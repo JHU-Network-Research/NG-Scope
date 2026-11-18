@@ -299,7 +299,8 @@ clock has thread jitter — but it is a behavioural change and should be measure
 **Mode-dependent scan cap.** Live capture discards a subframe when every decoder is busy, so
 overspending on the security scan loses whole subframes invisibly. Replay *blocks* instead, so
 it stays lossless however slow it runs and the only cost is wall time. Hence
-`NGSCOPE_SEC_SCAN_CAP_LIVE` (128) and `NGSCOPE_SEC_SCAN_CAP_REPLAY` (512).
+`NGSCOPE_SEC_SCAN_CAP_LIVE` (128) and `NGSCOPE_SEC_SCAN_CAP_REPLAY` (2048, which
+`SEC_MAX_ACTIVE` is defined from).
 
 **Counters are load-bearing, not diagnostics.** Every silent drop is a UE that looks exactly
 like one that never reached security. The teardown lines exist so the detection rate can be

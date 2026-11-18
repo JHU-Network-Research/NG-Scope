@@ -107,6 +107,16 @@ int decoder_idx
      * mode -- see ue_dl.c. dci_decoder_decode() marks each new subframe. */
     srsran_ue_dl_set_fft_reuse(&dci_decoder->ue_dl, true);
 
+    /* Interference-aware antenna combining (ue_dl.h). Measured on replay-test/flashcatch-08:
+     * from 181 s to 213 s antenna 0 alone took up to 21 dB of in-band interference while
+     * antenna 1 stayed clean, and srsRAN's gain-only combining let it wreck the PCFICH and
+     * PDCCH -- 9 of the 23 UEs that RACHed then never had their RRCConnectionSetup found.
+     * IRC (two antennas) by default; per-antenna noise weighting otherwise, or when IRC does
+     * not apply to a subframe. */
+    /* The rx_combine config key (docs/configuration.md). */
+    srsran_ue_dl_set_rx_noise_weighting(&dci_decoder->ue_dl, prog_args.rx_combine != NGSCOPE_RX_COMBINE_OFF);
+    srsran_ue_dl_set_rx_irc(&dci_decoder->ue_dl, prog_args.rx_combine == NGSCOPE_RX_COMBINE_IRC);
+
     /* Both counts, together, decide which transmission schemes are decodable at all, so the
      * security report can state that rather than leave it to be inferred from the cell type
      * file. Idempotent across decoder threads: they all share one cell. */
@@ -135,7 +145,9 @@ int decoder_idx
 
     /************************* Init ue_dl_cfg **************************/
     srsran_chest_dl_cfg_t chest_pdsch_cfg = {};
-    chest_pdsch_cfg.cfo_estimate_enable   = prog_args.enable_cfo_ref;
+    /* Always estimated: the residual feeds the synchronizer's CFO loop (see
+     * ngscope_sync_publish_cfo_ref). Estimation only -- nothing here corrects samples. */
+    chest_pdsch_cfg.cfo_estimate_enable   = true;
     chest_pdsch_cfg.cfo_estimate_sf_mask  = 1023;
     chest_pdsch_cfg.estimator_alg         = srsran_chest_dl_str2estimator_alg(prog_args.estimator_alg);
     chest_pdsch_cfg.sync_error_enable     = true;
@@ -332,7 +344,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 
 	//First, we decode SIB1 and SIB2
 	srsran_chest_dl_cfg_t chest_pdsch_cfg = {};
-    chest_pdsch_cfg.cfo_estimate_enable   = dci_decoder->prog_args.enable_cfo_ref;
+    chest_pdsch_cfg.cfo_estimate_enable   = true; /* see dci_decoder_init */
     chest_pdsch_cfg.cfo_estimate_sf_mask  = 1023;
     chest_pdsch_cfg.estimator_alg         = srsran_chest_dl_str2estimator_alg(dci_decoder->prog_args.estimator_alg);
     chest_pdsch_cfg.sync_error_enable     = true;
@@ -409,7 +421,7 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 	char rsrppath[1024];
 	sprintf(rsrppath, "%srsrp.txt", dci_decoder->prog_args.out_path);
 	FILE* rsrpoutfile = fopen(rsrppath, "a");
-	fprintf(rsrpoutfile, "reference_signal_received_power: %4fdBm\n", dci_decoder->ue_dl.chest_res.rsrp_dbm);
+	fprintf(rsrpoutfile, "reference_signal_received_power: %4fdBm,tti: %d,ct: %ld\n", dci_decoder->ue_dl.chest_res.rsrp_dbm, tti, dci_per_sub->collection_time);
 	fclose(rsrpoutfile);
 	pthread_mutex_unlock(&token_mutex[0]);
 
@@ -500,6 +512,10 @@ int dci_decoder_decode(ngscope_dci_decoder_t*       dci_decoder,
 			 * 0 disables that shortcut. See srsran_ngscope_tree_CP_match(). */
 			n = srsran_ngscope_search_all_space_array_yx(&dci_decoder->ue_dl, &dci_decoder->dl_sf, \
 								&dci_decoder->ue_dl_cfg, &dci_decoder->pdsch_cfg, dci_per_sub, &tree,decoder_idx, NULL, &decode_args);
+			/* Once per frame, as upstream pdsch_ue does: the estimate the search just made. */
+			if (sf_idx == 5) {
+				ngscope_sync_publish_cfo_ref(rf_idx, dci_decoder->ue_dl.chest_res.cfo);
+			}
            	pthread_mutex_lock(&ue_tracker_mutex[rf_idx]);
 
 			// filter the dci

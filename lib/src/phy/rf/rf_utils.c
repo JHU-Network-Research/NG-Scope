@@ -100,8 +100,60 @@ static SRSRAN_AGC_CALLBACK(srsran_rf_set_rx_gain_wrapper)
   srsran_rf_set_rx_gain((srsran_rf_t*)h, gain_db);
 }
 
+/* Samples read by this thread's MIB decode, which is what places two decodes in time.
+ * Thread-local because each RF device searches for its cell in its own scheduler thread. */
+static _Thread_local uint64_t mib_nof_samples = 0;
+
+static int mib_recv_counted(void* h, cf_t* data[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
+{
+  /* In replay, stop where the recorded cell search ends: past it the stream is at the cell's
+   * rate, and decoding that as cell-search samples would only eat the start of the capture. */
+  if (mode == REPLAY && ngscope_replay_past_cell_search()) {
+    return SRSRAN_ERROR;
+  }
+  int n = ngscope_recv_samples_wrapper(h, data, nsamples, t);
+  if (n > 0) {
+    mib_nof_samples += (uint64_t)n;
+  }
+  return n;
+}
+
+/* 36.331 MIB dl-Bandwidth: n6..n100. The field is 3 bits, so a corrupted MIB can say 125 or 150,
+ * which srsran_pbch_mib_unpack() passes through as a bandwidth. */
+static bool mib_prb_valid(uint32_t nof_prb)
+{
+  return nof_prb == 6 || nof_prb == 15 || nof_prb == 25 || nof_prb == 50 || nof_prb == 75 || nof_prb == 100;
+}
+
+/* Two decodes are of the same cell if they agree on everything the MIB configures and the SFN
+ * advanced by the frames actually read between them (+-1, for where in a read each was found). */
+static bool mib_consistent(const srsran_cell_t* a, uint32_t sfn_a, const srsran_cell_t* b, uint32_t sfn_b, uint64_t frames)
+{
+  if (a->nof_prb != b->nof_prb || a->nof_ports != b->nof_ports || a->phich_length != b->phich_length ||
+      a->phich_resources != b->phich_resources) {
+    return false;
+  }
+  const int32_t d = (int32_t)((sfn_b + 1024 - sfn_a) % 1024) - (int32_t)(frames % 1024);
+  const int32_t e = ((d % 1024) + 1024 + 512) % 1024 - 512; /* wrap to [-512, 512) */
+  return e >= -1 && e <= 1;
+}
+
 /** This function is simply a wrapper to the ue_cell_search module for rf devices
  * Return 1 if the MIB is decoded, 0 if not or -1 on error.
+ *
+ * A MIB is accepted only once a second decode confirms it. The PBCH CRC is 16 bits and is tried
+ * against three port masks on every frame, so noise passes it every few thousand frames, with
+ * random fields -- and nothing downstream questions the result: it sets the sample rate a
+ * recording is made at and is written to the recording header. Measured on
+ * replay-test/vzw-66636-recorded-samples.bin.bz2: a weak antenna kept the true MIB (100 PRB,
+ * 4 ports) from decoding for 3.5 s, the search accepted a false pass (15 PRB, 1 port), and the
+ * whole capture was recorded at 3.84 Msps instead of 23.04. Over that recording's cell search,
+ * 100 such false passes turned up across 504 PCIs x 2 antennas; none would survive this check.
+ *
+ * The search budget is twice max_frames_pbch, so a cell that used to be found is not lost for
+ * want of its confirmation. In replay, a recording made before this check ends its cell search
+ * at the first decode; reaching that end with one candidate accepts it, with a warning, which is
+ * what the recorder did.
  */
 int rf_mib_decoder(srsran_rf_t*       rf,
                    uint32_t           nof_rx_channels,
@@ -113,7 +165,7 @@ int rf_mib_decoder(srsran_rf_t*       rf,
   srsran_ue_mib_sync_t ue_mib;
   uint8_t              bch_payload[SRSRAN_BCH_PAYLOAD_LEN] = {};
 
-  if (srsran_ue_mib_sync_init_multi(&ue_mib, ngscope_recv_samples_wrapper, nof_rx_channels, (void*)rf)) { // original cb: srsran_rf_recv_wrapper_cs // used for decoding MIB
+  if (srsran_ue_mib_sync_init_multi(&ue_mib, mib_recv_counted, nof_rx_channels, (void*)rf)) { // original cb: srsran_rf_recv_wrapper_cs // used for decoding MIB
     fprintf(stderr, "Error initiating srsran_ue_mib_sync\n");
     goto clean_exit;
   }
@@ -144,16 +196,71 @@ int rf_mib_decoder(srsran_rf_t*       rf,
     srsran_sync_set_cfo_cp_enable(&ue_mib.ue_sync.sfind, false, 0);
   }
 
-  /* Find and decode MIB */
-  ret = srsran_ue_mib_sync_decode(&ue_mib, config->max_frames_pbch, bch_payload, &cell->nof_ports, NULL);
-  if (ret < 0) {
-    ERROR("Error decoding MIB");
-    goto clean_exit;
-  }
-  if (ret == 1) {
-    srsran_pbch_mib_unpack(bch_payload, cell, NULL);
+  /* Find and decode MIB, then confirm it with a second decode */
+  const uint64_t frame_len  = (uint64_t)srate / 100; /* samples per radio frame at the search rate */
+  const uint64_t budget     = 2 * (uint64_t)config->max_frames_pbch * frame_len;
+  bool           have_cand  = false;
+  srsran_cell_t  cand       = *cell;
+  uint32_t       cand_sfn   = 0;
+  uint64_t       cand_at    = 0;
+  uint32_t       nof_reject = 0;
+  mib_nof_samples           = 0;
+  ret                       = 0;
+  while (mib_nof_samples < budget) {
+    const uint64_t left_frames = (budget - mib_nof_samples) / frame_len;
+    srsran_cell_t  c           = *cell;
+    uint32_t       sfn         = 0;
+    int            sfn_offset  = 0;
+    int            r           = srsran_ue_mib_sync_decode(
+        &ue_mib, left_frames > 0 ? (uint32_t)left_frames : 1, bch_payload, &c.nof_ports, &sfn_offset);
+    if (r < 0) {
+      if (mode == REPLAY && ngscope_replay_past_cell_search()) {
+        if (have_cand) {
+          fprintf(stderr,
+                  "CELL: WARNING: the recording's cell search ends before this MIB could be confirmed "
+                  "(%u PRB, %u ports); accepting it unconfirmed, as the recorder did.\n",
+                  cand.nof_prb, cand.nof_ports);
+          *cell = cand;
+          ret   = 1;
+        } else {
+          fprintf(stderr, "CELL: ERROR: the recording's cell search ends without a decodable MIB.\n");
+          ret = 0;
+        }
+        break;
+      }
+      ERROR("Error decoding MIB");
+      ret = r;
+      goto clean_exit;
+    }
+    if (r != 1) {
+      break; /* timed out on the remaining budget */
+    }
+    srsran_pbch_mib_unpack(bch_payload, &c, &sfn);
+    sfn = (sfn + (uint32_t)sfn_offset) % 1024;
     if (celldebug)
-      printf("CELL: decoded MIB nof_prb=%d, nof_ports=%d, id=%d, cp=%d, phich_length=%d, phich_resources=%d, frame_type=%d\n", cell->nof_prb, cell->nof_ports, cell->id, cell->cp, cell->phich_length, cell->phich_resources, cell->frame_type);
+      printf("CELL: decoded MIB nof_prb=%d, nof_ports=%d, id=%d, phich_length=%d, phich_resources=%d, sfn=%u\n",
+             c.nof_prb, c.nof_ports, c.id, c.phich_length, c.phich_resources, sfn);
+    if (!mib_prb_valid(c.nof_prb)) {
+      nof_reject++;
+      continue;
+    }
+    const uint64_t at = mib_nof_samples;
+    if (have_cand && mib_consistent(&cand, cand_sfn, &c, sfn, (at - cand_at + frame_len / 2) / frame_len)) {
+      *cell = c;
+      ret   = 1;
+      break;
+    }
+    if (have_cand) {
+      nof_reject++;
+    }
+    cand      = c;
+    cand_sfn  = sfn;
+    cand_at   = at;
+    have_cand = true;
+  }
+  if (nof_reject > 0) {
+    printf("CELL: rejected %u MIB decode%s with an invalid bandwidth or no confirming decode\n", nof_reject,
+           nof_reject == 1 ? "" : "s");
   }
 
   // Save CFO
