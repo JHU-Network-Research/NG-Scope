@@ -82,7 +82,7 @@ EARFCN to a downlink frequency, and renders the PDCCH constellation and channel 
 in-window instead of in separate srsGUI windows. See
 **[gui/README.md](gui/README.md)** for details.
 
-## IMSI-Guard GUI
+### IMSI-Guard GUI
 
 To run IMSI-Guard, the authentication-based IMSI-Catcher detector, run:
 ```bash
