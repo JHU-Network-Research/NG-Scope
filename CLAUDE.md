@@ -29,7 +29,7 @@ cd build && make -j"$(nproc)" ngscope    # binary lands at build/ngscope/src/ngs
 glob.
 
 *Historical note, because it still shows in the tooling:* this work started on a Mac with
-neither UHD nor FFTW, where every build went through the `amarder89/ng-scope:gui` container
+neither UHD nor FFTW, where every build went through the `ng-scope:gui` container
 (amd64 under emulation) against a `build-docker/` tree. `Dockerfile` is that image's provenance,
 and `measurements/run.sh` still hard-codes the container's `/src/...` paths. The container
 remains the fallback on a host that genuinely cannot build — it is not the path here.

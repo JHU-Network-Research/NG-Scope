@@ -527,7 +527,7 @@ tools/security_phase_join.py out/<timestamp>/ -f all
 The join auto-runs the scan when `security_sessions-*.csv` is missing and tshark is present,
 so the second line is optional in practice — but run it directly when you want its output.
 
-On a host without UHD and FFTW the build goes through the `amarder89/ng-scope:gui` container
+On a host without UHD and FFTW the build goes through the `ng-scope:gui` container
 against a `build-docker/` tree instead; `Dockerfile` is that image's provenance.
 `measurements/run.sh` still hard-codes the container's `/src/...` paths.
 

@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$HERE/.venv"; PY="$VENV/bin/python"
 # --system-site-packages: pywebview's GTK backend needs the system PyGObject (python3-gi).
 [ -x "$PY" ] || { echo "Creating virtualenv in $VENV ..."; python3 -m venv --system-site-packages "$VENV"; }
-if ! "$PY" -c "import webview, pandas, pb_amarder" >/dev/null 2>&1; then
+if ! "$PY" -c "import webview, pandas" >/dev/null 2>&1; then
   echo "Installing dependencies ..."
   "$PY" -m pip install --quiet --upgrade pip
   "$PY" -m pip install --quiet -r "$HERE/requirements.txt"
