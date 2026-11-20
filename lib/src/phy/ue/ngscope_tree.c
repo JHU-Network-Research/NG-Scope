@@ -360,11 +360,11 @@ int srsran_ngscope_tree_non_empty_nodes(ngscope_tree_t* q){
 int srsran_ngscope_tree_prune_tree(ngscope_tree_t* q){
 	for(int i=0; i<MAX_NOF_FORMAT+1; i++){
 		for(int j=0; j<q->nof_location; j++){
-			if(q->dci_array[i][j].corr < 0.5){ // JH TEST normally 0.5
+			if(q->dci_array[i][j].corr < 0.5){
 				ZERO_OBJECT(q->dci_array[i][j]);
 				continue;
 			}
-			if(q->dci_array[i][j].decode_prob < 75){ // JH TEST normally 75
+			if(q->dci_array[i][j].decode_prob < 75){
 				ZERO_OBJECT(q->dci_array[i][j]);
 				continue;
 			}
